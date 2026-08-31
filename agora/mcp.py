@@ -16,7 +16,8 @@ import json
 from typing import Any, Callable
 
 from .discovery import canonical_name
-from .room import AGENT, MESSAGE, NOTE, SUMMARY, Hub, Muted, RoomClosed
+from .room import (AGENT, LOBBY, MESSAGE, NOTE, SUMMARY, Hub, Muted,
+                   NotSeated, RoomClosed)
 
 PROTOCOL_VERSION = "2025-06-18"
 SERVER_INFO = {"name": "agora", "version": "0.1.0"}
@@ -164,26 +165,6 @@ TOOLS: list[dict[str, Any]] = [
         },
     },
     {
-        "name": "agora_standby",
-        "description": "Wait to be called into a meeting. Blocks until the chair "
-                       "calls you, then returns the room to join. Call this when "
-                       "you have nothing else to do and want to be reachable — it "
-                       "is how the chair's Call button reaches a session that has "
-                       "no Agora hook installed. Returns empty on timeout; call "
-                       "it again.",
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "name": {"type": "string",
-                         "description": "Your session name, e.g. 'shal-38'"},
-                "provider": {"type": "string"},
-                "timeout": {"type": "number",
-                            "description": f"Seconds to wait, max {MAX_WAIT}"},
-            },
-            "required": ["name"],
-        },
-    },
-    {
         "name": "room_leave",
         "description": "Leave the room. Only do this when the meeting is over or "
                        "you are told to.",
@@ -199,13 +180,14 @@ TOOLS: list[dict[str, Any]] = [
 class McpHandler:
     def __init__(self, hub: Hub, summons: Any = None) -> None:
         self.hub = hub
-        # The summons registry, shared with the web side. An agent that parks in
-        # `agora_standby` becomes callable from the browser without needing the
-        # SessionStart hook installed — the hook is the better path because it
-        # works when the agent is idle, but this one needs nothing but MCP.
+        # The summons registry, shared with the web side. Used to report
+        # reachability; the SessionStart hook is what actually parks on it.
+        # `agora_standby` used to live here too and was removed: a tool added to
+        # a running server is invisible to every session already connected, so
+        # it could never have worked for the sessions that needed it. The Lobby
+        # does the same job with `room_join`/`room_wait`, which everyone has.
         self.summons = summons
         self._tools: dict[str, Callable[[dict], dict]] = {
-            "agora_standby": self._standby,
             "room_list": self._room_list,
             "room_join": self._room_join,
             "room_post": self._room_post,
@@ -248,10 +230,16 @@ class McpHandler:
                 fn = self._tools.get(name)
                 if fn is None:
                     return self._error(rpc_id, -32601, f"unknown tool {name!r}")
-                result = fn(params.get("arguments") or {})
+                try:
+                    result = fn(params.get("arguments") or {})
+                except LookupError as exc:
+                    # A caller mistake, not a server fault. Returning it as tool
+                    # content lets the agent read it and correct itself; a
+                    # JSON-RPC error is opaque to the model and reads as a crash.
+                    result = _err(str(exc))
             else:
                 return self._error(rpc_id, -32601, f"unknown method {method!r}")
-        except Exception as exc:  # a tool fault must not kill the room
+        except Exception as exc:  # a genuine fault must not kill the room
             return self._error(rpc_id, -32603, f"{type(exc).__name__}: {exc}")
 
         if rpc_id is None:
@@ -272,37 +260,17 @@ class McpHandler:
                 f"no room {args.get('room')!r}. Call room_list to see what exists.")
         return room
 
-    def _standby(self, args: dict) -> dict:
-        name = str(args.get("name") or "").strip()
-        if not name:
-            return _err("name is required — it is how the chair calls you")
-        if self.summons is None:
-            return _err("this server has no summons registry")
-        self.summons.register(name, {"name": name, "via": "mcp",
-                                     "provider": str(args.get("provider") or "")})
-        timeout = min(float(args.get("timeout") or MAX_WAIT), MAX_WAIT)
-        called = self.summons.wait(name, timeout)
-        if called is None:
-            return _text({"called": False,
-                          "note": "Nobody called you in that window. Call "
-                                  "agora_standby again to stay reachable."})
-        return _text({
-            "called": True,
-            "room": called.get("room"),
-            "title": called.get("title"),
-            "agenda": called.get("agenda"),
-            "seq": called.get("seq", 0),
-            "next": f"room_join with room=\"{called.get('room')}\" and "
-                    f"name=\"{name}\", then room_history, then loop on room_wait. "
-                    f"You arrive MUTED — read and wait for the chair to unmute "
-                    f"you; a refused room_post is not an error.",
-        })
-
     def _room_list(self, args: dict) -> dict:
-        rooms = self.hub.listing()
+        # The Lobby is not a meeting. Listing it alongside real rooms invites an
+        # agent told to "join the meeting" to sit down in the waiting room.
+        rooms = [r for r in self.hub.listing() if r["id"] != LOBBY]
         if not rooms:
-            return _text("No rooms yet. The human chair creates them.")
-        return _text({"rooms": rooms})
+            return _text("No rooms yet — the chair creates them. If you have "
+                         "nothing else to do, room_join the \"lobby\" and "
+                         "room_wait there; the chair calls you from it.")
+        return _text({"rooms": rooms,
+                      "lobby": "room_join \"lobby\" and room_wait there when "
+                               "idle — that is how the chair calls you."})
 
     def _room_join(self, args: dict) -> dict:
         room = self._resolve(args)
@@ -341,9 +309,7 @@ class McpHandler:
             return _err("text is empty")
         try:
             ev = room.post(name, text, kind=MESSAGE, role=AGENT)
-        except Muted as exc:
-            return _err(str(exc))
-        except RoomClosed as exc:
+        except (Muted, NotSeated, RoomClosed) as exc:
             return _err(str(exc))
         return _text({"posted": ev.seq})
 

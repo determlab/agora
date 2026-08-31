@@ -166,3 +166,21 @@ must be discoverable needs a restart regardless.
 - **No auth, single chair.** See Security.
 - **Discovery is Claude-only.** Other providers are invited by hand and appear once
   they join. Nobody else publishes a session registry.
+
+## Tests
+
+```
+python -m venv .venv && .venv/Scripts/python -m pip install pytest
+.venv/Scripts/python -m pytest
+```
+
+87 tests, no dependencies beyond pytest itself. The API and MCP suites talk to a
+real server on a real socket rather than calling handler methods, because most of
+what has broken in this app broke at the protocol seam — HTTP/1.0 closing a long
+poll, a 204 with a body desyncing keep-alive, an SSE stream with no
+`Content-Length`. None of those are reachable by calling a method.
+
+`tests/test_ui.py` checks the seam the page cannot be unit-tested across: every
+URL the page calls is a route the server serves, every admin action it sends is
+one the server understands, and every element id the script reaches for exists in
+the markup. All three fail silently in a browser.

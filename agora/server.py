@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import queue
 import threading
 import time
 import webbrowser
@@ -27,21 +26,23 @@ from urllib.parse import parse_qs, urlparse
 
 from .discovery import invite_text, roster
 from .mcp import McpHandler
-from .room import HUMAN, LOBBY, MESSAGE, NOTE, SUMMARY, Hub, Muted, RoomClosed
+from .room import (HUMAN, LOBBY, MESSAGE, NOTE, ONLINE_WINDOW, SUMMARY, Hub,
+                   Muted, NotSeated, RoomClosed)
 
 STATIC = Path(__file__).resolve().parent.parent / "static"
 CHAIR = "chair"
 
 #: How recently a lobby participant must have polled to count as parked.
-#: `room_wait` refreshes `last_seen` on every call and its ceiling is 45s, so a
-#: session that is genuinely waiting touches this at least that often. Two
-#: windows allows one missed poll before we stop claiming it is reachable.
+#: `room_wait` refreshes `last_seen` on every call, and its ceiling is 25s, so a
+#: session that is genuinely waiting touches this several times over. Shared with
+#: `Participant.online` rather than declared twice, because two numbers that mean
+#: the same thing drift.
 #:
 #: Membership alone is NOT liveness. A session that joined the lobby and then
 #: crashed, was killed, or lost its connection stays in `participants` forever,
 #: and reporting that as reachable rebuilds the exact false-green this whole
 #: mechanism exists to remove — only with a longer fuse.
-LOBBY_FRESH = 95.0
+LOBBY_FRESH = ONLINE_WINDOW
 
 
 def _parked(lobby) -> set[str]:
@@ -130,8 +131,14 @@ class Handler(BaseHTTPRequestHandler):
     # ---- plumbing ----------------------------------------------------------
 
     def log_message(self, fmt: str, *args: Any) -> None:
-        # One line per request is noise for a local tool; keep errors only.
-        if not str(args[1] if len(args) > 1 else "").startswith(("2", "3")):
+        """Log failures only. A line per request is noise for a local tool.
+
+        `args` is not always (method, code, size): `log_error` calls through
+        here with a single formatted string, so the status has to be looked for
+        rather than indexed.
+        """
+        status = str(args[1]) if len(args) > 1 else ""
+        if not status.startswith(("2", "3")):
             super().log_message(fmt, *args)
 
     def _send(self, code: int, body: bytes, ctype: str,
@@ -396,13 +403,17 @@ class Handler(BaseHTTPRequestHandler):
         text = str(body.get("text") or "")
 
         if action == "post":
+            if not text.strip():
+                return self._json({"error": "nothing to say"}, 400)
             try:
                 ev = room.post(name, text, kind=MESSAGE, role=HUMAN, provider="human")
-            except (Muted, RoomClosed) as exc:
+            except (Muted, NotSeated, RoomClosed) as exc:
                 return self._json({"error": str(exc)}, 409)
             return self._json({"seq": ev.seq})
 
         if action == "note":
+            if not text.strip():
+                return self._json({"error": "empty note"}, 400)
             ev = room.post(name, text, kind=NOTE, role=HUMAN)
             return self._json({"seq": ev.seq})
 
@@ -415,89 +426,112 @@ class Handler(BaseHTTPRequestHandler):
         if action == "admin":
             what = str(body.get("action") or "")
             target = str(body.get("target") or "")
-            if what == "mute":
-                return self._json({"ok": room.set_muted(target, True)})
-            if what == "unmute":
-                return self._json({"ok": room.set_muted(target, False)})
-            if what == "kick":
-                room.leave(target)
-                return self._json({"ok": True})
-            if what == "close":
-                room.set_meta(closed=True)
-                room.post("agora", "meeting closed by the chair",
-                          kind="system", role=HUMAN)
-                return self._json({"ok": True})
-            if what == "reopen":
-                room.set_meta(closed=False)
-                return self._json({"ok": True})
-            if what == "archive":
-                # Closes as well: an archived meeting that still accepts posts
-                # is a meeting, not an archive.
-                room.set_meta(archived=True, closed=True)
-                return self._json({"ok": True})
-            if what == "unarchive":
-                room.set_meta(archived=False)
-                return self._json({"ok": True})
-            if what == "agenda":
-                room.set_meta(agenda=text)
-                room.post("agora", f"agenda set: {text}", kind="system", role=HUMAN)
-                return self._json({"ok": True})
-            if what == "title":
-                room.set_meta(title=text)
-                return self._json({"ok": True})
-            if what == "call":
-                # Three ways to reach a session, tried together because each
-                # covers a case the others do not.
-                payload = {"room": room.id, "title": room.title,
-                           "agenda": room.agenda, "seq": room.snapshot()["seq"],
-                           "name": target, "url": self.app.public_url}
-                # 1 + 2. The SessionStart hook's long-poll, and agora_standby.
-                #        Both land in the same registry.
-                self.app.summons.call(target, payload)
-                # 3. The lobby. An agent parked in `room_wait` on the lobby sees
-                #    this immediately, and `room_wait` exists in every session
-                #    already connected — which a newly added tool does not.
-                lobby = self.app.hub.get(LOBBY)
-                reached_lobby = False
-                if lobby is not None:
-                    # Parked means polling, not merely present — see LOBBY_FRESH.
-                    reached_lobby = target in _parked(lobby)
-                    lobby.post(
-                        name,
-                        f"@{target} — the chair calls you into "
-                        f"{room.title!r} (room id `{room.id}`). "
-                        f"room_join with room=\"{room.id}\" and name=\"{target}\", "
-                        f"then room_history, then loop on room_wait from seq "
-                        f"{payload['seq']}. You arrive muted; wait for the chair "
-                        f"to unmute you.",
-                        kind=MESSAGE, role=HUMAN, provider="human")
-                room.post("agora", f"{target} called to the room by the chair",
-                          kind="system", role=HUMAN)
-                hooked = target in self.app.summons.registered()
-                woke = hooked or reached_lobby
-                return self._json({
-                    "ok": True, "hooked": hooked, "in_lobby": reached_lobby,
-                    "woke": woke,
-                    "note": "" if woke else
-                            f"{target} is idle — not hooked and not actively "
-                            f"waiting — so nothing woke it just now. The call is "
-                            f"queued in the Lobby and will be delivered the next "
-                            f"time that session takes a turn and checks. Nothing "
-                            f"is lost; it is just not instant. To reach it now, "
-                            f"type in its window.",
-                })
-            if what == "prune":
-                gone = room.prune()
-                return self._json({"ok": True, "dropped": gone})
-            if what == "ask_summary":
-                room.post(name,
-                          f"@{target or 'everyone'} please post a summary of this "
-                          f"meeting: call room_history, then room_summarize.",
-                          kind=MESSAGE, role=HUMAN)
-                return self._json({"ok": True})
-            return self._json({"error": f"unknown admin action {what!r}"}, 400)
+            try:
+                return self._admin(room, what, target, name, text)
+            except RoomClosed as exc:
+                # Several admin actions announce themselves in the room, and a
+                # closed room refuses messages. Reaching the handler's own
+                # exception was a 500 and a traceback in the log.
+                return self._json({"error": str(exc)}, 409)
 
         self._json({"error": f"unknown action {action!r}"}, 404)
+
+    def _admin(self, room, what: str, target: str, name: str,
+               text: str) -> None:
+        """One chair action. Split out so the caller can turn a closed-room
+        refusal into a 409 rather than a traceback."""
+        if what == "mute":
+            return self._json({"ok": room.set_muted(target, True)})
+        if what == "unmute":
+            return self._json({"ok": room.set_muted(target, False)})
+        if what == "kick":
+            room.leave(target)
+            return self._json({"ok": True})
+        if what == "close":
+            room.set_meta(closed=True)
+            room.post("agora", "meeting closed by the chair",
+                      kind="system", role=HUMAN)
+            return self._json({"ok": True})
+        if what == "reopen":
+            room.set_meta(closed=False)
+            return self._json({"ok": True})
+        if what == "archive":
+            # Closes as well: an archived meeting that still accepts posts
+            # is a meeting, not an archive.
+            room.set_meta(archived=True, closed=True)
+            return self._json({"ok": True})
+        if what == "unarchive":
+            room.set_meta(archived=False)
+            return self._json({"ok": True})
+        if what == "delete":
+            # Archive hides; delete removes. Kept separate and deliberately
+            # harder to reach, because the transcript is the record.
+            if room.id == LOBBY:
+                return self._json({"error": "the Lobby is not deletable"}, 400)
+            self.app.hub.delete(room.id)
+            return self._json({"ok": True, "deleted": room.id})
+        if what == "agenda":
+            room.set_meta(agenda=text)
+            room.post("agora", f"agenda set: {text}", kind="system", role=HUMAN)
+            return self._json({"ok": True})
+        if what == "title":
+            room.set_meta(title=text)
+            return self._json({"ok": True})
+        if what == "call":
+            if room.closed:
+                return self._json(
+                    {"error": "this meeting is closed — reopen it before "
+                              "calling anyone in"}, 409)
+            # Three ways to reach a session, tried together because each
+            # covers a case the others do not.
+            payload = {"room": room.id, "title": room.title,
+                       "agenda": room.agenda, "seq": room.snapshot()["seq"],
+                       "name": target, "url": self.app.public_url}
+            # 1 + 2. The SessionStart hook's long-poll, and agora_standby.
+            #        Both land in the same registry.
+            self.app.summons.call(target, payload)
+            # 3. The lobby. An agent parked in `room_wait` on the lobby sees
+            #    this immediately, and `room_wait` exists in every session
+            #    already connected — which a newly added tool does not.
+            lobby = self.app.hub.get(LOBBY)
+            reached_lobby = False
+            if lobby is not None:
+                # Parked means polling, not merely present — see LOBBY_FRESH.
+                reached_lobby = target in _parked(lobby)
+                lobby.post(
+                    name,
+                    f"@{target} — the chair calls you into "
+                    f"{room.title!r} (room id `{room.id}`). "
+                    f"room_join with room=\"{room.id}\" and name=\"{target}\", "
+                    f"then room_history, then loop on room_wait from seq "
+                    f"{payload['seq']}. You arrive muted; wait for the chair "
+                    f"to unmute you.",
+                    kind=MESSAGE, role=HUMAN, provider="human")
+            room.post("agora", f"{target} called to the room by the chair",
+                      kind="system", role=HUMAN)
+            hooked = target in self.app.summons.registered()
+            woke = hooked or reached_lobby
+            return self._json({
+                "ok": True, "hooked": hooked, "in_lobby": reached_lobby,
+                "woke": woke,
+                "note": "" if woke else
+                        f"{target} is idle — not hooked and not actively "
+                        f"waiting — so nothing woke it just now. The call is "
+                        f"queued in the Lobby and will be delivered the next "
+                        f"time that session takes a turn and checks. Nothing "
+                        f"is lost; it is just not instant. To reach it now, "
+                        f"type in its window.",
+            })
+        if what == "prune":
+            gone = room.prune()
+            return self._json({"ok": True, "dropped": gone})
+        if what == "ask_summary":
+            room.post(name,
+                      f"@{target or 'everyone'} please post a summary of this "
+                      f"meeting: call room_history, then room_summarize.",
+                      kind=MESSAGE, role=HUMAN)
+            return self._json({"ok": True})
+        return self._json({"error": f"unknown admin action {what!r}"}, 400)
 
 
 def _export(room) -> str:

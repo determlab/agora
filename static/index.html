@@ -6,420 +6,656 @@
 <title>Agora</title>
 <style>
 :root{
-  --bg:#0d1013; --panel:#14181c; --panel2:#1a2026; --line:#242c33;
-  --ink:#e6ebe9; --ink2:#9dabb3; --mut:#68767f;
-  --acc:#d9a051; --acc-bg:#2c2110; --go:#5cc298; --stop:#ec7364; --human:#7aa7ff;
+  --bg:#0d1013; --panel:#14181c; --panel2:#1b2126; --line:#252d33; --line2:#333d45;
+  --ink:#e7ecea; --ink2:#9fadb5; --mut:#6b7880;
+  --acc:#d9a051; --acc-ink:#0d1013; --acc-bg:#2b2110;
+  --go:#5cc298; --warn:#e0b341; --stop:#ec7364; --human:#7aa7ff;
   --mono:"Cascadia Code",ui-monospace,SFMono-Regular,Consolas,monospace;
+  --r:6px; --shadow:0 2px 6px rgba(0,0,0,.35), 0 8px 28px rgba(0,0,0,.28);
 }
 @media (prefers-color-scheme:light){
-  :root{--bg:#eef0ee;--panel:#fbfcfb;--panel2:#e7ebe8;--line:#d3dad5;
-        --ink:#15181a;--ink2:#424b50;--mut:#78848a;--acc:#8f5a12;--acc-bg:#f3e9d9;
-        --go:#1c6a4c;--stop:#9c3126;--human:#2b5fbe;}
+  :root{--bg:#edefed;--panel:#fcfdfc;--panel2:#e8ece9;--line:#d6ddd8;--line2:#c2ccc5;
+        --ink:#14181a;--ink2:#454e53;--mut:#77838a;
+        --acc:#8a5610;--acc-ink:#fff;--acc-bg:#f4eade;
+        --go:#1a6a4b;--warn:#8a6410;--stop:#9c3126;--human:#2b5fbe;
+        --shadow:0 1px 3px rgba(20,24,26,.09), 0 8px 24px rgba(20,24,26,.08);}
 }
 *{box-sizing:border-box}
-body{margin:0;background:var(--bg);color:var(--ink);
-  font:14px/1.55 -apple-system,"Segoe UI",system-ui,sans-serif;height:100vh;overflow:hidden}
-button,input,textarea,select{font:inherit;color:inherit}
-button{background:var(--panel2);border:1px solid var(--line);border-radius:5px;
-  padding:5px 10px;cursor:pointer}
-button:hover{border-color:var(--acc)}
-button.p{background:var(--acc);color:var(--bg);border-color:var(--acc);font-weight:600}
-button.d{color:var(--stop)}
-button:disabled{opacity:.4;cursor:default}
-input,textarea{background:var(--bg);border:1px solid var(--line);border-radius:5px;
-  padding:7px 9px;width:100%}
+html,body{height:100%}
+body{margin:0;background:var(--bg);color:var(--ink);overflow:hidden;
+  font:14px/1.55 -apple-system,"Segoe UI",system-ui,sans-serif;
+  -webkit-font-smoothing:antialiased}
+button,input,textarea{font:inherit;color:inherit}
+button{background:var(--panel2);border:1px solid var(--line);border-radius:var(--r);
+  padding:5px 10px;cursor:pointer;transition:border-color .12s,background .12s}
+button:hover:not(:disabled){border-color:var(--line2)}
+button:focus-visible,input:focus-visible,textarea:focus-visible,
+[tabindex]:focus-visible{outline:2px solid var(--acc);outline-offset:1px}
+button.p{background:var(--acc);color:var(--acc-ink);border-color:var(--acc);font-weight:600}
+button.p:hover:not(:disabled){filter:brightness(1.08)}
+button.ghost{background:none;border-color:transparent;color:var(--ink2)}
+button.ghost:hover:not(:disabled){background:var(--panel2);border-color:var(--line)}
+button.danger{color:var(--stop)}
+button:disabled{opacity:.38;cursor:not-allowed}
+button.sm{padding:2px 8px;font-size:12px}
+input,textarea{background:var(--bg);border:1px solid var(--line);
+  border-radius:var(--r);padding:8px 10px;width:100%}
 input:focus,textarea:focus{outline:none;border-color:var(--acc)}
-.app{display:grid;grid-template-columns:250px 1fr 290px;height:100vh}
-aside,.side{background:var(--panel);display:flex;flex-direction:column;min-height:0}
-aside{border-right:1px solid var(--line)}
-.side{border-left:1px solid var(--line);overflow-y:auto}
-/* Each list scrolls on its own, so a long room list cannot push the roster —
-   or the "you are" footer — off the bottom of the pane. min-height:0 again:
-   without it a flex child sizes to its content instead of scrolling. */
-#rooms,#roster{overflow-y:auto;min-height:0}
-#rooms{flex:0 1 auto;max-height:42vh}
+::placeholder{color:var(--mut)}
+
+/* ---------- shell ---------- */
+.app{display:grid;grid-template-columns:248px minmax(0,1fr) 284px;height:100vh}
+.pane{background:var(--panel);display:flex;flex-direction:column;min-height:0;min-width:0}
+.pane.left{border-right:1px solid var(--line)}
+.pane.right{border-left:1px solid var(--line)}
+.scroll{overflow-y:auto;min-height:0;scrollbar-width:thin}
+h2{margin:0;padding:15px 14px 6px;flex:none;font-family:var(--mono);
+  font-size:10px;letter-spacing:.16em;text-transform:uppercase;color:var(--mut);
+  font-weight:600;display:flex;align-items:center;gap:6px}
+h2 .n{background:var(--panel2);border-radius:9px;padding:0 6px;letter-spacing:0}
+.pad{flex:none;padding:8px 14px 14px}
+.empty{color:var(--mut);font-size:12.5px;padding:4px 14px 14px;line-height:1.5}
+.empty b{color:var(--ink2);font-weight:600}
+
+/* ---------- rooms ---------- */
+#rooms{flex:0 1 auto;max-height:40vh}
 #roster{flex:1 1 auto}
-h2{font-size:10.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--mut);
-  margin:0;padding:14px 14px 7px;font-weight:600;font-family:var(--mono);flex:none}
-.pad{flex:none}
-.arch{font-size:11px;color:var(--mut);cursor:pointer;padding:2px 14px 8px;
-  font-family:var(--mono)}
-.arch:hover{color:var(--acc)}
-.pad{padding:0 14px 14px}
-/* rooms + roster */
-.row{padding:8px 14px;border-left:2px solid transparent;cursor:pointer}
-.row:hover{background:var(--panel2)}
-.row.on{border-left-color:var(--acc);background:var(--acc-bg)}
-.row .t{font-weight:600;font-size:13px}
-.row .s{font-size:11px;color:var(--mut);font-family:var(--mono);
+.item{padding:8px 14px;cursor:pointer;border-left:2px solid transparent;
+  display:flex;gap:8px;align-items:center}
+.item:hover{background:var(--panel2)}
+.item[aria-selected="true"]{border-left-color:var(--acc);background:var(--acc-bg)}
+.item .grow{min-width:0;flex:1}
+.item .t{font-weight:600;font-size:13px;white-space:nowrap;overflow:hidden;
+  text-overflow:ellipsis}
+.item .s{font-size:11px;color:var(--mut);font-family:var(--mono);
   white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.dot{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:6px;
-  vertical-align:middle;background:var(--mut)}
-.dot.busy{background:var(--acc)} .dot.idle{background:var(--go)}
-.dot.off{background:var(--mut);opacity:.4}
+.badge{background:var(--acc);color:var(--acc-ink);border-radius:9px;
+  font-size:10px;font-weight:700;padding:1px 6px;font-family:var(--mono);flex:none}
+.fold{font-family:var(--mono);font-size:11px;color:var(--mut);cursor:pointer;
+  padding:4px 14px 8px;user-select:none}
+.fold:hover{color:var(--acc)}
+
+/* ---------- presence ---------- */
+.dot{width:7px;height:7px;border-radius:50%;background:var(--mut);flex:none}
+.dot.busy{background:var(--warn)} .dot.idle{background:var(--go)}
+.dot.off{background:var(--mut);opacity:.35}
 .tag{font-family:var(--mono);font-size:9.5px;padding:1px 5px;border-radius:3px;
-  background:var(--panel2);color:var(--mut);border:1px solid var(--line)}
-.tag.in{color:var(--go);border-color:var(--go)}
-/* main */
+  background:var(--panel2);color:var(--mut);border:1px solid var(--line);
+  white-space:nowrap}
+.tag.go{color:var(--go);border-color:var(--go)}
+.tag.warn{color:var(--warn);border-color:var(--warn)}
+.tag.stop{color:var(--stop);border-color:var(--stop)}
+
+/* ---------- centre ---------- */
 main{display:flex;flex-direction:column;min-width:0;min-height:0;background:var(--bg)}
-header{padding:12px 18px;border-bottom:1px solid var(--line);background:var(--panel);
-  display:flex;gap:12px;align-items:center}
-header .ttl{font-weight:700;font-size:16px}
-header .ag{color:var(--ink2);font-size:12.5px;flex:1;min-width:0;
-  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-/* min-height:0 is what makes this scroll. A flex child defaults to
-   min-height:auto, so it grows to fit its content and pushes the composer off
-   the screen instead of scrolling. */
-#log{flex:1;min-height:0;overflow-y:auto;padding:16px 18px;
-  display:flex;flex-direction:column;gap:11px}
-.msg{display:grid;grid-template-columns:auto 1fr;gap:10px;align-items:start}
-.av{width:26px;height:26px;border-radius:5px;background:var(--panel2);
-  display:grid;place-items:center;font-family:var(--mono);font-size:11px;font-weight:600;
-  color:var(--acc);border:1px solid var(--line);flex:none}
-.msg.human .av{color:var(--human);border-color:var(--human)}
-.who{font-weight:600;font-size:12.5px}
-.who span{font-weight:400;color:var(--mut);font-size:11px;font-family:var(--mono);
-  margin-left:7px}
+header{flex:none;padding:11px 18px;border-bottom:1px solid var(--line);
+  background:var(--panel);display:flex;gap:12px;align-items:center}
+header .ttl{font-weight:700;font-size:15.5px;white-space:nowrap;overflow:hidden;
+  text-overflow:ellipsis}
+header .ag{color:var(--ink2);font-size:12.5px;white-space:nowrap;overflow:hidden;
+  text-overflow:ellipsis;cursor:text}
+header .ag:hover{color:var(--acc)}
+header .ag:empty::before{content:"add an agenda";color:var(--mut);font-style:italic}
+#log{flex:1;min-height:0;overflow-y:auto;padding:18px;display:flex;
+  flex-direction:column;gap:2px;scrollbar-width:thin}
+.msg{display:grid;grid-template-columns:28px minmax(0,1fr);gap:10px;
+  padding:4px 0;align-items:start}
+.msg.cont{padding-top:0}
+.msg.cont .av{visibility:hidden;height:0}
+.av{width:28px;height:28px;border-radius:var(--r);background:var(--panel2);
+  display:grid;place-items:center;font-family:var(--mono);font-size:11px;
+  font-weight:700;color:var(--acc);border:1px solid var(--line)}
+.msg.human .av{color:var(--human);border-color:color-mix(in srgb,var(--human) 45%,transparent)}
+.who{font-weight:600;font-size:12.5px;margin-bottom:1px}
+.who time{font-weight:400;color:var(--mut);font-size:11px;font-family:var(--mono);
+  margin-left:8px}
+.who .role{color:var(--mut);font-weight:400;font-size:11px;margin-left:6px}
 .bd{white-space:pre-wrap;word-wrap:break-word;overflow-wrap:anywhere}
 .sys{color:var(--mut);font-size:11.5px;font-family:var(--mono);text-align:center;
-  padding:2px 0}
-.sum{border:1px solid var(--acc);background:var(--acc-bg);border-radius:6px;padding:12px 14px}
-.sum .who{color:var(--acc)}
-footer{border-top:1px solid var(--line);padding:11px 18px;background:var(--panel);
-  display:flex;gap:9px;align-items:flex-end}
-#say{resize:none;min-height:42px;max-height:170px}
-/* right side */
-.note{background:var(--panel2);border:1px solid var(--line);border-radius:5px;
+  padding:5px 0}
+.card{border:1px solid var(--acc);background:var(--acc-bg);border-radius:var(--r);
+  padding:12px 14px;margin:6px 0}
+.card .who{color:var(--acc)}
+.daysep{display:flex;align-items:center;gap:10px;color:var(--mut);
+  font-family:var(--mono);font-size:10.5px;margin:10px 0 4px}
+.daysep::before,.daysep::after{content:"";height:1px;background:var(--line);flex:1}
+footer{flex:none;border-top:1px solid var(--line);padding:11px 18px;
+  background:var(--panel);display:flex;gap:9px;align-items:flex-end}
+#say{resize:none;min-height:44px;max-height:180px}
+.hint{font-size:11px;color:var(--mut);font-family:var(--mono);
+  padding:0 18px 8px;background:var(--panel);flex:none}
+
+/* ---------- right pane ---------- */
+.person{display:flex;align-items:center;gap:8px;padding:6px 14px;font-size:12.5px}
+.person:hover{background:var(--panel2)}
+.person .grow{flex:1;min-width:0;white-space:nowrap;overflow:hidden;
+  text-overflow:ellipsis}
+.person .acts{display:flex;gap:4px;flex:none}
+.person .acts .kick{opacity:0}
+.person:hover .acts .kick,.person:focus-within .acts .kick{opacity:1}
+.note{background:var(--panel2);border:1px solid var(--line);border-radius:var(--r);
   padding:8px 10px;margin-bottom:7px;font-size:12.5px}
-.note b{color:var(--acc);font-family:var(--mono);font-size:10.5px;font-weight:600}
-.adm{display:flex;flex-wrap:wrap;gap:6px}
-.adm button{font-size:12px;padding:4px 8px}
-.pr{display:flex;justify-content:space-between;align-items:center;
-  padding:5px 14px;font-size:12.5px}
-.pr:hover{background:var(--panel2)}
-.pr .x{opacity:0;font-size:11px;padding:2px 6px}
-.pr:hover .x{opacity:1}
-/* The roster's Call button is the point of the roster — it does not hide until
-   hover the way a destructive per-participant action does. */
-#roster .x{opacity:1}
-/* modal */
-.mask{position:fixed;inset:0;background:rgba(0,0,0,.62);display:grid;place-items:center;
-  padding:20px;z-index:9}
-.mod{background:var(--panel);border:1px solid var(--line);border-radius:9px;
-  padding:20px;max-width:660px;width:100%;max-height:88vh;overflow-y:auto}
-.mod h3{margin:0 0 4px;font-size:17px}
-.mod p{color:var(--ink2);font-size:13px;margin:0 0 14px}
-.step{margin-bottom:15px}
-.step .lb{font-family:var(--mono);font-size:10.5px;letter-spacing:.1em;
-  text-transform:uppercase;color:var(--mut);margin-bottom:5px}
-pre{background:var(--bg);border:1px solid var(--line);border-radius:5px;padding:11px 13px;
-  font-family:var(--mono);font-size:11.5px;white-space:pre-wrap;word-break:break-word;
-  margin:0;max-height:230px;overflow-y:auto}
-.rt{display:flex;gap:8px;justify-content:flex-end;margin-top:6px}
-.empty{color:var(--mut);font-size:12.5px;padding:0 14px 12px}
+.note b{color:var(--acc);font-family:var(--mono);font-size:10px;font-weight:700;
+  letter-spacing:.04em}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:6px}
+.grid button{font-size:12px;padding:5px 6px}
+
+/* ---------- identity ---------- */
+.me{flex:none;border-top:1px solid var(--line);padding:10px 14px;
+  display:flex;gap:8px;align-items:center}
+.me .grow{flex:1;min-width:0}
+.me .lbl{font-family:var(--mono);font-size:9.5px;letter-spacing:.14em;
+  text-transform:uppercase;color:var(--mut)}
+.me strong{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
+/* ---------- modal + toast ---------- */
+.mask{position:fixed;inset:0;background:rgba(0,0,0,.6);display:grid;
+  place-items:center;padding:20px;z-index:40;animation:fade .12s ease-out}
+@keyframes fade{from{opacity:0}}
+.modal{background:var(--panel);border:1px solid var(--line2);border-radius:10px;
+  padding:20px;width:100%;max-width:520px;max-height:88vh;overflow-y:auto;
+  box-shadow:var(--shadow)}
+.modal.wide{max-width:680px}
+.modal h3{margin:0 0 5px;font-size:17px}
+.modal p.sub{color:var(--ink2);font-size:13px;margin:0 0 16px}
+.field{margin-bottom:13px}
+.field label{display:block;font-family:var(--mono);font-size:10px;
+  letter-spacing:.13em;text-transform:uppercase;color:var(--mut);margin-bottom:5px}
+.field .help{font-size:11.5px;color:var(--mut);margin-top:4px}
+.actions{display:flex;gap:8px;justify-content:flex-end;margin-top:18px}
+pre{background:var(--bg);border:1px solid var(--line);border-radius:var(--r);
+  padding:11px 13px;font-family:var(--mono);font-size:11.5px;white-space:pre-wrap;
+  word-break:break-word;margin:0;max-height:220px;overflow-y:auto}
+#toasts{position:fixed;bottom:18px;left:50%;transform:translateX(-50%);
+  z-index:60;display:flex;flex-direction:column;gap:8px;align-items:center;
+  pointer-events:none}
+.toast{background:var(--panel);border:1px solid var(--line2);border-radius:var(--r);
+  padding:10px 14px;max-width:520px;box-shadow:var(--shadow);font-size:13px;
+  animation:rise .16s ease-out;pointer-events:auto}
+.toast.bad{border-color:var(--stop)}
+.toast.good{border-color:var(--go)}
+.toast b{display:block;margin-bottom:2px}
+@keyframes rise{from{opacity:0;transform:translateY(8px)}}
+
+/* ---------- connection ---------- */
+#conn{flex:none;font-family:var(--mono);font-size:11px;padding:6px 14px;
+  background:var(--stop);color:#fff;text-align:center;display:none}
+#conn.show{display:block}
+
+@media (max-width:1080px){
+  .app{grid-template-columns:210px minmax(0,1fr)}
+  .pane.right{display:none}
+  .pane.right.open{display:flex;position:fixed;right:0;top:0;bottom:0;width:290px;
+    z-index:30;box-shadow:var(--shadow)}
+}
+@media (max-width:720px){
+  .app{grid-template-columns:minmax(0,1fr)}
+  .pane.left{display:none}
+  .pane.left.open{display:flex;position:fixed;left:0;top:0;bottom:0;width:260px;
+    z-index:30;box-shadow:var(--shadow)}
+}
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
 </style>
 </head>
 <body>
+<div id="conn">Disconnected from Agora — retrying…</div>
 <div class="app">
 
-  <aside>
-    <h2>Rooms</h2>
-    <div id="rooms"></div>
-    <div class="pad"><button class="p" style="width:100%" onclick="newRoom()">+ New meeting</button></div>
-    <h2>Live sessions</h2>
-    <div id="roster"></div>
-    <div class="pad" style="margin-top:auto;border-top:1px solid var(--line);padding-top:12px">
-      <div class="s" style="margin-bottom:6px">You are</div>
-      <div style="display:flex;gap:6px;align-items:center">
-        <span class="av" id="meav">?</span>
-        <strong id="me" style="flex:1"></strong>
-        <button class="x" style="opacity:1" onclick="setMe(true)">change</button>
-      </div>
+  <!-- ================= left ================= -->
+  <aside class="pane left" id="paneLeft">
+    <h2>Meetings <span class="n" id="nRooms">0</span></h2>
+    <div id="rooms" class="scroll" role="listbox" aria-label="Meetings"></div>
+    <div class="pad"><button class="p" style="width:100%" onclick="openNewRoom()">
+      New meeting</button></div>
+
+    <h2>Sessions <span class="n" id="nSessions">0</span></h2>
+    <div id="roster" class="scroll" aria-label="Live sessions"></div>
+
+    <div class="me">
+      <span class="av" id="meAv">?</span>
+      <span class="grow"><span class="lbl">You are</span><strong id="meName"></strong></span>
+      <button class="ghost sm" onclick="askName()" title="Change your display name">edit</button>
     </div>
   </aside>
 
+  <!-- ================= centre ================= -->
   <main>
     <header>
-      <div>
-        <div class="ttl" id="ttl">No room selected</div>
-        <div class="ag" id="ag"></div>
+      <div style="min-width:0;flex:1">
+        <div class="ttl" id="ttl">No meeting open</div>
+        <div class="ag" id="ag" onclick="editAgenda()" title="Click to edit the agenda"></div>
       </div>
-      <div style="flex:1"></div>
-      <span class="tag" id="stat"></span>
-      <button onclick="exportMd()" id="bex" disabled>Export</button>
+      <span class="tag" id="stat" hidden></span>
+      <button class="ghost sm" id="btnPeople" onclick="togglePane('right')" hidden>People</button>
+      <button class="ghost sm" onclick="exportRoom()" id="btnExport" disabled>Export</button>
     </header>
-    <div id="log"></div>
+
+    <div id="log" class="scroll" aria-live="polite"></div>
+
+    <div class="hint" id="hint" hidden></div>
     <footer>
-      <textarea id="say" placeholder="Speak to the room…  (Enter to send, Shift+Enter for a newline)"
-                oninput="grow(this)" onkeydown="key(event)" disabled></textarea>
-      <button class="p" onclick="send()" id="bs" disabled>Send</button>
+      <textarea id="say" rows="1" disabled
+        placeholder="Open a meeting to say something"
+        oninput="autogrow(this)" onkeydown="onKey(event)"></textarea>
+      <button class="p" id="btnSend" onclick="send()" disabled>Send</button>
     </footer>
   </main>
 
-  <div class="side">
-    <h2>In the room</h2>
-    <div id="ppl"></div>
-    <h2>Admin</h2>
-    <div class="pad adm">
-      <button onclick="setAgenda()">Agenda</button>
-      <button onclick="askSummary()">Ask for summary</button>
-      <button onclick="localSummary()">Local digest</button>
-      <button onclick="adm('prune','')" title="Drop seats not seen in 15 min — restarted or renamed sessions leave ghosts">Prune ghosts</button>
-      <button class="d" onclick="closeRoom()" id="bcl">Close</button>
-      <button onclick="archiveRoom()" id="bar" title="Hide a finished meeting from the list. The transcript is kept.">Archive</button>
+  <!-- ================= right ================= -->
+  <div class="pane right" id="paneRight">
+    <h2>In the room <span class="n" id="nPeople">0</span></h2>
+    <div id="people" class="scroll" style="flex:0 1 auto;max-height:34vh"></div>
+
+    <h2>Chair controls</h2>
+    <div class="pad grid">
+      <button onclick="askSummary()" title="Ask a participant to write a summary">Ask summary</button>
+      <button onclick="localDigest()" title="Counts only — never interprets">Local digest</button>
+      <button onclick="pruneGhosts()" title="Drop seats not seen for 15 minutes">Prune ghosts</button>
+      <button id="btnClose" onclick="toggleClosed()">Close</button>
+      <button id="btnArchive" onclick="toggleArchived()">Archive</button>
+      <button class="danger" onclick="deleteRoom()">Delete</button>
     </div>
-    <h2>Notes</h2>
+
+    <h2>Notes <span class="n" id="nNotes">0</span></h2>
     <div class="pad">
       <div id="notes"></div>
-      <input id="nt" placeholder="Add a note…" onkeydown="if(event.key==='Enter')addNote()">
+      <input id="noteBox" placeholder="A decision, an action item…"
+             onkeydown="if(event.key==='Enter')addNote()">
     </div>
-    <h2>Summaries</h2>
-    <div class="pad" id="sums"><div class="empty" style="padding:0">None yet.</div></div>
+
+    <h2>Summaries <span class="n" id="nSums">0</span></h2>
+    <div class="pad" id="sums"></div>
   </div>
 </div>
+<div id="toasts" aria-live="assertive"></div>
 
 <script>
-let S = {rooms:[], roster:[], url:"", chair:"chair"};
-let cur = null, es = null, snap = null, stateES = null, ME = "";
-
-// Who is chairing. Asked once, kept per browser. Everything you say in a room
-// is attributed to this, so a transcript read later says who spoke rather than
-// "chair".
-function setMe(force){
-  let saved = "";
-  try { saved = localStorage.getItem("agora.me") || ""; } catch(e){}
-  if(force || !saved){
-    const v = prompt("Your name — this is how you appear in every room.",
-                     saved || "");
-    if(v && v.trim()) saved = v.trim();
-  }
-  if(!saved) saved = "chair";
-  ME = saved;
-  try { localStorage.setItem("agora.me", ME); } catch(e){}
-  $("me").textContent = ME;
-  $("meav").textContent = initials(ME);
-}
+"use strict";
+/* ============================ state ============================ */
+let S = {rooms:[], roster:[], chair:"chair", url:""};
+let cur = null, snap = null, roomES = null, stateES = null;
+let ME = "", seen = {}, unread = {};   // seen: messages already read per room
 
 const $ = id => document.getElementById(id);
-const esc = s => (s||"").replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
-const initials = n => (n||"?").replace(/[^a-zA-Z0-9]/g," ").trim().split(/\s+/)
-  .slice(0,2).map(w=>w[0]).join("").toUpperCase() || "?";
-const hhmm = ts => new Date(ts*1000).toTimeString().slice(0,5);
+const esc = s => String(s ?? "").replace(/[&<>"]/g,
+  c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const initials = n => (String(n||"?").replace(/[^a-zA-Z0-9]+/g," ").trim()
+  .split(/\s+/).slice(0,2).map(w=>w[0]).join("").toUpperCase()) || "?";
+const clock = ts => new Date(ts*1000).toTimeString().slice(0,5);
+const day = ts => new Date(ts*1000).toDateString();
+const ago = n => n<60?`${n|0}s`:n<3600?`${Math.round(n/60)}m`:`${Math.round(n/3600)}h`;
 
+const store = {
+  get(k, d){ try{ return JSON.parse(localStorage.getItem("agora."+k)) ?? d; }
+             catch(e){ return d; } },
+  set(k, v){ try{ localStorage.setItem("agora."+k, JSON.stringify(v)); }catch(e){} },
+};
+
+/* ============================ transport ============================ */
 async function api(path, opts){
   const r = await fetch(path, opts);
-  if(!r.ok) throw new Error((await r.json().catch(()=>({}))).error || r.statusText);
-  return r.headers.get("content-type")?.includes("json") ? r.json() : r.text();
+  const ct = r.headers.get("content-type") || "";
+  const body = ct.includes("json") ? await r.json().catch(()=>({})) : await r.text();
+  if(!r.ok) throw new Error((body && body.error) || r.statusText || "request failed");
+  return body;
 }
-const post = (p,b) => api(p,{method:"POST",headers:{"Content-Type":"application/json"},
-                            body:JSON.stringify(b||{})});
+const post = (p, b) => api(p, {method:"POST",
+  headers:{"Content-Type":"application/json"}, body:JSON.stringify(b||{})});
 
-// No Refresh button: the server holds one connection open and pushes state only
-// when it actually changes. The roster's sources (the session registry on disk,
-// the summons registry) cannot notify, so the server polls them and diffs —
-// which is the right place to do it, once, rather than in every browser tab.
+function toast(msg, kind, title){
+  const el = document.createElement("div");
+  el.className = "toast" + (kind ? " " + kind : "");
+  el.innerHTML = (title ? `<b>${esc(title)}</b>` : "") + esc(msg);
+  $("toasts").appendChild(el);
+  setTimeout(() => el.remove(), kind === "bad" ? 9000 : 4500);
+}
+const fail = err => toast(err.message || String(err), "bad", "That did not work");
+const guard = fn => (...a) => { try { return fn(...a).catch(fail); }
+                                catch(e){ fail(e); } };
+
+/* ============================ identity ============================ */
+function askName(){
+  const v = prompt("Your name — this is how you appear in every meeting.",
+                   ME === "chair" ? "" : ME);
+  if(v === null) return false;
+  const name = v.trim();
+  if(!name) return false;
+  ME = name; store.set("me", ME); paintMe();
+  return true;
+}
+function paintMe(){ $("meName").textContent = ME; $("meAv").textContent = initials(ME); }
+function ensureName(){ return (ME && ME !== "chair") ? true : askName(); }
+
+/* ============================ live state ============================ */
 function watchState(){
   if(stateES) stateES.close();
   stateES = new EventSource("/api/stream");
   stateES.addEventListener("state", e => {
+    $("conn").classList.remove("show");
     S = JSON.parse(e.data);
-    drawRooms(); drawRoster();
+    for(const r of S.rooms){
+      if(r.id === cur){ seen[r.id] = r.messages; unread[r.id] = 0; continue; }
+      if(seen[r.id] === undefined){ seen[r.id] = r.messages; continue; }
+      unread[r.id] = Math.max(0, r.messages - seen[r.id]);
+    }
+    store.set("seen", seen);
+    paintRooms(); paintRoster();
   });
-  // EventSource reconnects on its own; this only covers a server restart that
-  // outlives its backoff.
-  stateES.onerror = () => { setTimeout(() => { if(stateES.readyState===2) watchState(); }, 3000); };
+  stateES.onopen = () => $("conn").classList.remove("show");
+  stateES.onerror = () => {
+    $("conn").classList.add("show");
+    // EventSource retries on its own; this only covers a hard close.
+    setTimeout(() => { if(stateES.readyState === 2) watchState(); }, 3000);
+  };
 }
 
-let showArch = false;
-const roomRow = r => `
-  <div class="row ${r.id===cur?'on':''}" onclick="open_('${r.id}')">
-    <div class="t">${esc(r.title)}</div>
-    <div class="s">${r.participants} in · ${r.messages} msg${
-      r.archived?' · archived':r.closed?' · closed':''}</div>
-  </div>`;
+/* ============================ rooms ============================ */
+let showArchived = store.get("showArchived", false);
 
-function drawRooms(){
+function roomItem(r){
+  const n = unread[r.id] || 0;
+  return `<div class="item" role="option" tabindex="0" aria-selected="${r.id===cur}"
+      onclick="openRoom('${r.id}')" onkeydown="if(event.key==='Enter')openRoom('${r.id}')">
+    <span class="grow">
+      <span class="t">${esc(r.title)}</span>
+      <span class="s">${r.participants} in · ${r.messages} msg${
+        r.archived ? " · archived" : r.closed ? " · closed" : ""}</span>
+    </span>
+    ${n ? `<span class="badge">${n > 99 ? "99+" : n}</span>` : ""}
+  </div>`;
+}
+
+function paintRooms(){
   const live = S.rooms.filter(r => !r.archived);
   const arch = S.rooms.filter(r => r.archived);
-  let html = live.length ? live.map(roomRow).join("")
-                         : `<div class="empty">No meetings yet.</div>`;
+  $("nRooms").textContent = live.length;
+  let html = live.length ? live.map(roomItem).join("")
+    : `<div class="empty"><b>No meetings yet.</b><br>Create one, then Call a
+       session into it from the list below.</div>`;
   if(arch.length){
-    html += `<div class="arch" onclick="showArch=!showArch;drawRooms()">`
-          + `${showArch?'▾':'▸'} archived (${arch.length})</div>`;
-    if(showArch) html += arch.map(roomRow).join("");
+    html += `<div class="fold" onclick="toggleArchive()">
+      ${showArchived ? "▾" : "▸"} archived (${arch.length})</div>`;
+    if(showArchived) html += arch.map(roomItem).join("");
   }
   $("rooms").innerHTML = html;
 }
+function toggleArchive(){ showArchived = !showArchived;
+  store.set("showArchived", showArchived); paintRooms(); }
 
-function drawRoster(){
-  $("roster").innerHTML = S.roster.length ? S.roster.map(s => {
-    const inCur = cur && s.rooms.includes(cur);
-    // `connected` means that session's hook checked in, so Call reaches it.
-    // Without the hook all we can offer is copy-paste instructions.
-    // Call is offered ONLY when it will actually reach something. Otherwise the
-    // row says so and offers the copy-paste path instead.
-    // Call is never hidden. An idle session's call is queued in the Lobby and
-    // arrives on its next turn — not instant, but not lost, and the result
-    // says which happened. Hiding the button would trade a false green for a
-    // false red.
-    const act = inCur
-      ? '<span class="tag in">in room</span>'
-      : `<button class="x ${s.reach==='now'?'p':''}"
-           onclick="event.stopPropagation();callIn('${esc(s.name)}')"
-           title="${s.reach==='now'?'Waiting — wakes in about a second'
-                  :s.reach==='queued'?'A call is already waiting for it'
-                  :'Idle — the call queues and arrives on its next turn'}">Call</button>`;
-    // A queued call that ages invisibly is the same failure as a green PR
-    // nobody merges: 'queued 2m' reads as working, 'queued 3h' says that
-    // session is not coming and to reach it another way.
-    const age = n => n<60?`${n}s`:n<3600?`${Math.round(n/60)}m`:`${Math.round(n/3600)}h`;
-    const how = s.hooked ? 'hooked' : s.in_lobby ? 'waiting'
-              : s.pending ? `queued ${age(s.queued_age)}` : 'idle';
-    return `<div class="pr" style="padding:8px 14px;display:block">
-      <div style="display:flex;justify-content:space-between;align-items:center;gap:6px">
-        <span class="t"><span class="dot ${s.status==='busy'?'busy':s.status==='idle'?'idle':'off'}"></span>${esc(s.name)}</span>
-        ${act}
-      </div>
-      <div class="s">${esc(s.provider)}${s.project?' · '+esc(s.project):''} · ${how}</div>
-    </div>`;}).join("") : `<div class="empty">No sessions found.</div>`;
+/* ============================ roster ============================ */
+function paintRoster(){
+  $("nSessions").textContent = S.roster.length;
+  if(!S.roster.length){
+    $("roster").innerHTML = `<div class="empty">No sessions found. Agora reads
+      Claude Code's session registry; other providers appear once they join.</div>`;
+    return;
+  }
+  $("roster").innerHTML = S.roster.map(s => {
+    const here = cur && s.rooms.includes(cur);
+    const how = s.hooked ? "hooked" : s.in_lobby ? "waiting"
+              : s.pending ? `called ${ago(s.queued_age)} ago` : "idle";
+    const tip = s.reach === "now" ? "Waiting — wakes in about a second"
+      : s.reach === "queued" ? "A call is already waiting to be picked up"
+      : "Idle — the call is queued and arrives on its next turn";
+    return `<div class="item" style="cursor:default">
+      <span class="dot ${s.status==='busy'?'busy':s.status==='idle'?'idle':'off'}"></span>
+      <span class="grow">
+        <span class="t">${esc(s.name)}</span>
+        <span class="s">${esc(s.provider)}${s.project ? " · " + esc(s.project) : ""} · ${how}</span>
+      </span>
+      ${here ? `<span class="tag go">in room</span>`
+        : `<button class="sm ${s.reach==='now'?'p':''}" title="${tip}"
+             onclick="callIn('${esc(s.name)}')">Call</button>`}
+    </div>`;
+  }).join("");
 }
 
-// A call that reaches nobody must SAY it reached nobody. A control that reports
-// success while doing nothing is the defect that let a broken wheel sit on PyPI
-// for 34 days behind a green check; it is not going to live in this app too.
-async function callIn(who){
-  if(!cur){ alert("Open a room first."); return; }
-  try {
-    const r = await post(`/api/rooms/${cur}/admin`, {action:"call", target:who});
-    if(!r.woke) alert(`Queued, not delivered yet.\n\n${r.note}`);
-  } catch(err){ alert(err.message); }
-}
+const callIn = guard(async who => {
+  if(!cur) return toast("Open a meeting first.", "bad");
+  const r = await post(`/api/rooms/${cur}/admin`, {action:"call", target:who, name:ME});
+  if(r.woke) toast(`${who} was woken and is joining.`, "good");
+  else toast(r.note, null, "Queued, not delivered yet");
+});
 
-async function open_(id){
-  cur = id;
-  if(es) es.close();
-  drawRooms();
-  $("say").disabled = $("bs").disabled = $("bex").disabled = false;
-  es = new EventSource(`/api/rooms/${id}/stream`);
-  es.addEventListener("snapshot", e => { snap = JSON.parse(e.data); render(); });
-  es.addEventListener("append", e => {
+/* ============================ one room ============================ */
+function openRoom(id){
+  cur = id; unread[id] = 0;
+  const row = S.rooms.find(r => r.id === id);
+  if(row) seen[id] = row.messages;
+  store.set("seen", seen);
+  store.set("lastRoom", id);
+  paintRooms();
+  if(roomES) roomES.close();
+  roomES = new EventSource(`/api/rooms/${id}/stream`);
+  roomES.addEventListener("snapshot", e => { snap = JSON.parse(e.data); paintRoom(true); });
+  roomES.addEventListener("append", e => {
     const d = JSON.parse(e.data);
     if(!snap) return;
-    snap.events.push(...d.events); snap.participants = d.participants;
+    snap.events.push(...d.events);
+    snap.participants = d.participants;
     snap.seq = d.seq; snap.closed = d.closed;
-    render();
+    paintRoom(false);
   });
 }
 
-function render(){
+function paintRoom(isSnapshot){
   if(!snap) return;
   $("ttl").textContent = snap.title;
   $("ag").textContent = snap.agenda || "";
-  $("stat").textContent = snap.closed ? "closed" : "live";
-  $("bcl").textContent = snap.closed ? "Reopen" : "Close";
-  $("bar").textContent = snap.archived ? "Unarchive" : "Archive";
+  const st = $("stat");
+  st.hidden = false;
+  st.textContent = snap.archived ? "archived" : snap.closed ? "closed" : "live";
+  st.className = "tag " + (snap.closed ? "stop" : "go");
+  $("btnClose").textContent = snap.closed ? "Reopen" : "Close";
+  $("btnArchive").textContent = snap.archived ? "Unarchive" : "Archive";
+  $("btnExport").disabled = false;
+  $("btnPeople").hidden = false;
 
+  const composerOff = snap.closed;
+  $("say").disabled = $("btnSend").disabled = composerOff;
+  $("say").placeholder = composerOff
+    ? "This meeting is closed. Reopen it to speak."
+    : "Say something…   Enter to send · Shift+Enter for a newline";
+
+  /* transcript */
   const log = $("log");
-  const stick = log.scrollTop + log.clientHeight >= log.scrollHeight - 60;
-  log.innerHTML = snap.events.filter(e => e.kind!=="note").map(e => {
-    if(e.kind==="system") return `<div class="sys">${esc(e.text)}</div>`;
-    if(e.kind==="summary") return `<div class="sum"><div class="who">${esc(e.author)}
-      <span>summary · ${hhmm(e.ts)}</span></div><div class="bd">${esc(e.text)}</div></div>`;
-    return `<div class="msg ${e.role==='human'?'human':''}">
+  const stick = isSnapshot ||
+    (log.scrollTop + log.clientHeight >= log.scrollHeight - 80);
+  let html = "", lastDay = "", prev = null;
+  for(const e of snap.events){
+    if(e.kind === "note") continue;
+    const d = day(e.ts);
+    if(d !== lastDay){ html += `<div class="daysep">${d}</div>`; lastDay = d; prev = null; }
+    if(e.kind === "system"){ html += `<div class="sys">${esc(e.text)}</div>`; prev = null; continue; }
+    if(e.kind === "summary"){
+      html += `<div class="card"><div class="who">${esc(e.author)}
+        <time>summary · ${clock(e.ts)}</time></div>
+        <div class="bd">${esc(e.text)}</div></div>`;
+      prev = null; continue;
+    }
+    // Group consecutive messages from the same author within five minutes.
+    const cont = prev && prev.author === e.author && (e.ts - prev.ts) < 300;
+    html += `<div class="msg ${e.role==='human'?'human':''} ${cont?'cont':''}">
       <div class="av">${initials(e.author)}</div>
-      <div><div class="who">${esc(e.author)}<span>${hhmm(e.ts)}</span></div>
+      <div>${cont ? "" : `<div class="who">${esc(e.author)}<time>${clock(e.ts)}</time></div>`}
       <div class="bd">${esc(e.text)}</div></div></div>`;
-  }).join("");
+    prev = e;
+  }
+  log.innerHTML = html || `<div class="empty" style="padding:24px 0;text-align:center">
+    Nothing said yet. Call a session in from the left, then unmute it.</div>`;
   if(stick) log.scrollTop = log.scrollHeight;
 
-  // Everyone arrives muted, so unmute is the chair's main verb — it stays
-  // visible rather than appearing on hover like the destructive actions.
-  $("ppl").innerHTML = snap.participants.map(p => `
-    <div class="pr"><span><span class="dot ${p.online?'idle':'off'}"></span>${esc(p.name)}
-      ${p.muted?'<span class="tag" style="color:var(--stop);border-color:var(--stop)">muted</span>':''}</span>
-    <span>${p.role==='human'?'':
-      `<button class="${p.muted?'p':''}" style="opacity:1;font-size:11px;padding:2px 7px"
-        onclick="adm('${p.muted?'unmute':'mute'}','${esc(p.name)}')">${p.muted?'unmute':'mute'}</button>`}
-    <button class="x d" onclick="adm('kick','${esc(p.name)}')">kick</button></span></div>`).join("");
+  /* people */
+  const ppl = snap.participants;
+  $("nPeople").textContent = ppl.length;
+  const muted = ppl.filter(p => p.muted && p.role !== "human").length;
+  $("hint").hidden = muted === 0;
+  $("hint").textContent = muted === 1
+    ? "1 participant is muted and waiting for you to unmute it."
+    : `${muted} participants are muted and waiting for you to unmute them.`;
+  $("people").innerHTML = ppl.map(p => `
+    <div class="person">
+      <span class="dot ${p.online ? "idle" : "off"}"></span>
+      <span class="grow">${esc(p.name)}${
+        p.role && p.role !== "agent" && p.role !== "human"
+          ? `<span class="tag" style="margin-left:6px">${esc(p.role)}</span>` : ""}</span>
+      <span class="acts">${p.role === "human" ? "" : `
+        <button class="sm ${p.muted ? "p" : "ghost"}"
+          onclick="setMute('${esc(p.name)}',${!p.muted})">${p.muted ? "unmute" : "mute"}</button>
+        <button class="sm ghost danger kick"
+          onclick="kick('${esc(p.name)}')">kick</button>`}</span>
+    </div>`).join("");
 
-  const notes = snap.events.filter(e=>e.kind==="note");
+  /* notes + summaries */
+  const notes = snap.events.filter(e => e.kind === "note");
+  const sums  = snap.events.filter(e => e.kind === "summary");
+  $("nNotes").textContent = notes.length;
+  $("nSums").textContent = sums.length;
   $("notes").innerHTML = notes.map(n =>
-    `<div class="note"><b>${esc(n.author)}</b><br>${esc(n.text)}</div>`).join("")
-    || `<div class="empty" style="padding:0 0 8px">No notes.</div>`;
-
-  const sums = snap.events.filter(e=>e.kind==="summary");
-  $("sums").innerHTML = sums.length ? sums.map(s =>
-    `<div class="note"><b>${esc(s.author)} · ${hhmm(s.ts)}</b><br>${esc(s.text)}</div>`).join("")
-    : `<div class="empty" style="padding:0">None yet.</div>`;
+    `<div class="note"><b>${esc(n.author)}</b><br>${esc(n.text)}</div>`).join("");
+  $("sums").innerHTML = sums.length
+    ? sums.map(s => `<div class="note"><b>${esc(s.author)} · ${clock(s.ts)}</b><br>${esc(s.text)}</div>`).join("")
+    : `<div class="empty" style="padding:0">None yet. Ask a participant, or take a local digest.</div>`;
 }
 
-function grow(t){ t.style.height="auto"; t.style.height=Math.min(t.scrollHeight,170)+"px"; }
-function key(e){ if(e.key==="Enter" && !e.shiftKey){ e.preventDefault(); send(); } }
-
-async function send(){
-  const t = $("say").value.trim(); if(!t || !cur) return;
-  $("say").value=""; grow($("say"));
-  try { await post(`/api/rooms/${cur}/post`, {name:ME, text:t}); }
-  catch(err){ alert(err.message); }
+/* ============================ composing ============================ */
+function autogrow(t){ t.style.height = "auto";
+  t.style.height = Math.min(t.scrollHeight, 180) + "px"; }
+function onKey(e){
+  if(e.key === "Enter" && !e.shiftKey){ e.preventDefault(); send(); }
 }
+const send = guard(async () => {
+  const box = $("say"), text = box.value.trim();
+  if(!text || !cur) return;
+  if(!ensureName()) return;
+  box.value = ""; autogrow(box);
+  try { await post(`/api/rooms/${cur}/post`, {name:ME, text}); }
+  catch(err){ box.value = text; autogrow(box); throw err; }
+});
 
-async function newRoom(){
-  if(!ME || ME==="chair") setMe(true);
-  const title = prompt("Meeting title"); if(!title) return;
-  const agenda = prompt("Agenda — the one question this meeting answers") || "";
-  const r = await post("/api/rooms", {title, agenda, name:ME});
-  open_(r.id);
-}
+const addNote = guard(async () => {
+  const box = $("noteBox"), text = box.value.trim();
+  if(!text || !cur) return;
+  box.value = "";
+  await post(`/api/rooms/${cur}/note`, {name:ME, text});
+});
 
-async function addNote(){
-  const t = $("nt").value.trim(); if(!t||!cur) return;
-  $("nt").value="";
-  await post(`/api/rooms/${cur}/note`, {name:ME, text:t});
-}
+/* ============================ chair controls ============================ */
+const admin = (action, extra) =>
+  post(`/api/rooms/${cur}/admin`, Object.assign({action, name:ME}, extra || {}));
 
-const adm = (action,target) => post(`/api/rooms/${cur}/admin`, {action,target});
-async function setAgenda(){
-  const a = prompt("Agenda", snap?.agenda||""); if(a===null) return;
-  await post(`/api/rooms/${cur}/admin`, {action:"agenda", text:a});
-}
-const askSummary = () => post(`/api/rooms/${cur}/admin`, {action:"ask_summary", target:"", name:ME});
-async function localSummary(){
+const setMute = guard((who, on) => admin(on ? "mute" : "unmute", {target:who}));
+const kick = guard(async who => {
+  if(!confirm(`Remove ${who} from this meeting?\n\nIt can rejoin only if you call it back.`)) return;
+  await admin("kick", {target:who});
+});
+const askSummary = guard(() => admin("ask_summary", {target:""})
+  .then(() => toast("Asked the room for a summary.", "good")));
+const localDigest = guard(async () => {
   const d = await api(`/api/rooms/${cur}/summary`);
   await post(`/api/rooms/${cur}/summary`, {name:ME, text:d.text});
-}
-const closeRoom = () => post(`/api/rooms/${cur}/admin`,
-  {action: snap?.closed ? "reopen" : "close"});
-const archiveRoom = () => post(`/api/rooms/${cur}/admin`,
-  {action: snap?.archived ? "unarchive" : "archive"});
-const exportMd = () => location.href = `/api/rooms/${cur}/export`;
+});
+const pruneGhosts = guard(async () => {
+  const r = await admin("prune");
+  toast(r.dropped.length ? `Dropped ${r.dropped.join(", ")}.`
+                         : "No ghost seats to drop.", "good");
+});
+const toggleClosed = guard(() => admin(snap && snap.closed ? "reopen" : "close"));
+const toggleArchived = guard(() => admin(snap && snap.archived ? "unarchive" : "archive"));
+const deleteRoom = guard(async () => {
+  if(!snap) return;
+  if(!confirm(`Delete "${snap.title}" and its transcript?\n\n`
+            + `This cannot be undone. Archive instead if you only want it out of the way.`)) return;
+  await admin("delete");
+  cur = null; snap = null;
+  if(roomES) roomES.close();
+  $("ttl").textContent = "No meeting open"; $("ag").textContent = "";
+  $("log").innerHTML = ""; $("stat").hidden = true;
+  $("say").disabled = $("btnSend").disabled = $("btnExport").disabled = true;
+  toast("Meeting deleted.", "good");
+});
+const editAgenda = guard(async () => {
+  if(!cur) return;
+  const v = prompt("Agenda — the one question this meeting answers",
+                   (snap && snap.agenda) || "");
+  if(v === null) return;
+  await admin("agenda", {text:v.trim()});
+});
+function exportRoom(){ if(cur) location.href = `/api/rooms/${cur}/export`; }
 
-async function invite(who){
-  if(!cur){ alert("Open a room first."); return; }
-  const d = await api(`/api/rooms/${cur}/invite?session=${encodeURIComponent(who)}`);
+/* ============================ new meeting ============================ */
+function openNewRoom(){
   const m = document.createElement("div");
-  m.className = "mask"; m.onclick = e => { if(e.target===m) m.remove(); };
-  m.innerHTML = `<div class="mod">
-    <h3>Invite ${esc(who)}</h3>
-    <p>Run step 1 once on this machine, restart that session, then paste step 2 into it.
-       Any MCP client works — Claude Code, Codex, Cursor, Gemini.</p>
-    <div class="step"><div class="lb">1 · register the server — once per machine, then restart the session
-      <br>(MCP servers connect at startup, so a session already running cannot see a new one)</div>
-      <pre id="i1">${esc(d.register)}</pre>
-      <div class="rt"><button onclick="cp('i1',this)">Copy</button></div></div>
-    <div class="step"><div class="lb">2 · the invitation</div>
-      <pre id="i2">${esc(d.prompt)}</pre>
-      <div class="rt"><button class="p" onclick="cp('i2',this)">Copy</button></div></div>
-    <div class="rt"><button onclick="this.closest('.mask').remove()">Done</button></div>
+  m.className = "mask";
+  m.onclick = e => { if(e.target === m) m.remove(); };
+  m.innerHTML = `<div class="modal" role="dialog" aria-modal="true" aria-label="New meeting">
+    <h3>New meeting</h3>
+    <p class="sub">One question per meeting works better than a topic.</p>
+    <div class="field">
+      <label for="nrTitle">Title</label>
+      <input id="nrTitle" placeholder="Ship 0.2.2?" autocomplete="off">
+    </div>
+    <div class="field">
+      <label for="nrAgenda">Agenda</label>
+      <input id="nrAgenda" placeholder="Do we publish to PyPI now?" autocomplete="off">
+      <div class="help">Participants are shown this when they are called in.</div>
+    </div>
+    <div class="field">
+      <label for="nrMe">You are</label>
+      <input id="nrMe" autocomplete="off">
+      <div class="help">Your name in the transcript. Stored in this browser only.</div>
+    </div>
+    <div class="actions">
+      <button onclick="this.closest('.mask').remove()">Cancel</button>
+      <button class="p" id="nrGo">Create</button>
+    </div>
   </div>`;
   document.body.appendChild(m);
-}
-function cp(id, btn){
-  navigator.clipboard.writeText($(id).textContent);
-  const was = btn.textContent; btn.textContent = "Copied"; setTimeout(()=>btn.textContent=was, 1200);
+  const title = m.querySelector("#nrTitle");
+  m.querySelector("#nrMe").value = (ME === "chair" ? "" : ME);
+  title.focus();
+  const go = guard(async () => {
+    const t = title.value.trim();
+    if(!t) return toast("A meeting needs a title.", "bad");
+    const who = m.querySelector("#nrMe").value.trim();
+    if(who){ ME = who; store.set("me", ME); paintMe(); }
+    const room = await post("/api/rooms",
+      {title:t, agenda:m.querySelector("#nrAgenda").value.trim(), name:ME});
+    m.remove();
+    openRoom(room.id);
+  });
+  m.querySelector("#nrGo").onclick = go;
+  m.addEventListener("keydown", e => {
+    if(e.key === "Enter" && e.target.tagName === "INPUT"){ e.preventDefault(); go(); }
+  });
 }
 
-setMe(false);
+/* ============================ misc ============================ */
+function togglePane(which){
+  $(which === "right" ? "paneRight" : "paneLeft").classList.toggle("open");
+}
+document.addEventListener("keydown", e => {
+  if(e.key === "Escape"){
+    const m = document.querySelector(".mask");
+    if(m) return m.remove();
+    document.querySelectorAll(".pane.open").forEach(p => p.classList.remove("open"));
+  }
+  if(e.key === "n" && (e.ctrlKey || e.metaKey)){ e.preventDefault(); openNewRoom(); }
+});
+
+/* ============================ boot ============================ */
+ME = store.get("me", "") || "chair";
+seen = store.get("seen", {}) || {};
+paintMe();
 watchState();
+// Reopen whatever was last open, once the first state arrives.
+const last = store.get("lastRoom", null);
+if(last){
+  const once = () => { stateES.removeEventListener("state", once);
+                       if(S.rooms.some(r => r.id === last)) openRoom(last); };
+  setTimeout(() => { if(S.rooms.some(r => r.id === last)) openRoom(last); }, 400);
+}
+if(ME === "chair") setTimeout(askName, 300);
 </script>
 </body>
 </html>

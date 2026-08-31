@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import os
+import threading
 import time
 from pathlib import Path
 from typing import Any
@@ -53,8 +54,24 @@ def _pid_alive(pid: int) -> bool:
     return True
 
 
-def claude_sessions(directory: Path | None = None) -> list[dict[str, Any]]:
+#: The registry is read on every state push and on every join. Each read stats
+#: and parses a handful of files and probes their pids, and the state stream
+#: does it every two seconds per open browser tab. A one-second cache makes that
+#: cost independent of how many things are watching, and one second is far below
+#: any rate a human notices.
+_CACHE_TTL = 1.0
+_cache: tuple[float, list[dict[str, Any]]] = (0.0, [])
+_cache_lock = threading.Lock()
+
+
+def claude_sessions(directory: Path | None = None,
+                    *, fresh: bool = False) -> list[dict[str, Any]]:
     """Every live Claude Code session on this machine, newest first."""
+    if directory is None and not fresh:
+        with _cache_lock:
+            at, cached = _cache
+            if (time.time() - at) < _CACHE_TTL:
+                return cached
     directory = directory or CLAUDE_SESSIONS
     if not directory.exists():
         return []
@@ -85,6 +102,9 @@ def claude_sessions(directory: Path | None = None) -> list[dict[str, Any]]:
             "socket": rec.get("messagingSocketPath", ""),
         })
     out.sort(key=lambda s: -s["updated"])
+    if directory == CLAUDE_SESSIONS:
+        with _cache_lock:
+            globals()["_cache"] = (time.time(), out)
     return out
 
 

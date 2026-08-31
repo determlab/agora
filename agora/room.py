@@ -27,6 +27,11 @@ SUMMARY = "summary"      # a summary posted by an agent or generated locally
 HUMAN = "human"
 AGENT = "agent"
 
+#: A participant is "online" if it has been heard from this recently. The same
+#: number decides whether a lobby seat counts as parked, so it lives here rather
+#: than in two places that can drift apart.
+ONLINE_WINDOW = 95.0
+
 
 @dataclass
 class Event:
@@ -57,7 +62,8 @@ class Participant:
 
     def as_dict(self) -> dict[str, Any]:
         d = asdict(self)
-        d["online"] = (time.time() - self.last_seen) < 90 if self.last_seen else False
+        d["online"] = ((time.time() - self.last_seen) < ONLINE_WINDOW
+                       if self.last_seen else False)
         return d
 
 
@@ -127,8 +133,20 @@ class Room:
             if self.closed and kind != SYSTEM:
                 raise RoomClosed(f"room {self.id} is closed")
             p = self.participants.get(author)
-            if p is not None and p.muted and kind == MESSAGE:
-                raise Muted(f"{author} is muted in {self.id}")
+            if kind == MESSAGE and role != HUMAN:
+                # Agents must hold a seat to speak. Without this a kick was
+                # cosmetic: `leave` removes the participant, and a missing
+                # participant used to skip the mute check entirely, so the
+                # kicked agent could keep talking.
+                if p is None:
+                    raise NotSeated(
+                        f"{author} is not in {self.id} — call room_join first "
+                        f"(if you were removed, the chair did that on purpose)")
+                if p.muted:
+                    raise Muted(
+                        f"{author} is muted in {self.id}. This is not an error: "
+                        f"keep reading with room_wait and the chair will unmute "
+                        f"you when it is your turn.")
             self._seq += 1
             ev = Event(seq=self._seq, ts=time.time(), kind=kind, author=author,
                        text=text, role=role, provider=provider, meta=meta or {})
@@ -317,6 +335,10 @@ class Muted(Exception):
     pass
 
 
+class NotSeated(Exception):
+    """An agent tried to speak in a room it does not hold a seat in."""
+
+
 #: The waiting room. Always exists, never closes, and is not a meeting — it is
 #: how the chair reaches an idle agent using only tools every session already
 #: has. A new MCP tool would not help: a client fetches `tools/list` once when
@@ -352,6 +374,18 @@ class Hub:
                                "agenda": agenda, "created": room.created})
             self.rooms[rid] = room
         return room
+
+    def delete(self, room_id: str) -> bool:
+        """Remove a room and its transcript. Archive hides; this destroys."""
+        with self._lock:
+            room = self.rooms.pop(room_id, None)
+        if room is None:
+            return False
+        try:
+            room._path.unlink(missing_ok=True)
+        except OSError:
+            pass
+        return True
 
     def get(self, room_id: str) -> Room | None:
         return self.rooms.get(room_id)
