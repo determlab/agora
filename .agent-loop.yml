@@ -62,8 +62,15 @@ hard_stops:
   flag_on_public_api_change: true
 
 review:
+  # This said `CLAUDE.md`, a file this repo has never had, so the reviewer read
+  # one source short and nothing said so — the same defect this repo keeps
+  # shipping, a declaration reporting coverage it does not have. context.md is
+  # the file that line meant; it is named first rather than left to the
+  # directory below it because it carries the non-negotiable invariants and a
+  # source that important should be named, not swept up by a glob.
+  # tests/test_agent_loop_config.py fails if a path here stops existing.
   standards_sources:
-    - CLAUDE.md
+    - docs/agents/context.md
     - docs/agents/
   spec_source: issue
 
