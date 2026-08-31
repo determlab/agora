@@ -69,24 +69,37 @@ review:
   # directory below it because it carries the non-negotiable invariants and a
   # source that important should be named, not swept up by a glob.
   # tests/test_agent_loop_config.py fails if a path here stops existing.
+  # DECISIONS.md is named too, and separately from the directory: it lives at
+  # docs/, not docs/agents/, so the glob below does not reach it. A ledger the
+  # reviewer cannot read is a ledger that decides nothing.
   standards_sources:
     - docs/agents/context.md
+    - docs/DECISIONS.md
     - docs/agents/
   spec_source: issue
 
   # Semantic hard-stops. These are invariants a path glob cannot express, and
   # they are the reason the protected_paths list above is one line long.
+  #
+  # Each now cites its row in docs/DECISIONS.md, and the full text STAYS HERE
+  # rather than collapsing to "see D3". No agent-loop plugin file reads this key
+  # at all: it is honoured only because the orchestrating session reads this
+  # config and pastes these strings verbatim into the reviewer's prompt. A bare
+  # citation would hand the reviewer a pointer it cannot follow and would
+  # silently weaken the four stops this repo most depends on — which is this
+  # repo's own recurring defect, a declaration reporting coverage it does not
+  # have. The number is for humans and issues; the text is what actually runs.
   hard_stop_when:
     - "A new entry is added to TOOLS in agora/mcp.py. A client fetches tools/list
        once at connect, so a new tool is invisible to every session already
        connected — it ships as a no-op for exactly the sessions that needed it,
        and every session must restart. Adding an ARGUMENT to an existing tool is
-       fine and is the correct way to extend."
+       fine and is the correct way to extend. (D1)"
     - "A third-party import appears anywhere in agora/ or hooks/. Zero runtime
        dependencies is why the MCP layer is hand-rolled and why the app cannot be
-       broken by an SDK major."
+       broken by an SDK major. (D2)"
     - "A control gains a success path that does not distinguish 'it worked' from
        'it reached nobody'. This app has shipped that defect three times on three
-       surfaces; it is the one bug class to refuse outright."
+       surfaces; it is the one bug class to refuse outright. (D3)"
     - "The server binds anywhere other than 127.0.0.1, or authentication is added
-       or removed. The loopback bind is the security boundary."
+       or removed. The loopback bind is the security boundary. (D4)"

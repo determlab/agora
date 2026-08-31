@@ -1,3 +1,10 @@
+---
+type: readme
+owner: CMO
+scope: repo/agora
+reviewed: 2026-08-31
+---
+
 # Agora
 
 A web chat where you run a **meeting** with live coding agents — see who is running,

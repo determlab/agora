@@ -1,3 +1,10 @@
+---
+type: agent-context
+owner: repo-agent
+scope: repo/agora
+reviewed: 2026-08-31
+---
+
 # Agora — context for the coder and the reviewer
 
 Read this before touching anything. It is short on purpose; what it says about

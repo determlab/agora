@@ -1,3 +1,10 @@
+---
+type: agent-context
+owner: repo-agent
+scope: repo/agora
+reviewed: 2026-08-31
+---
+
 # Handoff — Agora development moves to its own session
 
 Written 2026-08-31 by the COO session (`C:\PlayGround\ops`), which built Agora
