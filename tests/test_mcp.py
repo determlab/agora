@@ -197,7 +197,9 @@ def test_room_wait_wildcard_cursors_let_an_agent_loop_without_re_reading(server)
                                          "cursors": second["cursors"],
                                          "timeout": 1})
     assert third["events"] == [], "the same events must not come back twice"
-    # `since` takes the map too, for a caller that reads the current schema.
+    # A tolerance, not a documented route: the schema still declares `since` an
+    # integer, so this is for a caller that carried its single-room habit of
+    # echoing the cursor into `since` and put the map in the wrong key.
     fourth, _ = server.tool("room_wait", {"room": "*", "name": "bot",
                                           "since": third["cursors"],
                                           "timeout": 1})

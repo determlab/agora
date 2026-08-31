@@ -153,7 +153,11 @@ TOOLS: list[dict[str, Any]] = [
                             "description": "room=\"*\" only: the `cursors` map "
                                            "from your last reply, echoed back. "
                                            "Omit it on the first call and the "
-                                           "wait starts from now."},
+                                           "wait starts from now, which skips "
+                                           "anything said between joining a room "
+                                           "and this call — to keep that gap, "
+                                           "seed the map with each room's `seq` "
+                                           "from `room_history` instead."},
                 "timeout": {"type": "number",
                             "description": f"Seconds to wait, max {MAX_WAIT}"},
             },
@@ -258,7 +262,10 @@ class McpHandler:
                         "Agora is a meeting room shared by a human chair and any "
                         "number of agents. Join with room_join, read the room with "
                         "room_history, then loop on room_wait and reply with "
-                        "room_post. Stay until the room closes.",
+                        "room_post. Stay until the room closes, and whenever you "
+                        "have nothing else to do rest on room_wait with "
+                        "room=\"*\" — that covers every room you are in plus the "
+                        "lobby, and is how the chair reaches you.",
                 }
             elif method == "ping":
                 result = {}
