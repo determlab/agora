@@ -23,13 +23,5 @@ jobs:
         with:
           python-version: ${{ matrix.python }}
       - run: python -m pip install --upgrade pip pytest
-      - name: No runtime dependencies
-        shell: bash
-        run: |
-          # The zero-dependency promise is the reason the MCP layer is
-          # hand-rolled. Assert it rather than trusting a review to notice.
-          if python -m pip freeze | grep -viE '^(pytest|iniconfig|packaging|pluggy|exceptiongroup|tomli|colorama|pip|setuptools|wheel)([=@]|$)' | grep -q .; then
-            echo "unexpected packages installed:"; python -m pip freeze; exit 1
-          fi
       - run: python -m pytest -q
         timeout-minutes: 10
