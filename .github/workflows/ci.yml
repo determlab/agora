@@ -1,0 +1,35 @@
+name: tests
+
+# auto_merge is refused unless the base branch has a required status check, so
+# this is not optional decoration — it is the gate the loop merges against.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        # The app is standard-library only, so the matrix is about proving that
+        # claim rather than about dependency resolution.
+        python: ["3.10", "3.11", "3.12", "3.13"]
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - run: python -m pip install --upgrade pip pytest
+      - name: No runtime dependencies
+        shell: bash
+        run: |
+          # The zero-dependency promise is the reason the MCP layer is
+          # hand-rolled. Assert it rather than trusting a review to notice.
+          if python -m pip freeze | grep -viE '^(pytest|iniconfig|packaging|pluggy|exceptiongroup|tomli|colorama|pip|setuptools|wheel)([=@]|$)' | grep -q .; then
+            echo "unexpected packages installed:"; python -m pip freeze; exit 1
+          fi
+      - run: python -m pytest -q
+        timeout-minutes: 10

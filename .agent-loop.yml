@@ -1,0 +1,56 @@
+# .agent-loop.yml — per-repo config for the agent-loop autopilot.
+version: 1
+
+branch_base: main
+max_rounds: 4
+
+auto_merge: true
+merge_method: squash
+
+# Agora has no third-party runtime dependencies and is not packaged, so there is
+# nothing to install but the test runner itself.
+commands:
+  install: "python -m pip install pytest"
+  test:    "python -m pytest"
+  lint:    ""      # none configured; the DoD rubric decides, not a linter
+  build:   ""      # nothing to build — one package, one HTML file, one hook
+
+# Every hard-stop below names the invariant it protects. A stop that cannot name
+# one does not belong here: it fires on every change of a shape rather than on a
+# change that can actually do harm, and a stop that fires every time is a stop
+# nobody reads.
+hard_stops:
+  # Agora declares no runtime dependencies and that is a property worth keeping —
+  # it is the reason the app cannot be broken by an SDK major. A change here is a
+  # change to that promise.
+  dependency_files:
+    - pyproject.toml
+    - requirements*.txt
+
+  protected_paths:
+    # The MCP tool list is a PUBLIC SURFACE with an unusual property: a client
+    # fetches tools/list once when it connects, so a tool added here is invisible
+    # to every session already connected. Adding one looks like a feature and
+    # ships as a no-op for exactly the sessions that needed it.
+    - "agora/mcp.py"
+    # The whole UI, with no build step and no framework. It cannot be
+    # unit-tested; test_ui.py checks only the seams. A regression here is
+    # invisible to CI and visible to the founder.
+    - "static/index.html"
+    # A SessionStart hook runs inside every Claude Code session on the machine.
+    # A hook that throws or hangs damages sessions that have nothing to do with
+    # Agora, and it fails silently by design.
+    - "hooks/agora_hook.py"
+    # Reachability is where this app has been wrong three times, always the same
+    # way: a control reporting success while reaching nothing. Changes to the
+    # summons registry or the presence windows need a human to re-read them.
+    - "**/summons*"
+
+  flag_on_file_delete: true
+  flag_on_public_api_change: true
+
+review:
+  standards_sources:
+    - CLAUDE.md
+    - docs/agents/
+  spec_source: issue
