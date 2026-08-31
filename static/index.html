@@ -1,0 +1,315 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Agora</title>
+<style>
+:root{
+  --bg:#0d1013; --panel:#14181c; --panel2:#1a2026; --line:#242c33;
+  --ink:#e6ebe9; --ink2:#9dabb3; --mut:#68767f;
+  --acc:#d9a051; --acc-bg:#2c2110; --go:#5cc298; --stop:#ec7364; --human:#7aa7ff;
+  --mono:"Cascadia Code",ui-monospace,SFMono-Regular,Consolas,monospace;
+}
+@media (prefers-color-scheme:light){
+  :root{--bg:#eef0ee;--panel:#fbfcfb;--panel2:#e7ebe8;--line:#d3dad5;
+        --ink:#15181a;--ink2:#424b50;--mut:#78848a;--acc:#8f5a12;--acc-bg:#f3e9d9;
+        --go:#1c6a4c;--stop:#9c3126;--human:#2b5fbe;}
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);
+  font:14px/1.55 -apple-system,"Segoe UI",system-ui,sans-serif;height:100vh;overflow:hidden}
+button,input,textarea,select{font:inherit;color:inherit}
+button{background:var(--panel2);border:1px solid var(--line);border-radius:5px;
+  padding:5px 10px;cursor:pointer}
+button:hover{border-color:var(--acc)}
+button.p{background:var(--acc);color:var(--bg);border-color:var(--acc);font-weight:600}
+button.d{color:var(--stop)}
+button:disabled{opacity:.4;cursor:default}
+input,textarea{background:var(--bg);border:1px solid var(--line);border-radius:5px;
+  padding:7px 9px;width:100%}
+input:focus,textarea:focus{outline:none;border-color:var(--acc)}
+.app{display:grid;grid-template-columns:250px 1fr 290px;height:100vh}
+aside,.side{background:var(--panel);overflow-y:auto;display:flex;flex-direction:column}
+aside{border-right:1px solid var(--line)}
+.side{border-left:1px solid var(--line)}
+h2{font-size:10.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--mut);
+  margin:0;padding:14px 14px 7px;font-weight:600;font-family:var(--mono)}
+.pad{padding:0 14px 14px}
+/* rooms + roster */
+.row{padding:8px 14px;border-left:2px solid transparent;cursor:pointer}
+.row:hover{background:var(--panel2)}
+.row.on{border-left-color:var(--acc);background:var(--acc-bg)}
+.row .t{font-weight:600;font-size:13px}
+.row .s{font-size:11px;color:var(--mut);font-family:var(--mono);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.dot{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:6px;
+  vertical-align:middle;background:var(--mut)}
+.dot.busy{background:var(--acc)} .dot.idle{background:var(--go)}
+.dot.off{background:var(--mut);opacity:.4}
+.tag{font-family:var(--mono);font-size:9.5px;padding:1px 5px;border-radius:3px;
+  background:var(--panel2);color:var(--mut);border:1px solid var(--line)}
+.tag.in{color:var(--go);border-color:var(--go)}
+/* main */
+main{display:flex;flex-direction:column;min-width:0;background:var(--bg)}
+header{padding:12px 18px;border-bottom:1px solid var(--line);background:var(--panel);
+  display:flex;gap:12px;align-items:center}
+header .ttl{font-weight:700;font-size:16px}
+header .ag{color:var(--ink2);font-size:12.5px;flex:1;min-width:0;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#log{flex:1;overflow-y:auto;padding:16px 18px;display:flex;flex-direction:column;gap:11px}
+.msg{display:grid;grid-template-columns:auto 1fr;gap:10px;align-items:start}
+.av{width:26px;height:26px;border-radius:5px;background:var(--panel2);
+  display:grid;place-items:center;font-family:var(--mono);font-size:11px;font-weight:600;
+  color:var(--acc);border:1px solid var(--line);flex:none}
+.msg.human .av{color:var(--human);border-color:var(--human)}
+.who{font-weight:600;font-size:12.5px}
+.who span{font-weight:400;color:var(--mut);font-size:11px;font-family:var(--mono);
+  margin-left:7px}
+.bd{white-space:pre-wrap;word-wrap:break-word;overflow-wrap:anywhere}
+.sys{color:var(--mut);font-size:11.5px;font-family:var(--mono);text-align:center;
+  padding:2px 0}
+.sum{border:1px solid var(--acc);background:var(--acc-bg);border-radius:6px;padding:12px 14px}
+.sum .who{color:var(--acc)}
+footer{border-top:1px solid var(--line);padding:11px 18px;background:var(--panel);
+  display:flex;gap:9px;align-items:flex-end}
+#say{resize:none;min-height:42px;max-height:170px}
+/* right side */
+.note{background:var(--panel2);border:1px solid var(--line);border-radius:5px;
+  padding:8px 10px;margin-bottom:7px;font-size:12.5px}
+.note b{color:var(--acc);font-family:var(--mono);font-size:10.5px;font-weight:600}
+.adm{display:flex;flex-wrap:wrap;gap:6px}
+.adm button{font-size:12px;padding:4px 8px}
+.pr{display:flex;justify-content:space-between;align-items:center;
+  padding:5px 14px;font-size:12.5px}
+.pr:hover{background:var(--panel2)}
+.pr .x{opacity:0;font-size:11px;padding:2px 6px}
+.pr:hover .x{opacity:1}
+/* modal */
+.mask{position:fixed;inset:0;background:rgba(0,0,0,.62);display:grid;place-items:center;
+  padding:20px;z-index:9}
+.mod{background:var(--panel);border:1px solid var(--line);border-radius:9px;
+  padding:20px;max-width:660px;width:100%;max-height:88vh;overflow-y:auto}
+.mod h3{margin:0 0 4px;font-size:17px}
+.mod p{color:var(--ink2);font-size:13px;margin:0 0 14px}
+.step{margin-bottom:15px}
+.step .lb{font-family:var(--mono);font-size:10.5px;letter-spacing:.1em;
+  text-transform:uppercase;color:var(--mut);margin-bottom:5px}
+pre{background:var(--bg);border:1px solid var(--line);border-radius:5px;padding:11px 13px;
+  font-family:var(--mono);font-size:11.5px;white-space:pre-wrap;word-break:break-word;
+  margin:0;max-height:230px;overflow-y:auto}
+.rt{display:flex;gap:8px;justify-content:flex-end;margin-top:6px}
+.empty{color:var(--mut);font-size:12.5px;padding:0 14px 12px}
+</style>
+</head>
+<body>
+<div class="app">
+
+  <aside>
+    <h2>Rooms</h2>
+    <div id="rooms"></div>
+    <div class="pad"><button class="p" style="width:100%" onclick="newRoom()">+ New meeting</button></div>
+    <h2>Live sessions</h2>
+    <div id="roster"></div>
+    <div class="pad"><button style="width:100%" onclick="refresh()">Refresh</button></div>
+  </aside>
+
+  <main>
+    <header>
+      <div>
+        <div class="ttl" id="ttl">No room selected</div>
+        <div class="ag" id="ag"></div>
+      </div>
+      <div style="flex:1"></div>
+      <span class="tag" id="stat"></span>
+      <button onclick="exportMd()" id="bex" disabled>Export</button>
+    </header>
+    <div id="log"></div>
+    <footer>
+      <textarea id="say" placeholder="Speak to the room…  (Enter to send, Shift+Enter for a newline)"
+                oninput="grow(this)" onkeydown="key(event)" disabled></textarea>
+      <button class="p" onclick="send()" id="bs" disabled>Send</button>
+    </footer>
+  </main>
+
+  <div class="side">
+    <h2>In the room</h2>
+    <div id="ppl"></div>
+    <h2>Admin</h2>
+    <div class="pad adm">
+      <button onclick="setAgenda()">Agenda</button>
+      <button onclick="askSummary()">Ask for summary</button>
+      <button onclick="localSummary()">Local digest</button>
+      <button class="d" onclick="closeRoom()" id="bcl">Close</button>
+    </div>
+    <h2>Notes</h2>
+    <div class="pad">
+      <div id="notes"></div>
+      <input id="nt" placeholder="Add a note…" onkeydown="if(event.key==='Enter')addNote()">
+    </div>
+    <h2>Summaries</h2>
+    <div class="pad" id="sums"><div class="empty" style="padding:0">None yet.</div></div>
+  </div>
+</div>
+
+<script>
+let S = {rooms:[], roster:[], url:"", chair:"chair"};
+let cur = null, es = null, snap = null;
+
+const $ = id => document.getElementById(id);
+const esc = s => (s||"").replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+const initials = n => (n||"?").replace(/[^a-zA-Z0-9]/g," ").trim().split(/\s+/)
+  .slice(0,2).map(w=>w[0]).join("").toUpperCase() || "?";
+const hhmm = ts => new Date(ts*1000).toTimeString().slice(0,5);
+
+async function api(path, opts){
+  const r = await fetch(path, opts);
+  if(!r.ok) throw new Error((await r.json().catch(()=>({}))).error || r.statusText);
+  return r.headers.get("content-type")?.includes("json") ? r.json() : r.text();
+}
+const post = (p,b) => api(p,{method:"POST",headers:{"Content-Type":"application/json"},
+                            body:JSON.stringify(b||{})});
+
+async function refresh(){
+  S = await api("/api/state");
+  drawRooms(); drawRoster();
+}
+
+function drawRooms(){
+  $("rooms").innerHTML = S.rooms.length ? S.rooms.map(r => `
+    <div class="row ${r.id===cur?'on':''}" onclick="open_('${r.id}')">
+      <div class="t">${esc(r.title)}</div>
+      <div class="s">${r.participants} in · ${r.messages} msg${r.closed?' · closed':''}</div>
+    </div>`).join("") : `<div class="empty">No meetings yet.</div>`;
+}
+
+function drawRoster(){
+  $("roster").innerHTML = S.roster.length ? S.roster.map(s => {
+    const inCur = cur && s.rooms.includes(cur);
+    return `<div class="row" onclick="invite('${esc(s.name)}')">
+      <div class="t"><span class="dot ${s.status==='busy'?'busy':s.status==='idle'?'idle':'off'}"></span>${esc(s.name)}
+        ${inCur?'<span class="tag in">in room</span>':''}</div>
+      <div class="s">${esc(s.provider)}${s.project?' · '+esc(s.project):''}</div>
+    </div>`;}).join("") : `<div class="empty">No sessions found.</div>`;
+}
+
+async function open_(id){
+  cur = id;
+  if(es) es.close();
+  drawRooms();
+  $("say").disabled = $("bs").disabled = $("bex").disabled = false;
+  es = new EventSource(`/api/rooms/${id}/stream`);
+  es.addEventListener("snapshot", e => { snap = JSON.parse(e.data); render(); });
+  es.addEventListener("append", e => {
+    const d = JSON.parse(e.data);
+    if(!snap) return;
+    snap.events.push(...d.events); snap.participants = d.participants;
+    snap.seq = d.seq; snap.closed = d.closed;
+    render();
+  });
+}
+
+function render(){
+  if(!snap) return;
+  $("ttl").textContent = snap.title;
+  $("ag").textContent = snap.agenda || "";
+  $("stat").textContent = snap.closed ? "closed" : "live";
+  $("bcl").textContent = snap.closed ? "Reopen" : "Close";
+
+  const log = $("log");
+  const stick = log.scrollTop + log.clientHeight >= log.scrollHeight - 60;
+  log.innerHTML = snap.events.filter(e => e.kind!=="note").map(e => {
+    if(e.kind==="system") return `<div class="sys">${esc(e.text)}</div>`;
+    if(e.kind==="summary") return `<div class="sum"><div class="who">${esc(e.author)}
+      <span>summary · ${hhmm(e.ts)}</span></div><div class="bd">${esc(e.text)}</div></div>`;
+    return `<div class="msg ${e.role==='human'?'human':''}">
+      <div class="av">${initials(e.author)}</div>
+      <div><div class="who">${esc(e.author)}<span>${hhmm(e.ts)}</span></div>
+      <div class="bd">${esc(e.text)}</div></div></div>`;
+  }).join("");
+  if(stick) log.scrollTop = log.scrollHeight;
+
+  $("ppl").innerHTML = snap.participants.map(p => `
+    <div class="pr"><span><span class="dot ${p.online?'idle':'off'}"></span>${esc(p.name)}
+      ${p.muted?'<span class="tag">muted</span>':''}</span>
+    <span><button class="x" onclick="adm('${p.muted?'unmute':'mute'}','${esc(p.name)}')">${p.muted?'unmute':'mute'}</button>
+    <button class="x d" onclick="adm('kick','${esc(p.name)}')">kick</button></span></div>`).join("");
+
+  const notes = snap.events.filter(e=>e.kind==="note");
+  $("notes").innerHTML = notes.map(n =>
+    `<div class="note"><b>${esc(n.author)}</b><br>${esc(n.text)}</div>`).join("")
+    || `<div class="empty" style="padding:0 0 8px">No notes.</div>`;
+
+  const sums = snap.events.filter(e=>e.kind==="summary");
+  $("sums").innerHTML = sums.length ? sums.map(s =>
+    `<div class="note"><b>${esc(s.author)} · ${hhmm(s.ts)}</b><br>${esc(s.text)}</div>`).join("")
+    : `<div class="empty" style="padding:0">None yet.</div>`;
+}
+
+function grow(t){ t.style.height="auto"; t.style.height=Math.min(t.scrollHeight,170)+"px"; }
+function key(e){ if(e.key==="Enter" && !e.shiftKey){ e.preventDefault(); send(); } }
+
+async function send(){
+  const t = $("say").value.trim(); if(!t || !cur) return;
+  $("say").value=""; grow($("say"));
+  try { await post(`/api/rooms/${cur}/post`, {name:S.chair, text:t}); }
+  catch(err){ alert(err.message); }
+}
+
+async function newRoom(){
+  const title = prompt("Meeting title"); if(!title) return;
+  const agenda = prompt("Agenda — the one question this meeting answers") || "";
+  const r = await post("/api/rooms", {title, agenda});
+  await refresh(); open_(r.id);
+}
+
+async function addNote(){
+  const t = $("nt").value.trim(); if(!t||!cur) return;
+  $("nt").value="";
+  await post(`/api/rooms/${cur}/note`, {name:S.chair, text:t});
+}
+
+const adm = (action,target) => post(`/api/rooms/${cur}/admin`, {action,target});
+async function setAgenda(){
+  const a = prompt("Agenda", snap?.agenda||""); if(a===null) return;
+  await post(`/api/rooms/${cur}/admin`, {action:"agenda", text:a});
+}
+const askSummary = () => post(`/api/rooms/${cur}/admin`, {action:"ask_summary", target:""});
+async function localSummary(){
+  const d = await api(`/api/rooms/${cur}/summary`);
+  await post(`/api/rooms/${cur}/summary`, {name:"agora", text:d.text});
+}
+const closeRoom = () => post(`/api/rooms/${cur}/admin`,
+  {action: snap?.closed ? "reopen" : "close"});
+const exportMd = () => location.href = `/api/rooms/${cur}/export`;
+
+async function invite(who){
+  if(!cur){ alert("Open a room first."); return; }
+  const d = await api(`/api/rooms/${cur}/invite?session=${encodeURIComponent(who)}`);
+  const m = document.createElement("div");
+  m.className = "mask"; m.onclick = e => { if(e.target===m) m.remove(); };
+  m.innerHTML = `<div class="mod">
+    <h3>Invite ${esc(who)}</h3>
+    <p>Run step 1 once on this machine, restart that session, then paste step 2 into it.
+       Any MCP client works — Claude Code, Codex, Cursor, Gemini.</p>
+    <div class="step"><div class="lb">1 · register the server — once per machine, then restart the session
+      <br>(MCP servers connect at startup, so a session already running cannot see a new one)</div>
+      <pre id="i1">${esc(d.register)}</pre>
+      <div class="rt"><button onclick="cp('i1',this)">Copy</button></div></div>
+    <div class="step"><div class="lb">2 · the invitation</div>
+      <pre id="i2">${esc(d.prompt)}</pre>
+      <div class="rt"><button class="p" onclick="cp('i2',this)">Copy</button></div></div>
+    <div class="rt"><button onclick="this.closest('.mask').remove()">Done</button></div>
+  </div>`;
+  document.body.appendChild(m);
+}
+function cp(id, btn){
+  navigator.clipboard.writeText($(id).textContent);
+  const was = btn.textContent; btn.textContent = "Copied"; setTimeout(()=>btn.textContent=was, 1200);
+}
+
+refresh();
+setInterval(refresh, 12000);
+</script>
+</body>
+</html>
