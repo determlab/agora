@@ -13,12 +13,13 @@ from agora import discovery
 from agora.room import LOBBY
 
 
-def _write_session(directory, name, sid, pid=None):
+def _write_session(directory, name, sid, pid=None, status="idle", updated=None):
     directory.mkdir(exist_ok=True)
     (directory / f"{name}.json").write_text(json.dumps({
         "pid": pid or os.getpid(), "sessionId": sid, "name": name,
-        "cwd": f"C:/PlayGround/{name}", "updatedAt": time.time() * 1000,
-        "status": "idle", "kind": "interactive", "version": "test",
+        "cwd": f"C:/PlayGround/{name}",
+        "updatedAt": (updated if updated is not None else time.time()) * 1000,
+        "status": status, "kind": "interactive", "version": "test",
         "messagingSocketPath": "",
     }), encoding="utf-8")
 
@@ -247,6 +248,70 @@ def test_a_dead_pid_is_not_reported_as_a_live_session(server, monkeypatch,
     monkeypatch.setattr(discovery, "_cache", (0.0, []))
     names = [r["name"] for r in server.get("/api/state")[1]["roster"]]
     assert "zombie" not in names
+
+
+def _row(server, name):
+    return next(r for r in server.get("/api/state")[1]["roster"]
+                if r["name"] == name)
+
+
+def test_a_live_but_idle_session_is_reported_idle_and_is_not_offered_as_callable(
+        server, monkeypatch, tmp_path):
+    """A call is a post, and an idle session is not reading. Offering Call for
+    one is a control reporting a reach it does not have."""
+    sessions = tmp_path / "sessions-idle"
+    _write_session(sessions, "resting", "sid-r", status="idle")
+    monkeypatch.setattr(discovery, "CLAUDE_SESSIONS", sessions)
+    monkeypatch.setattr(discovery, "_cache", (0.0, []))
+
+    row = _row(server, "resting")
+    assert row["liveness"] == "idle"
+    # Nothing is parked for it, so `liveness` is the only thing that decides —
+    # and it says no. This is exactly what the page gates the button on.
+    assert row["hooked"] is False and row["in_lobby"] is False
+
+    _, room = server.post("/api/rooms", {"title": "idle call", "name": "Hemi"})
+    _, res = server.post(f"/api/rooms/{room['id']}/admin",
+                         {"action": "call", "target": "resting", "name": "Hemi"})
+    assert res["woke"] is False, "an idle session cannot be woken by a post"
+    assert res["liveness"] == "idle", "the response must agree with the button"
+    assert "terminal" in res["note"], "say what does work, not only what did not"
+
+
+def test_a_busy_session_is_reported_busy_and_its_call_says_it_will_land(
+        server, monkeypatch, tmp_path):
+    sessions = tmp_path / "sessions-busy"
+    _write_session(sessions, "working", "sid-w", status="busy")
+    monkeypatch.setattr(discovery, "CLAUDE_SESSIONS", sessions)
+    monkeypatch.setattr(discovery, "_cache", (0.0, []))
+
+    assert _row(server, "working")["liveness"] == "busy"
+    _, room = server.post("/api/rooms", {"title": "busy call", "name": "Hemi"})
+    _, res = server.post(f"/api/rooms/{room['id']}/admin",
+                         {"action": "call", "target": "working", "name": "Hemi"})
+    assert res["woke"] is False and res["liveness"] == "busy"
+    assert "finishes" in res["note"]
+
+
+def test_a_row_with_no_registry_entry_is_reported_offline(server):
+    """A seat is not a session. A client that joined over MCP has a row, but
+    nothing vouches for it being alive, so the roster must not imply it is."""
+    server.tool("room_join", {"room": LOBBY, "name": "codex-1"})
+    assert _row(server, "codex-1")["liveness"] == "offline"
+
+
+def test_a_stale_registry_entry_is_reported_offline(server, monkeypatch,
+                                                    tmp_path):
+    """Pids are reused, so an old file with a live pid is not a live session.
+    It keeps its row only because it holds a seat — and the row says offline."""
+    sessions = tmp_path / "sessions-stale"
+    _write_session(sessions, "ancient", "sid-a",
+                   updated=time.time() - 60 * 60 * 24 * 400)
+    monkeypatch.setattr(discovery, "CLAUDE_SESSIONS", sessions)
+    monkeypatch.setattr(discovery, "_cache", (0.0, []))
+
+    server.tool("room_join", {"room": LOBBY, "name": "ancient"})
+    assert _row(server, "ancient")["liveness"] == "offline"
 
 
 # ---- streams and export ----------------------------------------------------
