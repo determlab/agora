@@ -31,7 +31,7 @@ Writing them here numbers them; it does not add any.
 
 - **O1** — `hooks/agora_hook.py` still teaches the single-room `room_wait` rest
   state, not `room="*"` (D1's shape). The replacement text is written out and
-  deliberately unapplied, because that file is the one protected path in
+  deliberately unapplied, because that file is a protected path in
   `.agent-loop.yml`: it runs inside every Claude Code session on this machine and
   fails silently by design. Settled by a human applying it, restarting one
   session, and confirming it still registers and still wakes. Text in

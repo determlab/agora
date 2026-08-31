@@ -33,7 +33,15 @@ hard_stops:
     - requirements*.txt
 
   protected_paths:
-    # ONE path, and it earns it: a SessionStart hook runs inside every Claude
+    # This file, listed in itself. Today it is already unreachable without a
+    # human — auto_merge is false, so every change stops in front of the founder
+    # — which makes the stop redundant. It is listed anyway because redundant is
+    # a property of the current config, not of the file: a protection that
+    # depends on a flag staying false is not a protection. The stop fires only on
+    # an agent's branch, so it costs a human nothing.
+    - ".agent-loop.yml"
+
+    # The other path, and it earns it: a SessionStart hook runs inside every Claude
     # Code session on this machine. A hook that throws or hangs damages sessions
     # that have nothing to do with Agora, and it fails silently by design, so
     # nothing here surfaces the damage. No test can cover that blast radius.
@@ -76,10 +84,10 @@ review:
     - docs/agents/context.md
     - docs/DECISIONS.md
     - docs/agents/
-  spec_source: issue
 
   # Semantic hard-stops. These are invariants a path glob cannot express, and
-  # they are the reason the protected_paths list above is one line long.
+  # they are the reason the protected_paths list above is two lines long, one
+  # of which is this file.
   #
   # Each now cites its row in docs/DECISIONS.md, and the full text STAYS HERE
   # rather than collapsing to "see D3". No agent-loop plugin file reads this key

@@ -85,12 +85,18 @@ argument, only be told about it. Fine at three sessions; not a mechanism.
 Anything that must be discoverable needs a restart regardless, and saying so is
 part of the change.
 
-## The one protected path
+## The two protected paths
 
-`hooks/agora_hook.py` is the only entry in `protected_paths`. It earns it: that
-hook runs inside every Claude Code session on this machine and fails silently by
-design, so a hook that throws or hangs damages sessions with nothing to do with
-Agora and nothing surfaces the damage. No test covers that blast radius.
+`hooks/agora_hook.py` earns its entry: that hook runs inside every Claude Code
+session on this machine and fails silently by design, so a hook that throws or
+hangs damages sessions with nothing to do with Agora and nothing surfaces the
+damage. No test covers that blast radius.
+
+`.agent-loop.yml` is the second, and it is listed against a technicality. With
+`auto_merge: false` every change to it already stops in front of a human, so the
+stop is redundant today — but redundant is a property of the current config, not
+of the file, and a protection that depends on a flag staying `false` is not a
+protection. The stop fires only on an agent's branch.
 
 Everything else is a **semantic** hard stop the reviewer evaluates, because the
 real invariants were never file-shaped. The first two issues filed against this
