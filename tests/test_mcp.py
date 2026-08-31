@@ -150,6 +150,84 @@ def test_room_wait_does_not_echo_your_own_words_back(server):
     assert all(e["author"] != "bot" for e in payload["events"])
 
 
+def test_room_wait_wildcard_wakes_for_any_room_from_one_call(server):
+    """The resting state. One parked call, every meeting this session is in —
+    and it must wake on notify, not by walking the rooms in turn."""
+    _, one = server.post("/api/rooms", {"title": "one", "name": "Hemi"})
+    _, two = server.post("/api/rooms", {"title": "two", "name": "Hemi"})
+    for room in (one, two):
+        server.tool("room_join", {"room": room["id"], "name": "bot"})
+    seen: list = []
+
+    def park():
+        payload, _ = server.tool("room_wait", {"room": "*", "name": "bot",
+                                               "timeout": 20})
+        seen.append(payload)
+
+    t = threading.Thread(target=park)
+    t.start()
+    time.sleep(0.5)
+    started = time.time()
+    server.post(f"/api/rooms/{two['id']}/post", {"name": "Hemi",
+                                                 "text": "second room"})
+    t.join(timeout=20)
+    assert time.time() - started < 2.0, "a wildcard wait must wake on notify"
+    assert [(e["room"], e["text"]) for e in seen[0]["events"]] == \
+           [(two["id"], "second room")]
+    assert set(seen[0]["cursors"]) == {"lobby", one["id"], two["id"]}
+
+
+def test_room_wait_wildcard_cursors_let_an_agent_loop_without_re_reading(server):
+    """Criterion for the cursor shape: loop twice, see nothing the second time."""
+    _, room = server.post("/api/rooms", {"title": "looping", "name": "Hemi"})
+    rid = room["id"]
+    server.tool("room_join", {"room": rid, "name": "bot"})
+
+    first, _ = server.tool("room_wait", {"room": "*", "name": "bot",
+                                         "timeout": 1})
+    assert first["events"] == [], "no cursors means start from now, not replay"
+
+    server.post(f"/api/rooms/{rid}/post", {"name": "Hemi", "text": "hello"})
+    second, _ = server.tool("room_wait", {"room": "*", "name": "bot",
+                                          "cursors": first["cursors"],
+                                          "timeout": 10})
+    assert [e["text"] for e in second["events"]] == ["hello"]
+
+    third, _ = server.tool("room_wait", {"room": "*", "name": "bot",
+                                         "cursors": second["cursors"],
+                                         "timeout": 1})
+    assert third["events"] == [], "the same events must not come back twice"
+    # `since` takes the map too, for a caller that reads the current schema.
+    fourth, _ = server.tool("room_wait", {"room": "*", "name": "bot",
+                                          "since": third["cursors"],
+                                          "timeout": 1})
+    assert fourth["events"] == []
+
+
+def test_room_wait_wildcard_shares_the_single_room_ceiling(server):
+    """MAX_WAIT is the advertised ceiling, and a ceiling nobody can reach is the
+    trap that made parking look flaky. The wildcard must hold the same one."""
+    server.tool("room_join", {"room": "lobby", "name": "bot"})
+    started = time.time()
+    payload, is_error = server.tool("room_wait", {"room": "*", "name": "bot",
+                                                  "timeout": 600},
+                                    timeout=MAX_WAIT + 20)
+    elapsed = time.time() - started
+    assert is_error is False and payload["events"] == []
+    assert MAX_WAIT - 2 < elapsed < MAX_WAIT + 10
+
+
+def test_room_wait_wildcard_keeps_a_lobby_seat_reported_as_parked(server):
+    """A session parked on "*" is waiting in the lobby as much as one parked on
+    the lobby itself. If Call reported otherwise it would be the same false
+    negative this mechanism exists to remove, upside down."""
+    server.tool("room_join", {"room": "lobby", "name": "bot"})
+    server.app.hub.get("lobby").participants["bot"].last_seen = 0.0
+    server.tool("room_wait", {"room": "*", "name": "bot", "timeout": 1})
+    _, state = server.get("/api/state")
+    assert "bot" in state["lobby"]["waiting"]
+
+
 def test_the_registry_name_wins_over_a_self_chosen_one(server, monkeypatch,
                                                        tmp_path):
     """Identity must come from the same source the chair's roster is built from.

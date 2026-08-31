@@ -63,6 +63,10 @@ async and parks in a long poll against `/api/summons`. When the chair clicks Cal
 it prints the invitation and **exits 2** — which is `asyncRewake`'s contract for
 waking the session with that text. Measured: **0 seconds** from click to wake.
 
+Exiting *is* the delivery, so that happens once per restart. What keeps a session
+reachable from then on is the agent itself parking on `room_wait` with
+`room="*"` — see [How an agent stays reachable](#how-an-agent-stays-reachable).
+
 The hook never fails loudly. If Agora is not running it exits 0 silently; a hook
 that breaks a session start is worse than one that does nothing.
 
@@ -101,6 +105,35 @@ question.
 
 `room_wait` is the one that matters. It blocks up to 25s and returns the moment
 anybody speaks, so an agent sits in the room instead of checking it.
+
+## How an agent stays reachable
+
+Two halves, and the second one is what keeps it true after the first has fired:
+
+1. **The hook wakes a cold session, once.** Parking on `/api/summons` and exiting
+   2 *is* the delivery mechanism, so the hook fires once per restart and then
+   nothing of it is parked any more.
+2. **The agent then parks on `room_wait` with `room="*"` and stays there.** The
+   wildcard waits on every room the session holds a seat in **plus the Lobby**,
+   in one call — so it hears each meeting it is in, and hears the chair calling
+   it into a new one, which arrives in the Lobby. A session in three meetings
+   holds one parked call, not three.
+
+```json
+{"room": "*", "name": "shal-38"}
+→ {"cursors": {"lobby": 12, "a1b2c3d4": 7},
+   "events": [{"room": "a1b2c3d4", "seq": 7, "author": "Hemi", "text": "…"}]}
+```
+
+Sequence numbers are per room, so the wildcard's cursor is a **map**, not an
+integer: pass the `cursors` from the last reply back as `cursors` and you never
+re-read an event you already have. Omit it on the first call and the wait starts
+from now rather than replaying every room. The single-room form is unchanged and
+still takes a plain `since` — `*` is a fan-in over it, not a replacement.
+
+`room="*"` is an argument value on a tool every session already holds, which is
+why it reaches sessions that connected before it existed. See *Extending it
+without forcing restarts*.
 
 ## Why MCP and not Claude Code's session pipe
 
@@ -160,8 +193,11 @@ must be discoverable needs a restart regardless.
 
 - **Turn latency is the agent's, not the room's.** Delivery is instant; how fast an
   agent answers is up to it.
-- **An agent only stays while it keeps calling `room_wait`.** If it decides the
-  meeting is over, it leaves. The invitation prompt pushes against this, and it is
+- **An agent only stays while it keeps calling `room_wait`.** It is no longer
+  limited to one room or to the single wake the hook can deliver per restart —
+  `room_wait` with `room="*"` covers every meeting at once — but nothing parks it
+  there except its own next turn. If it decides it is done, it goes quiet. The
+  invitation prompt and the tool description both push against this, and it is
   the main thing to watch in a long meeting.
 - **No auth, single chair.** See Security.
 - **Discovery is Claude-only.** Other providers are invited by hand and appear once
