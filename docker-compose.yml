@@ -26,10 +26,11 @@ services:
     build:
       context: .
       args:
-        # Keep in step with agora/__init__.py (D9):
-        #   AGORA_VERSION=$(python -c "import agora;print(agora.__version__)")
-        AGORA_VERSION: ${AGORA_VERSION:-dev}
-    image: agora:${AGORA_VERSION:-dev}
+        # Required, not defaulted. A default would tag the stable image `dev`
+        # while the server inside it reported a real version — the tag naming a
+        # build the code disagrees with, which is the whole of D9.
+        AGORA_VERSION: ${AGORA_VERSION:?set it from the package, see CONTRIBUTING.md "Build"}
+    image: agora:${AGORA_VERSION:?set it from the package, see CONTRIBUTING.md "Build"}
     ports: ["127.0.0.1:8765:8765"]
     environment:
       AGORA_PUBLIC_URL: http://127.0.0.1:8765
@@ -52,6 +53,9 @@ services:
     build:
       context: .
       args:
+        # Scratch may default: it is the instance under development, its tag is
+        # not a claim about a build, and requiring the version here would make
+        # the throwaway instance harder to start than the one that matters.
         AGORA_VERSION: ${AGORA_VERSION:-scratch}
     image: agora:scratch
     ports: ["127.0.0.1:8766:8765"]

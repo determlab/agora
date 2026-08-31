@@ -156,9 +156,16 @@ The image tag follows `agora/__init__.py` (D9). Read it out rather than typing
 it, or the tag starts naming a build the code disagrees with:
 
 ```powershell
-$v = .venv\Scripts\python.exe -c "import agora; print(agora.__version__)"
-docker build --build-arg AGORA_VERSION=$v -t agora:$v .
+$env:AGORA_VERSION = .venv\Scripts\python.exe -c "import agora; print(agora.__version__)"
+docker build --build-arg AGORA_VERSION=$env:AGORA_VERSION -t agora:$env:AGORA_VERSION .
 ```
+
+Set it in the environment rather than a local `$v`, because compose reads it
+from there and the two must not be able to disagree. **`docker compose` refuses
+to build without it** — it is `${AGORA_VERSION:?...}`, not a default, so the
+stable instance cannot be built as `agora:dev` while the server inside it
+reports a real version. That was this PR's own bug before the reviewer caught
+it: a documented run path that quietly tagged the production image `dev`.
 
 `AGORA_VERSION` is a build arg, not a literal in the Dockerfile, so there is
 still exactly one place the number lives. `tests/test_version.py` fails if a
@@ -184,6 +191,7 @@ the published port can reach, and the port is published on the host loopback.
 Publishing on `0.0.0.0` would put an unauthenticated chair's seat on the LAN.
 
 ```powershell
+$env:AGORA_VERSION = .venv\Scripts\python.exe -c "import agora; print(agora.__version__)"
 docker compose up -d --build agora                       # stable, 8765
 docker compose --profile scratch up -d --build scratch   # scratch, 8766
 docker compose --profile scratch down                    # rebuild without touching 8765

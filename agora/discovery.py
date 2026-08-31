@@ -114,10 +114,12 @@ def _in_container() -> bool:
     Only used to choose the wording of a warning, never to change behaviour —
     a wrong guess costs a slightly off sentence, not a wrong roster.
     """
-    if Path("/.dockerenv").exists():
+    if Path("/.dockerenv").exists() or Path("/run/.containerenv").exists():
         return True
     try:
-        return "docker" in Path("/proc/1/cgroup").read_text() or                Path("/run/.containerenv").exists()
+        # Last, and least reliable: cgroup v2 hosts often carry no "docker"
+        # string at all, so a miss here is not evidence of a host.
+        return "docker" in Path("/proc/1/cgroup").read_text()
     except OSError:
         return False
 
@@ -160,7 +162,7 @@ def availability(directory: Path | None = None) -> dict[str, Any]:
                        "read-only; see CONTRIBUTING.md."),
         }
     files = len(list(directory.glob("*.json")))
-    live = len(claude_sessions(directory if directory != CLAUDE_SESSIONS else None))
+    live = len(claude_sessions(directory))
     note = ""
     if files and not live:
         note = (f"{files} session files are readable but none names a process "
