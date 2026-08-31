@@ -97,6 +97,20 @@ def test_every_element_the_script_reaches_for_exists(html: str):
     assert not missing, f"script reaches for ids that are not in the markup: {missing}"
 
 
+def test_every_pane_the_layout_hides_has_a_control_that_opens_it(html: str):
+    """The narrow layouts drop a pane out of the grid entirely. If nothing on the
+    page toggles it back, the pane and everything only reachable through it are
+    gone at that width, and the page looks intact while it happens."""
+    hidden = set(re.findall(r"\.pane\.(\w+)\s*\{display:none\}", html))
+    assert hidden, "the narrow layouts should be hiding panes"
+    toggled = set(re.findall(r"togglePane\(['\"](\w+)['\"]\)", html))
+    assert hidden <= toggled, \
+        f"nothing on the page opens the {sorted(hidden - toggled)} pane"
+    for side in sorted(toggled):
+        assert f'class="pane {side}"' in html, \
+            f"a control toggles a {side!r} pane that the markup does not have"
+
+
 def test_no_leftover_calls_to_removed_functions(html: str):
     for gone in ["refresh()", "agora_standby", "S.chair,"]:
         assert gone not in html, f"{gone} was removed but the page still calls it"
