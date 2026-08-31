@@ -115,6 +115,11 @@ header .ag:empty::before{content:"add an agenda";color:var(--mut);font-style:ita
   margin-left:8px}
 .who .role{color:var(--mut);font-weight:400;font-size:11px;margin-left:6px}
 .bd{white-space:pre-wrap;word-wrap:break-word;overflow-wrap:anywhere}
+/* A mention of somebody else is a marker; a mention of you is addressed to you,
+   so it is filled in rather than tinted. */
+.mention{color:var(--acc);background:var(--acc-bg);border-radius:3px;
+  padding:0 3px;font-weight:600}
+.mention.me{background:var(--acc);color:var(--acc-ink)}
 .sys{color:var(--mut);font-size:11.5px;font-family:var(--mono);text-align:center;
   padding:5px 0}
 .card{border:1px solid var(--acc);background:var(--acc-bg);border-radius:var(--r);
@@ -124,7 +129,18 @@ header .ag:empty::before{content:"add an agenda";color:var(--mut);font-style:ita
   font-family:var(--mono);font-size:10.5px;margin:10px 0 4px}
 .daysep::before,.daysep::after{content:"";height:1px;background:var(--line);flex:1}
 footer{flex:none;border-top:1px solid var(--line);padding:11px 18px;
-  background:var(--panel);display:flex;gap:9px;align-items:flex-end}
+  background:var(--panel);display:flex;gap:9px;align-items:flex-end;
+  position:relative}
+.mentions{position:absolute;left:18px;bottom:100%;z-index:20;min-width:210px;
+  max-height:186px;overflow-y:auto;background:var(--panel);
+  border:1px solid var(--line2);border-radius:var(--r);padding:4px;
+  box-shadow:var(--shadow);scrollbar-width:thin}
+.mentions .opt{display:flex;gap:8px;align-items:center;padding:5px 9px;
+  border-radius:4px;cursor:pointer;font-size:12.5px}
+.mentions .opt .grow{flex:1;min-width:0;white-space:nowrap;overflow:hidden;
+  text-overflow:ellipsis}
+.mentions .opt .s{color:var(--mut);font-family:var(--mono);font-size:10.5px}
+.mentions .opt[aria-selected="true"]{background:var(--acc-bg);color:var(--acc)}
 #say{resize:none;min-height:44px;max-height:180px}
 .hint{font-size:11px;color:var(--mut);font-family:var(--mono);
   padding:0 18px 8px;background:var(--panel);flex:none}
@@ -247,9 +263,12 @@ pre{background:var(--bg);border:1px solid var(--line);border-radius:var(--r);
 
     <div class="hint" id="hint" hidden></div>
     <footer>
+      <div class="mentions" id="mentionMenu" role="listbox"
+           aria-label="Participants to mention" hidden></div>
       <textarea id="say" rows="1" disabled
         placeholder="Open a meeting to say something"
-        oninput="autogrow(this)" onkeydown="onKey(event)"></textarea>
+        oninput="onComposerInput(this)" onkeydown="onKey(event)"
+        onblur="closeMentions()"></textarea>
       <button class="p" id="btnSend" onclick="send()" disabled>Send</button>
     </footer>
   </main>
@@ -479,6 +498,7 @@ const callIn = guard(async who => {
 /* ============================ one room ============================ */
 function openRoom(id){
   cur = id; unread[id] = 0;
+  closeMentions();   // the menu lists the room you were in a moment ago
   const row = S.rooms.find(r => r.id === id);
   if(row) seen[id] = row.messages;
   store.set("seen", seen);
@@ -537,7 +557,7 @@ function paintRoom(isSnapshot){
     html += `<div class="msg ${e.role==='human'?'human':''} ${cont?'cont':''}">
       <div class="av">${initials(e.author)}</div>
       <div>${cont ? "" : `<div class="who">${esc(e.author)}<time>${clock(e.ts)}</time></div>`}
-      <div class="bd">${esc(e.text)}</div></div></div>`;
+      <div class="bd">${withMentions(e)}</div></div></div>`;
     prev = e;
   }
   log.innerHTML = html || `<div class="empty" style="padding:24px 0;text-align:center">
@@ -580,19 +600,103 @@ function paintRoom(isSnapshot){
     : `<div class="empty" style="padding:0">None yet. Ask a participant, or take a local digest.</div>`;
 }
 
+/* ============================ mentions ============================ */
+const rxEsc = s => String(s).replace(/[.*+?^${}()|[\]\\-]/g, "\\$&");
+
+/* Paints the mentions the SERVER resolved against the participant list. It never
+   decides what a mention is: a pattern over somebody's words turns an address or
+   a pasted snippet into a mention of a person who is not in the room. Escaping
+   happens first, so the only markup here is the markup this function adds. */
+function withMentions(e){
+  let html = esc(e.text);
+  for(const name of (e.mentions || [])){
+    const mine = ME && name.toLowerCase() === String(ME).toLowerCase();
+    // (?![\w-]) so a name that merely starts another one is left alone, the
+    // same boundary the server matched with.
+    const rx = new RegExp("@" + rxEsc(esc(name)) + "(?![\\w-])", "gi");
+    html = html.replace(rx, () =>
+      `<span class="mention${mine ? " me" : ""}">@${esc(name)}</span>`);
+  }
+  return html;
+}
+
+/* The completion menu. This regex runs only over the chair's own half-typed
+   draft, to offer names — what actually counts as a mention is decided server
+   side, after the message is sent. */
+let mOpts = [], mSel = 0;
+const MENTION_TOKEN = /(?:^|\s)@([\w.-]*)$/;
+
+function closeMentions(){
+  mOpts = []; mSel = 0;
+  const menu = $("mentionMenu");
+  menu.hidden = true; menu.innerHTML = "";
+}
+function onComposerInput(t){ autogrow(t); updateMentions(); }
+
+function updateMentions(){
+  const box = $("say"), menu = $("mentionMenu");
+  const m = box.disabled ? null : MENTION_TOKEN.exec(box.value.slice(0, box.selectionStart));
+  const q = m ? m[1].toLowerCase() : null;
+  mOpts = (q === null || !snap) ? []
+    : snap.participants.filter(p => p.name !== ME &&
+        p.name.toLowerCase().startsWith(q)).slice(0, 8);
+  if(!mOpts.length) return closeMentions();
+  if(mSel >= mOpts.length) mSel = 0;
+  menu.hidden = false;
+  // Says whether each name is listening, because typing it does not wake it.
+  menu.innerHTML = mOpts.map((p, i) => `
+    <div class="opt" role="option" aria-selected="${i === mSel}"
+         onmousedown="event.preventDefault();pickMention(${i})">
+      <span class="dot ${p.online ? "idle" : "off"}"></span>
+      <span class="grow">${esc(p.name)}</span>
+      <span class="s">${p.online ? "listening" : "idle"}</span>
+    </div>`).join("");
+}
+
+function pickMention(i){
+  const box = $("say"), p = mOpts[i];
+  if(!p) return;
+  const upto = box.value.slice(0, box.selectionStart);
+  const m = MENTION_TOKEN.exec(upto);
+  if(!m) return closeMentions();
+  const at = upto.length - m[1].length - 1;
+  box.value = box.value.slice(0, at) + "@" + p.name + " "
+            + box.value.slice(box.selectionStart);
+  const caret = at + p.name.length + 2;
+  closeMentions(); autogrow(box);
+  box.focus(); box.setSelectionRange(caret, caret);
+}
+
 /* ============================ composing ============================ */
 function autogrow(t){ t.style.height = "auto";
   t.style.height = Math.min(t.scrollHeight, 180) + "px"; }
 function onKey(e){
+  if(mOpts.length){
+    if(e.key === "ArrowDown" || e.key === "ArrowUp"){
+      e.preventDefault();
+      mSel = (mSel + (e.key === "ArrowDown" ? 1 : mOpts.length - 1)) % mOpts.length;
+      return updateMentions();
+    }
+    // Enter completes the name here rather than sending: the menu is open
+    // because the chair is still writing who this is for.
+    if(e.key === "Enter" || e.key === "Tab"){ e.preventDefault(); return pickMention(mSel); }
+    if(e.key === "Escape"){ e.preventDefault(); return closeMentions(); }
+  }
   if(e.key === "Enter" && !e.shiftKey){ e.preventDefault(); send(); }
 }
 const send = guard(async () => {
   const box = $("say"), text = box.value.trim();
   if(!text || !cur) return;
   if(!ensureName()) return;
-  box.value = ""; autogrow(box);
-  try { await post(`/api/rooms/${cur}/post`, {name:ME, text}); }
+  box.value = ""; autogrow(box); closeMentions();
+  let r;
+  try { r = await post(`/api/rooms/${cur}/post`, {name:ME, text}); }
   catch(err){ box.value = text; autogrow(box); throw err; }
+  // The message is in the room either way. The toast is about the ringing that
+  // did not happen — a mention of a session that is not reading reaches nobody
+  // until it next looks, and saying nothing here would be the same false green
+  // the Call button had.
+  if(r && r.note) toast(r.note, null, "Mentioned, but not woken");
 });
 
 const addNote = guard(async () => {

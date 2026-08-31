@@ -1,13 +1,15 @@
 """The room state machine: seating, muting, persistence, and the long poll."""
 from __future__ import annotations
 
+import json
 import threading
 import time
 
 import pytest
 
-from agora.room import (AGENT, HUMAN, LOBBY, MESSAGE, NOTE, SUMMARY, Hub, Muted,
-                        NotSeated, Room, RoomClosed)
+from agora.room import (AGENT, HUMAN, LOBBY, MESSAGE, NOTE, ONLINE_WINDOW,
+                        SUMMARY, Hub, Muted, NotSeated, Room, RoomClosed,
+                        mention_note)
 
 
 def test_hub_always_has_a_lobby(hub: Hub):
@@ -304,3 +306,81 @@ def test_listing_reports_message_counts_not_event_counts(hub: Hub):
     room.post("hemi", "one", role=HUMAN)   # a message
     row = next(r for r in hub.listing() if r["id"] == room.id)
     assert row["messages"] == 1
+
+
+# ---- mentions --------------------------------------------------------------
+
+def test_a_mention_is_resolved_against_the_participant_list(hub: Hub):
+    room = hub.create("m")
+    room.join("CTO", role=AGENT)
+    room.join("hemi", role=HUMAN)
+    ev = room.post("hemi", "@CTO can you look at this?", role=HUMAN)
+    assert ev.mentions == ["CTO"]
+
+
+def test_an_at_that_is_not_a_participant_stays_plain_text(hub: Hub):
+    """The whole reason resolution is roster-first: an address or a pasted
+    snippet must not become a mention of somebody who is not in the room."""
+    room = hub.create("m")
+    room.join("CTO", role=AGENT)
+    room.join("hemi", role=HUMAN)
+    ev = room.post("hemi", "mail hemi@example.com, and @nobody, and @property",
+                   role=HUMAN)
+    assert ev.mentions == []
+    # An address whose domain happens to be a participant's name is still an
+    # address: the `@` there does not start a word.
+    assert room.post("hemi", "write to me@CTO.internal", role=HUMAN).mentions == []
+
+
+def test_a_mention_does_not_match_a_longer_name(hub: Hub):
+    room = hub.create("m")
+    room.join("CT", role=AGENT)
+    room.join("CTO", role=AGENT)
+    room.join("hemi", role=HUMAN)
+    assert room.post("hemi", "@CTO over to you", role=HUMAN).mentions == ["CTO"]
+    assert room.post("hemi", "@CT over to you", role=HUMAN).mentions == ["CT"]
+
+
+def test_several_mentions_come_back_in_the_order_they_were_written(hub: Hub):
+    room = hub.create("m")
+    for name in ("CTO", "QA", "hemi"):
+        room.join(name, role=HUMAN if name == "hemi" else AGENT)
+    ev = room.post("hemi", "(@QA) then @CTO, and @QA again", role=HUMAN)
+    assert ev.mentions == ["QA", "CTO"], "each name once, first appearance wins"
+
+
+def test_a_mention_of_a_seat_that_stopped_polling_is_reported_as_not_reached(hub: Hub):
+    """Presence is polling, not membership. A seat left behind by a dead session
+    is still in `participants` and hears nothing — saying otherwise is the false
+    green this app keeps shipping."""
+    room = hub.create("m")
+    room.join("CTO", role=AGENT)
+    room.join("hemi", role=HUMAN)
+    ev = room.post("hemi", "@CTO you there?", role=HUMAN)
+    assert room.mention_report(ev.mentions) == [{"name": "CTO", "listening": True}]
+    assert mention_note(room.mention_report(ev.mentions)) == ""
+
+    room.participants["CTO"].last_seen = time.time() - (ONLINE_WINDOW + 60)
+    report = room.mention_report(ev.mentions)
+    assert report == [{"name": "CTO", "listening": False}]
+    assert "CTO" in mention_note(report) and "nothing woke" in mention_note(report)
+
+
+def test_an_old_transcript_without_mentions_still_replays(hub: Hub):
+    """Rooms are append-only JSONL. A line written before mentions existed has
+    no such key, and it must load with an empty list rather than blow up."""
+    room = hub.create("old")
+    room.join("hemi", role=HUMAN)
+    room.post("hemi", "@nobody", role=HUMAN)
+    lines = room._path.read_text(encoding="utf-8").splitlines()
+    stripped = []
+    for line in lines:
+        rec = json.loads(line)
+        if rec.get("t") == "event":
+            rec["e"].pop("mentions", None)
+        stripped.append(json.dumps(rec))
+    room._path.write_text("\n".join(stripped) + "\n", encoding="utf-8")
+
+    replayed = Room.load(room._path)
+    assert replayed is not None
+    assert [e.mentions for e in replayed.events] == [[] for _ in replayed.events]

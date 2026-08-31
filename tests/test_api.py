@@ -470,3 +470,31 @@ def test_deleting_a_room_cancels_calls_into_it(server):
     _, res = server.post(f"/api/rooms/{rid}/admin", {"action": "delete"})
     assert res["cancelled_calls"] == ["bot"]
     assert server.app.summons.pending("bot") is None
+
+
+def test_the_composer_is_told_a_mention_reached_nobody(server):
+    """The Call button's rule, in a new place: a mention of a session that is
+    not reading rings nothing until the doorbell exists, and the chair must be
+    able to see that from the reply rather than assume it landed."""
+    _, room = server.post("/api/rooms", {"title": "mention reach", "name": "Hemi"})
+    rid = room["id"]
+    server.post(f"/api/rooms/{rid}/admin", {"action": "prune"})  # no-op, seats it
+    live = server.app.hub.get(rid)
+    live.join("CTO")
+
+    status, res = server.post(f"/api/rooms/{rid}/post",
+                              {"name": "Hemi", "text": "@CTO thoughts?"})
+    assert status == 200
+    assert res["mentions"] == [{"name": "CTO", "listening": True}]
+    assert res["note"] == "", "a listening participant heard it — say nothing"
+
+    live.participants["CTO"].last_seen = time.time() - 10_000
+    _, res = server.post(f"/api/rooms/{rid}/post",
+                         {"name": "Hemi", "text": "@CTO still there?"})
+    assert res["mentions"] == [{"name": "CTO", "listening": False}]
+    assert "CTO" in res["note"] and "nothing woke" in res["note"]
+
+    # And the transcript carries the resolution, so the page can paint it.
+    _, snap = server.get(f"/api/rooms/{rid}")
+    said = [e for e in snap["events"] if e["text"] == "@CTO still there?"]
+    assert said and said[0]["mentions"] == ["CTO"]
