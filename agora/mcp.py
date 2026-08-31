@@ -139,6 +139,26 @@ TOOLS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "agora_standby",
+        "description": "Wait to be called into a meeting. Blocks until the chair "
+                       "calls you, then returns the room to join. Call this when "
+                       "you have nothing else to do and want to be reachable — it "
+                       "is how the chair's Call button reaches a session that has "
+                       "no Agora hook installed. Returns empty on timeout; call "
+                       "it again.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string",
+                         "description": "Your session name, e.g. 'shal-38'"},
+                "provider": {"type": "string"},
+                "timeout": {"type": "number",
+                            "description": f"Seconds to wait, max {MAX_WAIT}"},
+            },
+            "required": ["name"],
+        },
+    },
+    {
         "name": "room_leave",
         "description": "Leave the room. Only do this when the meeting is over or "
                        "you are told to.",
@@ -152,9 +172,15 @@ TOOLS: list[dict[str, Any]] = [
 
 
 class McpHandler:
-    def __init__(self, hub: Hub) -> None:
+    def __init__(self, hub: Hub, summons: Any = None) -> None:
         self.hub = hub
+        # The summons registry, shared with the web side. An agent that parks in
+        # `agora_standby` becomes callable from the browser without needing the
+        # SessionStart hook installed — the hook is the better path because it
+        # works when the agent is idle, but this one needs nothing but MCP.
+        self.summons = summons
         self._tools: dict[str, Callable[[dict], dict]] = {
+            "agora_standby": self._standby,
             "room_list": self._room_list,
             "room_join": self._room_join,
             "room_post": self._room_post,
@@ -220,6 +246,32 @@ class McpHandler:
             raise LookupError(
                 f"no room {args.get('room')!r}. Call room_list to see what exists.")
         return room
+
+    def _standby(self, args: dict) -> dict:
+        name = str(args.get("name") or "").strip()
+        if not name:
+            return _err("name is required — it is how the chair calls you")
+        if self.summons is None:
+            return _err("this server has no summons registry")
+        self.summons.register(name, {"name": name, "via": "mcp",
+                                     "provider": str(args.get("provider") or "")})
+        timeout = min(float(args.get("timeout") or MAX_WAIT), MAX_WAIT)
+        called = self.summons.wait(name, timeout)
+        if called is None:
+            return _text({"called": False,
+                          "note": "Nobody called you in that window. Call "
+                                  "agora_standby again to stay reachable."})
+        return _text({
+            "called": True,
+            "room": called.get("room"),
+            "title": called.get("title"),
+            "agenda": called.get("agenda"),
+            "seq": called.get("seq", 0),
+            "next": f"room_join with room=\"{called.get('room')}\" and "
+                    f"name=\"{name}\", then room_history, then loop on room_wait. "
+                    f"You arrive MUTED — read and wait for the chair to unmute "
+                    f"you; a refused room_post is not an error.",
+        })
 
     def _room_list(self, args: dict) -> dict:
         rooms = self.hub.listing()

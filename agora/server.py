@@ -84,8 +84,8 @@ class Agora:
 
     def __init__(self, root: Path, public_url: str) -> None:
         self.hub = Hub(root / "rooms")
-        self.mcp = McpHandler(self.hub)
         self.summons = Summons()
+        self.mcp = McpHandler(self.hub, self.summons)
         self.public_url = public_url
         self.chair_name = CHAIR
 
