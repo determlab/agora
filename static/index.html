@@ -99,6 +99,9 @@ footer{border-top:1px solid var(--line);padding:11px 18px;background:var(--panel
 .pr:hover{background:var(--panel2)}
 .pr .x{opacity:0;font-size:11px;padding:2px 6px}
 .pr:hover .x{opacity:1}
+/* The roster's Call button is the point of the roster — it does not hide until
+   hover the way a destructive per-participant action does. */
+#roster .x{opacity:1}
 /* modal */
 .mask{position:fixed;inset:0;background:rgba(0,0,0,.62);display:grid;place-items:center;
   padding:20px;z-index:9}
