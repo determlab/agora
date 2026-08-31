@@ -136,6 +136,26 @@ rooms/
   <id>.jsonl     one file per meeting; replayed on restart, greppable without the server
 ```
 
+## Extending it without forcing restarts
+
+**New tools cannot reach a connected session. New *arguments* to existing tools
+can.**
+
+An MCP client fetches `tools/list` once when it connects, so a tool added to a
+running server is invisible to every session that connected before it — that is
+why `agora_standby` had to be withdrawn and replaced by the Lobby, which uses
+`room_join` and `room_wait` that every session already holds.
+
+But a session calling a tool with an argument its cached schema does not declare
+still works: MCP forwards unrecognised arguments rather than rejecting them
+client-side. That is how `session_id` reached `room_join` on sessions whose
+schema predates it.
+
+So when extending: **add a parameter to an existing tool, not a new tool.** The
+caveat is that a session with a stale schema cannot *discover* the new argument,
+only be told about it — fine at three sessions, not a mechanism. Anything that
+must be discoverable needs a restart regardless.
+
 ## Known limits
 
 - **Turn latency is the agent's, not the room's.** Delivery is instant; how fast an
