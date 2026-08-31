@@ -27,7 +27,7 @@ from urllib.parse import parse_qs, urlparse
 from .discovery import invite_text, roster
 from .mcp import ANY_ROOM, McpHandler
 from .room import (HUMAN, LOBBY, MESSAGE, NOTE, ONLINE_WINDOW, SUMMARY, Hub,
-                   Muted, NotSeated, RoomClosed)
+                   Muted, NotSeated, RoomClosed, mention_note)
 
 STATIC = Path(__file__).resolve().parent.parent / "static"
 CHAIR = "chair"
@@ -471,7 +471,12 @@ class Handler(BaseHTTPRequestHandler):
                 ev = room.post(name, text, kind=MESSAGE, role=HUMAN, provider="human")
             except (Muted, NotSeated, RoomClosed) as exc:
                 return self._json({"error": str(exc)}, 409)
-            return self._json({"seq": ev.seq})
+            # A mention is a post, and a post is not a wake. Until the doorbell
+            # exists the composer must say which mentioned seats actually heard
+            # it — the same rule the Call button follows.
+            report = room.mention_report(ev.mentions)
+            return self._json({"seq": ev.seq, "mentions": report,
+                               "note": mention_note(report)})
 
         if action == "note":
             if not text.strip():

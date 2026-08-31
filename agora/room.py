@@ -64,6 +64,62 @@ def _await_bell(pulse: int, timeout: float) -> None:
             _bell.wait(timeout=timeout)
 
 
+#: Characters that make an `@` part of something else. A mention starts a word:
+#: `hemi@example.com` and `a.b@ops` are addresses, not a mention of anyone.
+_NOT_BEFORE = "_-.@"
+
+
+def resolve_mentions(text: str, names: Any) -> list[str]:
+    """Which seated participants *text* names, in the order they appear.
+
+    Matched roster-first — each name looked for in the text — never `@\\w+`
+    scraped out of the text and looked up afterwards. A pattern over arbitrary
+    prose turns an email address or a decorator in a pasted snippet into a
+    phantom mention of somebody who is not in the room; matching this way round
+    cannot invent a participant that does not exist.
+    """
+    low = text.lower()
+    hits: list[tuple[int, str]] = []
+    for name in names:
+        if not name:
+            continue
+        needle = "@" + name.lower()
+        start = 0
+        while True:
+            i = low.find(needle, start)
+            if i < 0:
+                break
+            start = i + len(needle)
+            before = low[i - 1] if i else ""
+            after = low[start] if start < len(low) else ""
+            # A longer name that merely starts with this one is a different
+            # person: `@CTO` is not a mention of `CT`.
+            if (before and (before.isalnum() or before in _NOT_BEFORE)) or \
+               (after and (after.isalnum() or after in "_-")):
+                continue
+            hits.append((i, name))
+            break
+    hits.sort()
+    return [name for _, name in hits]
+
+
+def mention_note(report: list[dict[str, Any]]) -> str:
+    """The honest half of a mention: who it did not reach.
+
+    A post is not a wake. A mentioned session that is not polling this room sees
+    nothing until it next reads, and reporting that as delivered is the false
+    green this app has shipped before. Empty string when everyone was listening.
+    """
+    idle = [m["name"] for m in report if not m["listening"]]
+    if not idle:
+        return ""
+    return (f"{', '.join(idle)} — mentioned but not listening right now, so "
+            f"nothing woke {'them' if len(idle) > 1 else 'it'}. The mention is "
+            f"in the transcript and will be seen the next time that session "
+            f"reads the room. To reach it now, call it in or type in its "
+            f"window.")
+
+
 @dataclass
 class Event:
     seq: int
@@ -74,6 +130,10 @@ class Event:
     role: str = AGENT
     provider: str = ""
     meta: dict[str, Any] = field(default_factory=dict)
+    #: Participants this event names, resolved when it was posted. Optional and
+    #: empty by default so a transcript written before mentions existed replays
+    #: unchanged — the file is append-only and there is no migration.
+    mentions: list[str] = field(default_factory=list)
 
     def as_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -180,7 +240,12 @@ class Room:
                         f"you when it is your turn.")
             self._seq += 1
             ev = Event(seq=self._seq, ts=time.time(), kind=kind, author=author,
-                       text=text, role=role, provider=provider, meta=meta or {})
+                       text=text, role=role, provider=provider, meta=meta or {},
+                       # Resolved here rather than by each caller: post is the
+                       # one funnel the chair and every agent come through, so
+                       # the roster it is matched against is the roster at the
+                       # moment the words were said.
+                       mentions=resolve_mentions(text, self.participants))
             self.events.append(ev)
             if p is not None:
                 p.last_seen = ev.ts
@@ -294,6 +359,21 @@ class Room:
         copies every event, and a fan-in wait asks this of every room it watches."""
         with self._lock:
             return self._seq
+
+    def is_listening(self, name: str) -> bool:
+        """Whether *name* has polled this room recently enough to see a new post.
+
+        Presence is polling, not membership: a seat left behind by a session
+        that died is still in `participants`, and it hears nothing.
+        """
+        with self._lock:
+            p = self.participants.get(name)
+            return bool(p and p.last_seen
+                        and (time.time() - p.last_seen) < ONLINE_WINDOW)
+
+    def mention_report(self, mentions: list[str]) -> list[dict[str, Any]]:
+        """Per mentioned name, whether the post actually reached it."""
+        return [{"name": n, "listening": self.is_listening(n)} for n in mentions]
 
     def since(self, seq: int) -> list[Event]:
         with self._lock:

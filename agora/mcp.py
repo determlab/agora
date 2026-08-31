@@ -17,7 +17,7 @@ from typing import Any, Callable
 
 from .discovery import canonical_name
 from .room import (AGENT, LOBBY, MESSAGE, NOTE, SUMMARY, Hub, Muted,
-                   NotSeated, RoomClosed)
+                   NotSeated, RoomClosed, mention_note)
 
 PROTOCOL_VERSION = "2025-06-18"
 SERVER_INFO = {"name": "agora", "version": "0.1.0"}
@@ -72,6 +72,30 @@ def _cursors(value: Any) -> dict[str, int]:
     return out
 
 
+def _event_out(ev: Any, name: str, room_id: str = "") -> dict[str, Any]:
+    """One event as an agent sees it, marked when it is addressed to that agent.
+
+    "Somebody said something" and "somebody asked me" cannot be told apart from
+    the text alone, and an agent that cannot tell them apart either answers
+    everything or answers nothing. The flag is only present when it is true, so
+    a session whose cached schema predates it reads the reply exactly as before.
+    """
+    out: dict[str, Any] = {"seq": ev.seq, "author": ev.author,
+                           "kind": ev.kind, "text": ev.text}
+    if room_id:
+        out = {"room": room_id, **out}
+    if ev.mentions:
+        out["mentions"] = list(ev.mentions)
+        if name and name in ev.mentions:
+            out["mentions_you"] = True
+    return out
+
+
+#: Said once in a reply that carries a mention, rather than per event.
+MENTION_HINT = ("An event marked `mentions_you` names you — answer those first, "
+                "with room_post.")
+
+
 def _err(message: str) -> dict[str, Any]:
     return {"content": [{"type": "text", "text": message}], "isError": True}
 
@@ -111,7 +135,10 @@ TOOLS: list[dict[str, Any]] = [
     {
         "name": "room_post",
         "description": "Say something in the room. Everyone sees it, including the "
-                       "human chairing the meeting.",
+                       "human chairing the meeting. Write @name, exactly as that "
+                       "participant appears in the room, to address someone: the "
+                       "reply tells you which of them were listening, because a "
+                       "post does not wake a session that is not reading.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -131,7 +158,9 @@ TOOLS: list[dict[str, Any]] = [
                        "USE room=\"*\" AS YOUR RESTING STATE: it waits on every "
                        "room you are in and the lobby at once, so one call keeps "
                        "you reachable in every meeting and hears the chair calling "
-                       "you into a new one. With \"*\" the reply carries a "
+                       "you into a new one. An event marked `mentions_you` names "
+                       "you — answer those before anything else in the batch. "
+                       "With \"*\" the reply carries a "
                        "`cursors` map instead of a single seq — pass it straight "
                        "back as `cursors` next call and you never re-read anything. "
                        "Whenever you have nothing else to do, call this again with "
@@ -364,7 +393,16 @@ class McpHandler:
             ev = room.post(name, text, kind=MESSAGE, role=AGENT)
         except (Muted, NotSeated, RoomClosed) as exc:
             return _err(str(exc))
-        return _text({"posted": ev.seq})
+        # A mention is a post, and a post is not a wake: say which of the seats
+        # you named were actually listening rather than implying all of them.
+        report = room.mention_report(ev.mentions)
+        out: dict[str, Any] = {"posted": ev.seq}
+        if report:
+            out["mentions"] = report
+            note = mention_note(report)
+            if note:
+                out["note"] = note
+        return _text(out)
 
     def _room_wait(self, args: dict) -> dict:
         name = str(args.get("name") or "")
@@ -376,15 +414,15 @@ class McpHandler:
         since = int(args.get("since") or 0)
         events = room.wait_for(since, timeout)
         room.touch(name)
+        out = [_event_out(e, name) for e in events if e.author != name]
         return _text({
             "room": room.id,
             "closed": room.closed,
             "seq": events[-1].seq if events else since,
-            "events": [{"seq": e.seq, "author": e.author, "kind": e.kind,
-                        "text": e.text} for e in events
-                       if e.author != name],
+            "events": out,
             "note": "Empty means nobody spoke in the window. Call room_wait again."
-                    if not events else "",
+                    if not events else
+                    MENTION_HINT if any(e.get("mentions_you") for e in out) else "",
         })
 
     def _room_wait_any(self, args: dict, name: str, timeout: float) -> dict:
@@ -400,17 +438,18 @@ class McpHandler:
         if not isinstance(cursors, dict):
             cursors = args.get("since")
         events, cursors = self.hub.wait_any(name, _cursors(cursors), timeout)
+        out = [_event_out(e, name, rid) for rid, e in events]
         return _text({
             "room": ANY_ROOM,
             "watching": sorted(cursors),
             "cursors": cursors,
-            "events": [{"room": rid, "seq": e.seq, "author": e.author,
-                        "kind": e.kind, "text": e.text} for rid, e in events],
+            "events": out,
             "next": "Pass `cursors` back as `cursors` and call room_wait with "
                     "room=\"*\" again — that is your resting state, and it is "
                     "what keeps you reachable in every room at once.",
             "note": "Empty means nobody spoke in any of your rooms in the "
-                    "window. Call room_wait again." if not events else "",
+                    "window. Call room_wait again." if not events else
+                    MENTION_HINT if any(e.get("mentions_you") for e in out) else "",
         })
 
     def _room_history(self, args: dict) -> dict:

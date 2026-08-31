@@ -148,3 +148,42 @@ def test_user_text_is_escaped_before_it_reaches_the_dom(html: str):
     for fragment in ['${esc(e.author)}', '${esc(e.text)}', '${esc(r.title)}',
                      '${esc(s.name)}', '${esc(p.name)}']:
         assert fragment in html, f"unescaped render near {fragment}"
+
+
+def test_the_transcript_paints_the_mentions_the_server_resolved(html: str):
+    """The page must not decide what a mention is. If it scraped `@word` out of
+    the text it would light up an address or a pasted snippet as a mention of
+    somebody who is not in the room — the exact thing resolving server-side
+    against the participant list prevents."""
+    fn = re.search(r"function withMentions\(e\)\{(.*?)\n\}", html, re.S)
+    assert fn, "the transcript should render mentions through withMentions"
+    body = fn.group(1)
+    assert "e.mentions" in body, \
+        "the highlight must come from the server's list, not from the text"
+    assert "esc(e.text)" in body, \
+        "escape before inserting markup — every word here is somebody else's"
+    assert "${withMentions(e)}" in html, "nothing calls withMentions"
+
+
+def test_a_mention_of_you_looks_different_from_a_mention_of_someone_else(html: str):
+    assert re.search(r"\.mention\{[^}]+\}", html), "mentions need a style"
+    assert re.search(r"\.mention\.me\{[^}]+\}", html), \
+        "a mention of you must be distinct from a mention of anyone else"
+    assert 'class="mention${mine ? " me" : ""}"' in html
+
+
+def test_the_composer_completes_a_name_from_the_room(html: str):
+    assert 'id="mentionMenu"' in html
+    assert "snap.participants.filter" in html, \
+        "the completion list must come from the room's participants"
+    assert "pickMention(" in html and "closeMentions()" in html
+
+
+def test_the_composer_says_when_a_mention_woke_nobody(html: str):
+    """The Call button's honesty rule. A mention of an idle session reaches it
+    only when it next reads, and a silent success is the defect this app has
+    shipped repeatedly."""
+    send = re.search(r"const send = guard\(async \(\) => \{(.*?)\n\}\);", html, re.S)
+    assert send, "the send handler is gone"
+    assert "r.note" in send.group(1) and "toast(" in send.group(1), \
+        "send must surface the server's note about who was not reached"

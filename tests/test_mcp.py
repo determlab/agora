@@ -10,7 +10,7 @@ import threading
 import time
 
 from agora import discovery
-from agora.mcp import MAX_WAIT, PROTOCOL_VERSION, TOOLS
+from agora.mcp import ANY_ROOM, MAX_WAIT, PROTOCOL_VERSION, TOOLS
 
 
 def test_initialize_advertises_the_protocol_and_instructions(server):
@@ -292,3 +292,58 @@ def test_join_requires_a_name(server):
     _, room = server.post("/api/rooms", {"title": "nameless", "name": "Hemi"})
     payload, is_error = server.tool("room_join", {"room": room["id"], "name": " "})
     assert is_error is True and "name is required" in payload
+
+
+def test_room_wait_marks_an_event_that_mentions_you(server):
+    """"Somebody spoke" and "somebody asked me" are the same text to an agent
+    unless the reply says which."""
+    _, room = server.post("/api/rooms", {"title": "mentions", "name": "Hemi"})
+    rid = room["id"]
+    server.tool("room_join", {"room": rid, "name": "bot"})
+    server.tool("room_join", {"room": rid, "name": "other"})
+    server.post(f"/api/rooms/{rid}/post", {"name": "Hemi", "text": "nothing for you"})
+    server.post(f"/api/rooms/{rid}/post", {"name": "Hemi", "text": "@bot your turn"})
+    server.post(f"/api/rooms/{rid}/post", {"name": "Hemi", "text": "@other not you"})
+
+    payload, _ = server.tool("room_wait", {"room": rid, "name": "bot", "since": 0,
+                                           "timeout": 1})
+    said = {e["text"]: e for e in payload["events"]}
+    assert said["nothing for you"].get("mentions_you") is None
+    assert said["@bot your turn"]["mentions_you"] is True
+    assert said["@other not you"].get("mentions_you") is None, \
+        "a mention of somebody else is not addressed to you"
+    assert said["@other not you"]["mentions"] == ["other"]
+    assert "mentions_you" in payload["note"]
+
+
+def test_the_wildcard_wait_marks_mentions_too(server):
+    """The resting state is `room="*"`, so a mention that is only marked in the
+    single-room reply is invisible to an agent that is actually parked."""
+    _, room = server.post("/api/rooms", {"title": "wildcard mentions",
+                                         "name": "Hemi"})
+    rid = room["id"]
+    server.tool("room_join", {"room": rid, "name": "bot"})
+    server.post(f"/api/rooms/{rid}/post", {"name": "Hemi", "text": "@bot look here"})
+    payload, _ = server.tool("room_wait", {"room": ANY_ROOM, "name": "bot",
+                                           "cursors": {rid: 0}, "timeout": 1})
+    mine = [e for e in payload["events"] if e["text"] == "@bot look here"]
+    assert mine and mine[0]["mentions_you"] is True and mine[0]["room"] == rid
+
+
+def test_room_post_says_which_mentioned_seats_were_listening(server):
+    """A post is not a wake. An agent that mentions a seat which stopped polling
+    must be told nothing rang, not handed a bare success."""
+    _, room = server.post("/api/rooms", {"title": "reach", "name": "Hemi"})
+    rid = room["id"]
+    server.tool("room_join", {"room": rid, "name": "bot"})
+    server.tool("room_join", {"room": rid, "name": "ghost"})
+    server.post(f"/api/rooms/{rid}/admin", {"action": "unmute", "target": "bot"})
+
+    live = server.app.hub.get(rid)
+    live.participants["ghost"].last_seen = time.time() - 10_000
+
+    posted, is_error = server.tool("room_post", {"room": rid, "name": "bot",
+                                                 "text": "@ghost still with us?"})
+    assert is_error is False
+    assert posted["mentions"] == [{"name": "ghost", "listening": False}]
+    assert "nothing woke" in posted["note"]
