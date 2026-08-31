@@ -4,12 +4,24 @@ version: 1
 branch_base: main
 max_rounds: 4
 
-# FALSE, deliberately. The loop refuses to auto-merge unless the base branch has
-# a required status check, and branch protection on a private repo needs GitHub
-# Pro. Setting it true anyway would make every run end in a human flag that looks
-# like a failure. The loop stops at "ready to merge" and the founder merges.
-# Flip to true the day this repo is public or the account is upgraded.
-auto_merge: false
+# TRUE since 2026-09-01, on the founder's instruction, and only because the two
+# things it depends on are now real rather than planned.
+#
+# `main` has 9 required status checks — `run`, plus `test` on 3.10-3.13 across
+# ubuntu-latest and windows-latest — so the loop's auto-merge gate has something
+# to gate on. Until today it had none, and `true` would have meant "merge on the
+# reviewer's word alone".
+#
+# And the fence below lists itself, so a change to this file still stops for a
+# human even with auto-merge armed. The ordering mattered: arming protection over
+# stops that catch nothing would switch unsupervised merging on above a fence
+# that is decorative. Protection is a multiplier on the stops, so it comes after
+# them.
+#
+# What this buys is that routine work lands without the founder clicking merge.
+# What still stops: anything at a hard stop, and anything not yet approved at the
+# issue — `agent:go` is not the loop's to apply.
+auto_merge: true
 merge_method: squash
 
 # Agora has no third-party runtime dependencies and is not packaged, so there is
