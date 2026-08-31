@@ -95,6 +95,22 @@ def _event_out(ev: Any, name: str, room_id: str = "") -> dict[str, Any]:
 MENTION_HINT = ("An event marked `mentions_you` names you — answer those first, "
                 "with room_post.")
 
+#: Rides on every reply that writes something. The tool descriptions say the same
+#: thing, but a description is fetched once at connect (D1), so a session already
+#: parked holds the schema it started with and will never read the warning there.
+#: The reply is the only channel that reaches it.
+#:
+#: Room 23c152bd: a `room_wait` returned through seq 23, `"CMO joined — muted"`
+#: landed at 24, `room_post` returned 25, and 25 became the next cursor. Seq 24
+#: was never delivered and the session reported the CMO woken. No number a write
+#: can offer fixes that — the room's tip at post time *is* the post's own seq, so
+#: `tip` would hand back the same 25. The honest answer is that this is not a
+#: position to read from, said where the caller is looking.
+CURSOR_NOTE = ("unchanged — the seq above is where your message landed, not "
+               "where you are reading from. Only room_wait moves your read "
+               "position. Anything said between your last room_wait and this "
+               "write sits below this number and you have not seen it.")
+
 
 def _err(message: str) -> dict[str, Any]:
     return {"content": [{"type": "text", "text": message}], "isError": True}
@@ -138,7 +154,11 @@ TOOLS: list[dict[str, Any]] = [
                        "human chairing the meeting. Write @name, exactly as that "
                        "participant appears in the room, to address someone: the "
                        "reply tells you which of them were listening, because a "
-                       "post does not wake a session that is not reading.",
+                       "post does not wake a session that is not reading. The "
+                       "seq it returns is your message's position in the room, "
+                       "NOT your read cursor: only room_wait advances that, and "
+                       "reusing this number skips whatever was said between "
+                       "your last room_wait and this post.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -210,7 +230,9 @@ TOOLS: list[dict[str, Any]] = [
         "name": "room_note",
         "description": "Add a note to the room's notes panel. Notes sit beside the "
                        "conversation rather than in it — use them for a decision, an "
-                       "action item, or something the chair should not lose.",
+                       "action item, or something the chair should not lose. The "
+                       "seq it returns is the note's position, NOT your read "
+                       "cursor: only room_wait advances that.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -225,7 +247,9 @@ TOOLS: list[dict[str, Any]] = [
         "name": "room_summarize",
         "description": "Post a summary of the meeting. Write it yourself from the "
                        "transcript — call room_history first. Summaries are marked "
-                       "and pinned separately from ordinary messages.",
+                       "and pinned separately from ordinary messages. The seq it "
+                       "returns is the summary's position, NOT your read cursor: "
+                       "only room_wait advances that.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -402,6 +426,9 @@ class McpHandler:
             note = mention_note(report)
             if note:
                 out["note"] = note
+        # Last, so it never pushes the mention report down: who heard you is the
+        # more urgent half of this reply.
+        out["cursor"] = CURSOR_NOTE
         return _text(out)
 
     def _room_wait(self, args: dict) -> dict:
@@ -466,13 +493,13 @@ class McpHandler:
         room = self._resolve(args)
         ev = room.post(str(args.get("name") or ""), str(args.get("text") or ""),
                        kind=NOTE, role=AGENT)
-        return _text({"note": ev.seq})
+        return _text({"note": ev.seq, "cursor": CURSOR_NOTE})
 
     def _room_summarize(self, args: dict) -> dict:
         room = self._resolve(args)
         ev = room.post(str(args.get("name") or ""), str(args.get("text") or ""),
                        kind=SUMMARY, role=AGENT)
-        return _text({"summary": ev.seq})
+        return _text({"summary": ev.seq, "cursor": CURSOR_NOTE})
 
     def _room_leave(self, args: dict) -> dict:
         room = self._resolve(args)
