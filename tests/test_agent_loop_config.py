@@ -19,6 +19,12 @@ semantic invariants and appears in no plugin file at all, and
 is read by nothing. A test that covers half a class, quietly, is the same defect
 it was written to fix.
 
+`hard_stops.dependency_files` is deliberately not checked here: its entries are
+globs (`requirements*.txt`) that are *meant* to match nothing in this repo, so an
+existence check would assert the opposite of the invariant. Adding it to the
+parametrize below turns a healthy config red, and the tempting repair — deleting
+the glob — weakens a real hard stop.
+
 The config is parsed by hand rather than with PyYAML — Agora's dev dependency is
 pytest and nothing else — which is safe only because the shape read here is two
 known lists of plain scalars.
