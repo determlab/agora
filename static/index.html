@@ -383,32 +383,53 @@ function toggleArchive(){ showArchived = !showArchived;
   store.set("showArchived", showArchived); paintRooms(); }
 
 /* ============================ roster ============================ */
-function paintRoster(){
-  $("nSessions").textContent = S.roster.length;
-  if(!S.roster.length){
-    $("roster").innerHTML = `<div class="empty">No sessions found. Agora reads
-      Claude Code's session registry; other providers appear once they join.</div>`;
-    return;
-  }
-  $("roster").innerHTML = S.roster.map(s => {
-    const here = cur && s.rooms.includes(cur);
-    const how = s.hooked ? "hooked" : s.in_lobby ? "waiting"
-              : s.pending ? `called ${ago(s.queued_age)} ago` : "idle";
-    const tip = s.reach === "now" ? "Waiting — wakes in about a second"
-      : s.reach === "queued" ? "A call is already waiting to be picked up"
-      : "Idle — the call is queued and arrives on its next turn";
-    return `<div class="item" style="cursor:default">
-      <span class="dot ${s.status==='busy'?'busy':s.status==='idle'?'idle':'off'}"></span>
-      <span class="grow">
-        <span class="t">${esc(s.name)}</span>
-        <span class="s">${esc(s.provider)}${s.project ? " · " + esc(s.project) : ""} · ${how}</span>
-      </span>
-      ${here ? `<span class="tag go">in room</span>`
+let showUnreachable = store.get("showUnreachable", false);
+
+function sessionItem(s, here){
+  const how = s.hooked ? "ready" : s.in_lobby ? "waiting"
+            : s.pending ? `called ${ago(s.queued_age)} ago` : "not reachable";
+  const tip = s.reach === "now" ? "Ready — wakes in about a second"
+    : s.reach === "queued" ? "A call is already waiting to be picked up"
+    : "Restart this session to make it callable";
+  return `<div class="item" style="cursor:default">
+    <span class="dot ${s.status==='busy'?'busy':s.status==='idle'?'idle':'off'}"></span>
+    <span class="grow">
+      <span class="t">${esc(s.name)}</span>
+      <span class="s">${esc(s.provider)}${s.project ? " · " + esc(s.project) : ""} · ${how}</span>
+    </span>
+    ${here ? `<span class="tag go">in room</span>`
+      : s.reach === "later"
+        ? `<span class="tag" title="${tip}">restart</span>`
         : `<button class="sm ${s.reach==='now'?'p':''}" title="${tip}"
              onclick="callIn('${esc(s.name)}')">Call</button>`}
-    </div>`;
-  }).join("");
+  </div>`;
 }
+
+// Sessions you cannot call are noise: the button would queue and nothing would
+// happen until that session next took a turn. They collapse behind a fold that
+// says what to do about them.
+function paintRoster(){
+  const reachable = S.roster.filter(s => s.reach !== "later");
+  const stuck = S.roster.filter(s => s.reach === "later");
+  $("nSessions").textContent = reachable.length;
+
+  let html = reachable.map(s => sessionItem(s, cur && s.rooms.includes(cur))).join("");
+  if(!reachable.length){
+    html = `<div class="empty"><b>No session can be called yet.</b><br>
+      Each one needs restarting once to pick up the Agora hook. After that it is
+      callable for good, even while idle.</div>`;
+  }
+  if(stuck.length){
+    html += `<div class="fold" onclick="toggleUnreachable()">
+      ${showUnreachable ? "▾" : "▸"} ${stuck.length} need a restart</div>`;
+    if(showUnreachable){
+      html += stuck.map(s => sessionItem(s, cur && s.rooms.includes(cur))).join("");
+    }
+  }
+  $("roster").innerHTML = html;
+}
+function toggleUnreachable(){ showUnreachable = !showUnreachable;
+  store.set("showUnreachable", showUnreachable); paintRoster(); }
 
 const callIn = guard(async who => {
   if(!cur) return toast("Open a meeting first.", "bad");
