@@ -53,9 +53,11 @@ services:
     build:
       context: .
       args:
-        # Scratch may default: it is the instance under development, its tag is
-        # not a claim about a build, and requiring the version here would make
-        # the throwaway instance harder to start than the one that matters.
+        # This default never fires, and that is worth stating rather than
+        # leaving as a comment that lies: compose interpolates the whole file
+        # before it selects a profile, so the stable service's `:?` above has
+        # already failed by the time scratch is considered. Kept only to shape
+        # scratch's LABEL when the variable IS set.
         AGORA_VERSION: ${AGORA_VERSION:-scratch}
     image: agora:scratch
     ports: ["127.0.0.1:8766:8765"]

@@ -162,7 +162,12 @@ def availability(directory: Path | None = None) -> dict[str, Any]:
                        "read-only; see CONTRIBUTING.md."),
         }
     files = len(list(directory.glob("*.json")))
-    live = len(claude_sessions(directory))
+    # `None`, not `directory`, in the default case: claude_sessions reads its
+    # cache only when passed None (it writes it whenever the resolved path is
+    # CLAUDE_SESSIONS — the two gates disagree). Passing the resolved path here
+    # is correct and costs a full uncached scan of the registry on every state
+    # build, which _state_stream does every 2s per open tab.
+    live = len(claude_sessions(None if directory == CLAUDE_SESSIONS else directory))
     note = ""
     if files and not live:
         note = (f"{files} session files are readable but none names a process "
