@@ -139,13 +139,20 @@ class Room:
 
     def join(self, name: str, *, role: str = AGENT, provider: str = "",
              session_id: str = "", cwd: str = "") -> Participant:
+        """Seat someone. **Agents arrive muted.**
+
+        An agent that joins talking is a meeting where five people start at
+        once. The chair unmutes whoever should speak, which is what chairing
+        is. A human joins unmuted — the chair is not going to mute themselves.
+        """
         with self._cond:
             now = time.time()
             p = self.participants.get(name)
             if p is None:
                 p = Participant(name=name, role=role, provider=provider,
                                 joined=now, last_seen=now,
-                                session_id=session_id, cwd=cwd)
+                                session_id=session_id, cwd=cwd,
+                                muted=(role != HUMAN))
                 self.participants[name] = p
                 # asdict, not as_dict: `online` is derived and must not persist.
                 self._append_disk({"t": "participant", "p": asdict(p)})
@@ -154,10 +161,33 @@ class Room:
                 p.last_seen = now
                 if provider:
                     p.provider = provider
+                if session_id:
+                    p.session_id = session_id
                 new = False
         if new:
-            self.post("agora", f"{name} joined", kind=SYSTEM, role=HUMAN)
+            self.post("agora", f"{name} joined — muted" if p.muted
+                      else f"{name} joined", kind=SYSTEM, role=HUMAN)
         return p
+
+    def prune(self, older_than: float = 900.0) -> list[str]:
+        """Drop participants that have not been seen in *older_than* seconds.
+
+        A renamed or restarted session leaves its old seat behind: the name is
+        gone from the machine but the room still holds it. Without this the
+        roster accumulates ghosts and the chair cannot tell who is actually
+        there.
+        """
+        cutoff = time.time() - older_than
+        with self._cond:
+            gone = [n for n, p in self.participants.items()
+                    if p.role != HUMAN and p.last_seen < cutoff]
+            for n in gone:
+                self.participants.pop(n, None)
+        for n in gone:
+            self.post("agora", f"{n} dropped — not seen in "
+                               f"{int(older_than // 60)} min",
+                      kind=SYSTEM, role=HUMAN)
+        return gone
 
     def leave(self, name: str) -> None:
         with self._cond:

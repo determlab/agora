@@ -33,12 +33,59 @@ STATIC = Path(__file__).resolve().parent.parent / "static"
 CHAIR = "chair"
 
 
+class Summons:
+    """The chair calling a session into a room.
+
+    A web page cannot reach into a running agent, and Claude Code's session
+    pipe is undocumented and Claude-only. What *is* available is a hook: a
+    session's ``SessionStart`` hook parks here in a long-poll, and exiting with
+    code 2 wakes its session with whatever text this returns. So the chair's
+    "call to room" button writes here, and the hook turns it into a message the
+    agent actually receives.
+
+    Deliberately in memory: a summons is a live invitation. One that survived a
+    restart of this server would call a session into a meeting that ended.
+    """
+
+    def __init__(self) -> None:
+        self._pending: dict[str, dict[str, Any]] = {}
+        self._registered: dict[str, dict[str, Any]] = {}
+        self._cond = threading.Condition()
+
+    def register(self, name: str, info: dict[str, Any]) -> None:
+        with self._cond:
+            info["registered_at"] = time.time()
+            self._registered[name] = info
+
+    def registered(self) -> dict[str, dict[str, Any]]:
+        with self._cond:
+            return dict(self._registered)
+
+    def call(self, name: str, payload: dict[str, Any]) -> None:
+        with self._cond:
+            self._pending[name] = payload
+            self._cond.notify_all()
+
+    def wait(self, name: str, timeout: float) -> dict[str, Any] | None:
+        deadline = time.time() + timeout
+        with self._cond:
+            while True:
+                pending = self._pending.pop(name, None)
+                if pending is not None:
+                    return pending
+                remaining = deadline - time.time()
+                if remaining <= 0:
+                    return None
+                self._cond.wait(timeout=min(remaining, 5.0))
+
+
 class Agora:
     """Everything the request handler needs, in one place."""
 
     def __init__(self, root: Path, public_url: str) -> None:
         self.hub = Hub(root / "rooms")
         self.mcp = McpHandler(self.hub)
+        self.summons = Summons()
         self.public_url = public_url
         self.chair_name = CHAIR
 
@@ -104,12 +151,27 @@ class Handler(BaseHTTPRequestHandler):
             return self._json({"error": "this server is POST-only"}, 405)
 
         if path == "/api/state":
+            reg = self.app.summons.registered()
+            rows = roster(self.app.hub)
+            for row in rows:
+                # "connected" means the session's hook checked in with this
+                # server, so a call button on that row will actually reach it.
+                row["connected"] = row["name"] in reg
             return self._json({
                 "rooms": self.app.hub.listing(),
-                "roster": roster(self.app.hub),
+                "roster": rows,
                 "chair": self.app.chair_name,
                 "url": self.app.public_url,
             })
+
+        if path == "/api/summons":
+            # The async half of a session's SessionStart hook parks here.
+            who = (query.get("session") or [""])[0]
+            secs = min(float((query.get("timeout") or ["300"])[0]), 900.0)
+            payload = self.app.summons.wait(who, secs)
+            if payload is None:
+                return self._json({"summoned": False}, 204)
+            return self._json({"summoned": True, **payload})
 
         if path.startswith("/api/rooms/"):
             rest = path[len("/api/rooms/"):]
@@ -186,6 +248,22 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(202, b"", "text/plain")
             return self._json(response)
 
+        if path == "/api/register":
+            # A session's SessionStart hook announcing itself. This is how a
+            # session states its own name — nobody has to rename anything.
+            name = str(body.get("name") or "").strip()
+            if not name:
+                return self._json({"error": "name required"}, 400)
+            self.app.summons.register(name, {
+                "name": name,
+                "session_id": str(body.get("session_id") or ""),
+                "cwd": str(body.get("cwd") or ""),
+                "pid": int(body.get("pid") or 0),
+                "provider": str(body.get("provider") or "claude-code"),
+            })
+            return self._json({"ok": True, "url": self.app.public_url,
+                               "rooms": self.app.hub.listing()})
+
         if path == "/api/rooms":
             title = str(body.get("title") or "").strip() or "Untitled meeting"
             room = self.app.hub.create(title, str(body.get("agenda") or ""))
@@ -248,6 +326,25 @@ class Handler(BaseHTTPRequestHandler):
             if what == "title":
                 room.set_meta(title=text)
                 return self._json({"ok": True})
+            if what == "call":
+                # Summon a session into this room. Reaches it through its
+                # SessionStart hook's long-poll, which wakes the agent.
+                if target not in self.app.summons.registered():
+                    return self._json(
+                        {"error": f"{target} has no Agora hook running. Install "
+                                  f"the hook and restart that session — see "
+                                  f"README, 'Auto-connect'."}, 409)
+                self.app.summons.call(target, {
+                    "room": room.id, "title": room.title, "agenda": room.agenda,
+                    "seq": room.snapshot()["seq"], "name": target,
+                    "url": self.app.public_url,
+                })
+                room.post("agora", f"{target} called to the room by the chair",
+                          kind="system", role=HUMAN)
+                return self._json({"ok": True})
+            if what == "prune":
+                gone = room.prune()
+                return self._json({"ok": True, "dropped": gone})
             if what == "ask_summary":
                 room.post(self.app.chair_name,
                           f"@{target or 'everyone'} please post a summary of this "

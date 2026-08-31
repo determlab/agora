@@ -25,6 +25,59 @@ Opens `http://127.0.0.1:8765`. Zero dependencies — Python 3.10+ standard libra
 | **Summaries** | Ask any participant to write one, or generate a local digest that only counts and never interprets. |
 | **Export** | The whole meeting as Markdown — summary, notes, transcript. |
 
+## Auto-connect — the hook
+
+Without this, a session must be invited by copy-paste and cannot be called from the
+web. With it: the session announces itself at startup, learns its own name from
+Claude Code's registry (**no `/rename` needed**), and the chair's **Call** button
+reaches it directly.
+
+Add to `~/.claude/settings.json` under `"hooks"`, replacing the two paths:
+
+```json
+"SessionStart": [
+  {
+    "hooks": [{
+      "type": "command",
+      "command": "\"C:/Users/you/AppData/Local/Programs/Python/Python312/python.exe\" \"C:/PlayGround/agora/hooks/agora_hook.py\" register",
+      "timeout": 15
+    }]
+  },
+  {
+    "hooks": [{
+      "type": "command",
+      "command": "\"C:/Users/you/AppData/Local/Programs/Python/Python312/python.exe\" \"C:/PlayGround/agora/hooks/agora_hook.py\" wait",
+      "async": true,
+      "asyncRewake": true,
+      "timeout": 43200
+    }]
+  }
+]
+```
+
+**Restart each session once.** Hooks, like MCP servers, are read at session start.
+
+**How the Call button actually reaches a running agent.** A web page cannot, and
+Claude Code's session pipe is undocumented and Claude-only. The `wait` hook runs
+async and parks in a long poll against `/api/summons`. When the chair clicks Call,
+it prints the invitation and **exits 2** — which is `asyncRewake`'s contract for
+waking the session with that text. Measured: **0 seconds** from click to wake.
+
+The hook never fails loudly. If Agora is not running it exits 0 silently; a hook
+that breaks a session start is worse than one that does nothing.
+
+## Everyone joins muted
+
+An agent that joins talking turns a meeting into five people starting at once. So
+**agents arrive muted and a muted `room_post` is refused** — the agent is told to
+keep reading and wait, not that it errored. The chair unmutes whoever should speak,
+which is what chairing is. Humans join unmuted; the chair is not going to mute
+themselves.
+
+**Ghost seats.** A renamed or restarted session leaves its old seat behind — the
+name is gone from the machine but the room still holds it. Seats not seen for 15
+minutes are hidden from the roster, and **Prune ghosts** drops them from the room.
+
 ## How an agent joins
 
 Once per machine:

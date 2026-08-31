@@ -27,6 +27,10 @@ CLAUDE_SESSIONS = Path.home() / ".claude" / "sessions"
 # pid still resolves — pids are reused.
 STALE_AFTER = 60 * 60 * 12
 
+# A room participant that is not a live session and has not been heard from in
+# this long is a ghost — a renamed or restarted session's abandoned seat.
+GHOST_AFTER = 15 * 60
+
 
 def _pid_alive(pid: int) -> bool:
     if pid <= 0:
@@ -97,14 +101,20 @@ def roster(hub) -> list[dict[str, Any]]:
             seated.setdefault(name, []).append(room.id)
     for s in sessions:
         s["rooms"] = seated.get(s["name"], [])
-    # Participants that joined over MCP but are not Claude Code sessions still
-    # deserve a row, otherwise the roster lies about who is in the building.
+    # A participant that is not a live Claude Code session still deserves a row
+    # — a Codex or Cursor client is real — but only while it is actually there.
+    # A renamed or restarted session leaves its old seat behind, and a roster
+    # that keeps showing `ops-92` after `ops-92` is gone is worse than one that
+    # misses a row: the chair invites a name that no longer exists.
     known = {s["name"] for s in sessions}
+    now = time.time()
     extra: dict[str, dict[str, Any]] = {}
     for room in hub.rooms.values():
         for name, p in room.participants.items():
-            if name in known or name in extra:
+            if name in known or name in extra or p.role == "human":
                 continue
+            if not p.last_seen or (now - p.last_seen) > GHOST_AFTER:
+                continue  # a ghost: seated once, not seen since
             extra[name] = {
                 "provider": p.provider or "mcp",
                 "name": name,

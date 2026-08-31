@@ -51,13 +51,17 @@ h2{font-size:10.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--mu
   background:var(--panel2);color:var(--mut);border:1px solid var(--line)}
 .tag.in{color:var(--go);border-color:var(--go)}
 /* main */
-main{display:flex;flex-direction:column;min-width:0;background:var(--bg)}
+main{display:flex;flex-direction:column;min-width:0;min-height:0;background:var(--bg)}
 header{padding:12px 18px;border-bottom:1px solid var(--line);background:var(--panel);
   display:flex;gap:12px;align-items:center}
 header .ttl{font-weight:700;font-size:16px}
 header .ag{color:var(--ink2);font-size:12.5px;flex:1;min-width:0;
   white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-#log{flex:1;overflow-y:auto;padding:16px 18px;display:flex;flex-direction:column;gap:11px}
+/* min-height:0 is what makes this scroll. A flex child defaults to
+   min-height:auto, so it grows to fit its content and pushes the composer off
+   the screen instead of scrolling. */
+#log{flex:1;min-height:0;overflow-y:auto;padding:16px 18px;
+  display:flex;flex-direction:column;gap:11px}
 .msg{display:grid;grid-template-columns:auto 1fr;gap:10px;align-items:start}
 .av{width:26px;height:26px;border-radius:5px;background:var(--panel2);
   display:grid;place-items:center;font-family:var(--mono);font-size:11px;font-weight:600;
@@ -140,6 +144,7 @@ pre{background:var(--bg);border:1px solid var(--line);border-radius:5px;padding:
       <button onclick="setAgenda()">Agenda</button>
       <button onclick="askSummary()">Ask for summary</button>
       <button onclick="localSummary()">Local digest</button>
+      <button onclick="adm('prune','')" title="Drop seats not seen in 15 min — restarted or renamed sessions leave ghosts">Prune ghosts</button>
       <button class="d" onclick="closeRoom()" id="bcl">Close</button>
     </div>
     <h2>Notes</h2>
@@ -186,11 +191,27 @@ function drawRooms(){
 function drawRoster(){
   $("roster").innerHTML = S.roster.length ? S.roster.map(s => {
     const inCur = cur && s.rooms.includes(cur);
-    return `<div class="row" onclick="invite('${esc(s.name)}')">
-      <div class="t"><span class="dot ${s.status==='busy'?'busy':s.status==='idle'?'idle':'off'}"></span>${esc(s.name)}
-        ${inCur?'<span class="tag in">in room</span>':''}</div>
-      <div class="s">${esc(s.provider)}${s.project?' · '+esc(s.project):''}</div>
+    // `connected` means that session's hook checked in, so Call reaches it.
+    // Without the hook all we can offer is copy-paste instructions.
+    const act = inCur
+      ? '<span class="tag in">in room</span>'
+      : s.connected
+        ? `<button class="x p" onclick="event.stopPropagation();callIn('${esc(s.name)}')">Call</button>`
+        : `<button class="x" onclick="event.stopPropagation();invite('${esc(s.name)}')">Invite…</button>`;
+    return `<div class="pr" style="padding:8px 14px;display:block">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:6px">
+        <span class="t"><span class="dot ${s.status==='busy'?'busy':s.status==='idle'?'idle':'off'}"></span>${esc(s.name)}</span>
+        ${act}
+      </div>
+      <div class="s">${esc(s.provider)}${s.project?' · '+esc(s.project):''}${s.connected?' · hooked':''}</div>
     </div>`;}).join("") : `<div class="empty">No sessions found.</div>`;
+}
+
+async function callIn(who){
+  if(!cur){ alert("Open a room first."); return; }
+  try {
+    await post(`/api/rooms/${cur}/admin`, {action:"call", target:who});
+  } catch(err){ alert(err.message); }
 }
 
 async function open_(id){
@@ -229,10 +250,14 @@ function render(){
   }).join("");
   if(stick) log.scrollTop = log.scrollHeight;
 
+  // Everyone arrives muted, so unmute is the chair's main verb — it stays
+  // visible rather than appearing on hover like the destructive actions.
   $("ppl").innerHTML = snap.participants.map(p => `
     <div class="pr"><span><span class="dot ${p.online?'idle':'off'}"></span>${esc(p.name)}
-      ${p.muted?'<span class="tag">muted</span>':''}</span>
-    <span><button class="x" onclick="adm('${p.muted?'unmute':'mute'}','${esc(p.name)}')">${p.muted?'unmute':'mute'}</button>
+      ${p.muted?'<span class="tag" style="color:var(--stop);border-color:var(--stop)">muted</span>':''}</span>
+    <span>${p.role==='human'?'':
+      `<button class="${p.muted?'p':''}" style="opacity:1;font-size:11px;padding:2px 7px"
+        onclick="adm('${p.muted?'unmute':'mute'}','${esc(p.name)}')">${p.muted?'unmute':'mute'}</button>`}
     <button class="x d" onclick="adm('kick','${esc(p.name)}')">kick</button></span></div>`).join("");
 
   const notes = snap.events.filter(e=>e.kind==="note");
