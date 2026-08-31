@@ -4,7 +4,12 @@ version: 1
 branch_base: main
 max_rounds: 4
 
-auto_merge: true
+# FALSE, deliberately. The loop refuses to auto-merge unless the base branch has
+# a required status check, and branch protection on a private repo needs GitHub
+# Pro. Setting it true anyway would make every run end in a human flag that looks
+# like a failure. The loop stops at "ready to merge" and the founder merges.
+# Flip to true the day this repo is public or the account is upgraded.
+auto_merge: false
 merge_method: squash
 
 # Agora has no third-party runtime dependencies and is not packaged, so there is
