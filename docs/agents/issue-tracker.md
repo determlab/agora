@@ -1,3 +1,10 @@
+---
+type: agent-context
+owner: repo-agent
+scope: repo/agora
+reviewed: 2026-08-31
+---
+
 # Issue tracker (for agents)
 
 - **Tracker:** GitHub Issues, via the `gh` CLI.
