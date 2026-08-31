@@ -182,6 +182,10 @@ pre{background:var(--bg);border:1px solid var(--line);border-radius:var(--r);
   background:var(--stop);color:#fff;text-align:center;display:none}
 #conn.show{display:block}
 
+/* A pane toggle is an escape hatch for the widths that hide its pane; where the
+   pane is already on screen the button is noise. */
+#btnMeetings{display:none}
+
 @media (max-width:1080px){
   .app{grid-template-columns:210px minmax(0,1fr)}
   .pane.right{display:none}
@@ -193,6 +197,7 @@ pre{background:var(--bg);border:1px solid var(--line);border-radius:var(--r);
   .pane.left{display:none}
   .pane.left.open{display:flex;position:fixed;left:0;top:0;bottom:0;width:260px;
     z-index:30;box-shadow:var(--shadow)}
+  #btnMeetings{display:block}
 }
 @media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
 </style>
@@ -221,12 +226,16 @@ pre{background:var(--bg);border:1px solid var(--line);border-radius:var(--r);
   <!-- ================= centre ================= -->
   <main>
     <header>
+      <!-- Not gated on a room being open: switching meetings is exactly what
+           this is for when none is. -->
+      <button class="ghost sm pane-btn" id="btnMeetings"
+              onclick="togglePane('left')">Meetings</button>
       <div style="min-width:0;flex:1">
         <div class="ttl" id="ttl">No meeting open</div>
         <div class="ag" id="ag" onclick="editAgenda()" title="Click to edit the agenda"></div>
       </div>
       <span class="tag" id="stat" hidden></span>
-      <button class="ghost sm" id="btnPeople" onclick="togglePane('right')" hidden>People</button>
+      <button class="ghost sm pane-btn" id="btnPeople" onclick="togglePane('right')" hidden>People</button>
       <button class="ghost sm" onclick="exportRoom()" id="btnExport" disabled>Export</button>
     </header>
 
@@ -661,6 +670,23 @@ function openNewRoom(){
 function togglePane(which){
   $(which === "right" ? "paneRight" : "paneLeft").classList.toggle("open");
 }
+/* An overlaid pane covers the app, and Escape is not a gesture a phone has: with
+   nothing but the key to dismiss it, opening one is a trap. */
+document.addEventListener("click", e => {
+  // A modal owns the dismiss gesture while it is up, the same precedence Escape
+  // gives it below — otherwise clicking into the New meeting dialog closes the
+  // pane whose button opened it.
+  if(document.querySelector(".mask")) return;
+  // composedPath() is captured at dispatch, so it still names the pane after a
+  // control inside one has replaced its container's innerHTML mid-click
+  // (toggleArchive, toggleUnreachable). Walking up from e.target instead would
+  // find a detached node with no ancestors and close the pane under the finger.
+  // `.pane-btn` is a selector hook, never styled: the header buttons sit outside
+  // the pane they open, so nothing else marks them as part of it.
+  if(e.composedPath().some(n => n.classList &&
+     (n.classList.contains("pane") || n.classList.contains("pane-btn")))) return;
+  document.querySelectorAll(".pane.open").forEach(p => p.classList.remove("open"));
+});
 document.addEventListener("keydown", e => {
   if(e.key === "Escape"){
     const m = document.querySelector(".mask");

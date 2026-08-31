@@ -97,6 +97,39 @@ def test_every_element_the_script_reaches_for_exists(html: str):
     assert not missing, f"script reaches for ids that are not in the markup: {missing}"
 
 
+def test_every_pane_the_layout_hides_has_a_control_that_opens_it(html: str):
+    """The narrow layouts drop a pane out of the grid entirely. If nothing on the
+    page toggles it back, the pane and everything only reachable through it are
+    gone at that width, and the page looks intact while it happens."""
+    hidden = set(re.findall(r"\.pane\.(\w+)\s*\{display:none\}", html))
+    assert hidden, "the narrow layouts should be hiding panes"
+    toggled = set(re.findall(r"togglePane\(['\"](\w+)['\"]\)", html))
+    assert hidden <= toggled, \
+        f"nothing on the page opens the {sorted(hidden - toggled)} pane"
+    for side in sorted(toggled):
+        assert f'class="pane {side}"' in html, \
+            f"a control toggles a {side!r} pane that the markup does not have"
+
+
+def test_the_outside_click_dismiss_reads_the_dispatched_path(html: str):
+    """Controls inside a pane (toggleArchive, toggleUnreachable) rewrite their
+    container's innerHTML during their own onclick, which runs before this
+    document listener. By then the clicked node is detached, so anything that
+    walks the live tree from e.target sees no ancestors and shuts the pane the
+    user is using. composedPath() is snapshotted at dispatch and survives that."""
+    handler = re.search(r'document\.addEventListener\("click", e => \{(.*?)\n\}\);',
+                        html, re.S)
+    assert handler, "the outside-click dismiss handler is gone"
+    body = handler.group(1)
+    assert "composedPath()" in body, \
+        "the dismiss handler must read composedPath(), not the live DOM"
+    assert "e.target.closest" not in body, \
+        "e.target.closest is detach-prone here: a re-rendered control has no " \
+        "ancestors by the time this listener runs"
+    assert '.mask' in body, \
+        "an open modal should suppress the pane dismiss, as Escape already does"
+
+
 def test_no_leftover_calls_to_removed_functions(html: str):
     for gone in ["refresh()", "agora_standby", "S.chair,"]:
         assert gone not in html, f"{gone} was removed but the page still calls it"
