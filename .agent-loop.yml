@@ -33,23 +33,30 @@ hard_stops:
     - requirements*.txt
 
   protected_paths:
-    # The MCP tool list is a PUBLIC SURFACE with an unusual property: a client
-    # fetches tools/list once when it connects, so a tool added here is invisible
-    # to every session already connected. Adding one looks like a feature and
-    # ships as a no-op for exactly the sessions that needed it.
-    - "agora/mcp.py"
-    # The whole UI, with no build step and no framework. It cannot be
-    # unit-tested; test_ui.py checks only the seams. A regression here is
-    # invisible to CI and visible to the founder.
-    - "static/index.html"
-    # A SessionStart hook runs inside every Claude Code session on the machine.
-    # A hook that throws or hangs damages sessions that have nothing to do with
-    # Agora, and it fails silently by design.
+    # ONE path, and it earns it: a SessionStart hook runs inside every Claude
+    # Code session on this machine. A hook that throws or hangs damages sessions
+    # that have nothing to do with Agora, and it fails silently by design, so
+    # nothing here surfaces the damage. No test can cover that blast radius.
     - "hooks/agora_hook.py"
-    # Reachability is where this app has been wrong three times, always the same
-    # way: a control reporting success while reaching nothing. Changes to the
-    # summons registry or the presence windows need a human to re-read them.
-    - "**/summons*"
+
+    # DELIBERATELY NOT LISTED, and why — because a stop that fires on every
+    # change is a stop nobody reads, and the first two issues filed against this
+    # repo both tripped one:
+    #
+    #   static/index.html — the UI is where nearly all the work is. It is covered
+    #     by tests/test_ui.py at the seams a browser hides (dead URLs, unknown
+    #     admin actions, missing element ids) plus the reviewer. Protecting it
+    #     meant no UI issue could ever run.
+    #
+    #   agora/mcp.py — the real invariant is not "this file changed", it is
+    #     "TOOLS gained an entry", because a tool added to a running server is
+    #     invisible to every session already connected. That is a semantic check,
+    #     so it belongs to the reviewer below, not to a path glob.
+    #
+    #   **/summons* — reachability has been wrong three times, always the same
+    #     way. The invariant is "a control must not report success while reaching
+    #     nothing", which is now covered by tests and stated in the reviewer
+    #     instructions. A file glob was a proxy for it, and a bad one.
 
   flag_on_file_delete: true
   flag_on_public_api_change: true
@@ -59,3 +66,20 @@ review:
     - CLAUDE.md
     - docs/agents/
   spec_source: issue
+
+  # Semantic hard-stops. These are invariants a path glob cannot express, and
+  # they are the reason the protected_paths list above is one line long.
+  hard_stop_when:
+    - "A new entry is added to TOOLS in agora/mcp.py. A client fetches tools/list
+       once at connect, so a new tool is invisible to every session already
+       connected — it ships as a no-op for exactly the sessions that needed it,
+       and every session must restart. Adding an ARGUMENT to an existing tool is
+       fine and is the correct way to extend."
+    - "A third-party import appears anywhere in agora/ or hooks/. Zero runtime
+       dependencies is why the MCP layer is hand-rolled and why the app cannot be
+       broken by an SDK major."
+    - "A control gains a success path that does not distinguish 'it worked' from
+       'it reached nobody'. This app has shipped that defect three times on three
+       surfaces; it is the one bug class to refuse outright."
+    - "The server binds anywhere other than 127.0.0.1, or authentication is added
+       or removed. The loopback bind is the security boundary."
