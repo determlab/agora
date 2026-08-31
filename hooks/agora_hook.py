@@ -51,12 +51,10 @@ def _payload() -> dict:
         return {}
 
 
-def _identity(session_id: str) -> dict:
-    """Name, cwd and pid for this session, from Claude Code's own registry."""
-    out = {"name": "", "cwd": os.getcwd(), "pid": os.getppid(),
-           "session_id": session_id}
+def _lookup(session_id: str) -> dict | None:
+    """One pass over the registry for this session id."""
     if not SESSIONS.exists():
-        return out
+        return None
     for path in SESSIONS.glob("*.json"):
         try:
             rec = json.loads(path.read_text(encoding="utf-8"))
@@ -64,11 +62,29 @@ def _identity(session_id: str) -> dict:
             continue
         if session_id and rec.get("sessionId") != session_id:
             continue
-        out["name"] = rec.get("name") or out["name"]
-        out["cwd"] = rec.get("cwd") or out["cwd"]
-        out["pid"] = rec.get("pid") or out["pid"]
-        return out
-    return out
+        return {"name": rec.get("name") or "", "cwd": rec.get("cwd") or os.getcwd(),
+                "pid": rec.get("pid") or os.getppid(), "session_id": session_id}
+    return None
+
+
+def _identity(session_id: str, *, patience: float = 0.0) -> dict:
+    """Name, cwd and pid for this session, from Claude Code's own registry.
+
+    `SessionStart` can fire before the session has written its own registry
+    entry. Without patience the hook found no name, returned quietly, and that
+    session was never reachable — for the rest of its life, with nothing in any
+    log to say why. Waiting a few seconds costs nothing: the sync half runs
+    once, and the async half is about to park for hours.
+    """
+    deadline = time.time() + patience
+    while True:
+        found = _lookup(session_id)
+        if found and found["name"]:
+            return found
+        if time.time() >= deadline:
+            return found or {"name": "", "cwd": os.getcwd(),
+                             "pid": os.getppid(), "session_id": session_id}
+        time.sleep(0.5)
 
 
 def _post(path: str, body: dict, timeout: float = 5.0) -> dict | None:
@@ -114,7 +130,8 @@ HOW_TO_SIT = (
 
 def do_register() -> int:
     data = _payload()
-    ident = _identity(str(data.get("session_id") or ""))
+    # The sync half must not delay a session start, so it waits only briefly.
+    ident = _identity(str(data.get("session_id") or ""), patience=8.0)
     if not ident["name"]:
         return 0  # not a registered session; say nothing rather than guess
     ok = _post("/api/register", {**ident, "provider": "claude-code"})
@@ -130,7 +147,10 @@ def do_register() -> int:
 def do_wait() -> int:
     """Park until the chair calls this session. Exit 2 to wake it."""
     data = _payload()
-    ident = _identity(str(data.get("session_id") or ""))
+    # This half is about to park for hours, so it can afford to wait for the
+    # registry entry to appear. Giving up here is what left a restarted session
+    # permanently uncallable.
+    ident = _identity(str(data.get("session_id") or ""), patience=60.0)
     name = ident["name"]
     if not name:
         return 0
