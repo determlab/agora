@@ -195,12 +195,19 @@ function drawRoster(){
     // Without the hook all we can offer is copy-paste instructions.
     // Call is offered ONLY when it will actually reach something. Otherwise the
     // row says so and offers the copy-paste path instead.
+    // Call is never hidden. An idle session's call is queued in the Lobby and
+    // arrives on its next turn — not instant, but not lost, and the result
+    // says which happened. Hiding the button would trade a false green for a
+    // false red.
     const act = inCur
       ? '<span class="tag in">in room</span>'
-      : s.callable
-        ? `<button class="x p" onclick="event.stopPropagation();callIn('${esc(s.name)}')">Call</button>`
-        : `<button class="x" onclick="event.stopPropagation();invite('${esc(s.name)}')" title="Not reachable — no hook and not waiting in the Lobby">Invite…</button>`;
-    const how = s.hooked ? 'hooked' : s.in_lobby ? 'in lobby' : 'not reachable';
+      : `<button class="x ${s.reach==='now'?'p':''}"
+           onclick="event.stopPropagation();callIn('${esc(s.name)}')"
+           title="${s.reach==='now'?'Waiting — wakes in about a second'
+                  :s.reach==='queued'?'A call is already waiting for it'
+                  :'Idle — the call queues and arrives on its next turn'}">Call</button>`;
+    const how = s.hooked ? 'hooked' : s.in_lobby ? 'waiting'
+              : s.pending ? 'call queued' : 'idle';
     return `<div class="pr" style="padding:8px 14px;display:block">
       <div style="display:flex;justify-content:space-between;align-items:center;gap:6px">
         <span class="t"><span class="dot ${s.status==='busy'?'busy':s.status==='idle'?'idle':'off'}"></span>${esc(s.name)}</span>
@@ -217,9 +224,7 @@ async function callIn(who){
   if(!cur){ alert("Open a room first."); return; }
   try {
     const r = await post(`/api/rooms/${cur}/admin`, {action:"call", target:who});
-    if(r.note) alert(`Not delivered.\n\n${r.note}\n\nTell that session to join the `
-      + `Lobby and wait there (room_join "lobby", then room_wait), or install the `
-      + `SessionStart hook and restart it.`);
+    if(!r.woke) alert(`Queued, not delivered yet.\n\n${r.note}`);
   } catch(err){ alert(err.message); }
 }
 

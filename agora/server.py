@@ -86,6 +86,10 @@ class Summons:
             self._pending[name] = payload
             self._cond.notify_all()
 
+    def pending(self, name: str) -> dict[str, Any] | None:
+        with self._cond:
+            return self._pending.get(name)
+
     def wait(self, name: str, timeout: float) -> dict[str, Any] | None:
         deadline = time.time() + timeout
         with self._cond:
@@ -185,7 +189,17 @@ class Handler(BaseHTTPRequestHandler):
                 # offering a button that does nothing.
                 row["hooked"] = row["name"] in reg
                 row["in_lobby"] = row["name"] in waiting
-                row["callable"] = row["hooked"] or row["in_lobby"]
+                row["pending"] = self.app.summons.pending(row["name"]) is not None
+                # Three honest states, not two:
+                #   now     — parked or hooked; a call wakes it in about a second
+                #   queued  — a call is already waiting to be picked up
+                #   later   — idle; a call will be delivered when it next checks in
+                # Call is never hidden. Nothing is lost by calling an idle
+                # session; it just arrives on that session's next turn instead
+                # of immediately, and the result says which happened.
+                row["reach"] = ("now" if (row["hooked"] or row["in_lobby"])
+                                else "queued" if row["pending"] else "later")
+                row["callable"] = True
             # Reachable first. A session that joined the lobby under a role name
             # ("CMO") appears alongside its registry row ("ops-b0"); the chair
             # cares about the one that can actually be called, so it sorts up.
@@ -395,12 +409,17 @@ class Handler(BaseHTTPRequestHandler):
                 room.post("agora", f"{target} called to the room by the chair",
                           kind="system", role=HUMAN)
                 hooked = target in self.app.summons.registered()
+                woke = hooked or reached_lobby
                 return self._json({
                     "ok": True, "hooked": hooked, "in_lobby": reached_lobby,
-                    "note": "" if (hooked or reached_lobby) else
-                            f"{target} is neither hooked nor waiting in the "
-                            f"lobby, so nothing woke it. The call is queued and "
-                            f"will be delivered the moment it parks.",
+                    "woke": woke,
+                    "note": "" if woke else
+                            f"{target} is idle — not hooked and not actively "
+                            f"waiting — so nothing woke it just now. The call is "
+                            f"queued in the Lobby and will be delivered the next "
+                            f"time that session takes a turn and checks. Nothing "
+                            f"is lost; it is just not instant. To reach it now, "
+                            f"type in its window.",
                 })
             if what == "prune":
                 gone = room.prune()
