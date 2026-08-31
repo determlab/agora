@@ -74,7 +74,7 @@ milestones in the history, not tagged releases.
   three reach states instead of reachable/not (D3). (`7cf3fa3`, `d61dbf4`)
 - A registration outlived the hook that made it, so Call kept claiming a wake
   against something no longer listening. (`a7cc045`)
-- The roster listed sessions that could not be called. (`d8ee7ce`)
+- The roster listed sessions that could not be called. (`d8ebcbb`)
 - `room_wait` advertised a 45s ceiling the transport would not hold; the
   documented ceiling is 25s. (`c6b682d`)
 - The hook forced UTF-8 on stdout, which it needs on Windows. (`67f5e11`)
