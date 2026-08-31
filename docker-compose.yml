@@ -1,0 +1,72 @@
+# Two instances, because there is only one Agora and it is both the production
+# instance and the development one. `agora` is the stable one meetings live in;
+# `scratch` is the one being changed. Rebuilding scratch cannot drop a stream,
+# a parked `room_wait` or a hook registration in the meeting discussing it.
+#
+# THE PORT CONVENTION
+#   8765  stable  — the meetings. The hook's default AGORA_URL, so nothing has
+#                   to be configured for it to work.
+#   8766  scratch — under development. A session only reaches it if it was
+#                   started with AGORA_URL=http://127.0.0.1:8766 in its
+#                   environment; the hook reads that variable and nothing else.
+#
+# Both publish to 127.0.0.1 only. D4's loopback bind is the security boundary
+# and it has to stay one after the container: publishing to 0.0.0.0 would put an
+# unauthenticated chair's seat on the LAN.
+#
+#   docker compose up -d --build agora
+#   docker compose --profile scratch up -d --build scratch
+#
+# See CONTRIBUTING.md, "Running it in Docker", for the version/tag rule.
+
+name: agora
+
+services:
+  agora:
+    build:
+      context: .
+      args:
+        # Required, not defaulted. A default would tag the stable image `dev`
+        # while the server inside it reported a real version — the tag naming a
+        # build the code disagrees with, which is the whole of D9.
+        AGORA_VERSION: ${AGORA_VERSION:?set it from the package, see CONTRIBUTING.md "Build"}
+    image: agora:${AGORA_VERSION:?set it from the package, see CONTRIBUTING.md "Build"}
+    ports: ["127.0.0.1:8765:8765"]
+    environment:
+      AGORA_PUBLIC_URL: http://127.0.0.1:8765
+    volumes:
+      # A bind rather than a named volume: the JSONL transcripts are the record
+      # and CONTRIBUTING promises they are greppable without the server. This
+      # keeps them exactly where the repo already puts them.
+      - ./rooms:/data/rooms
+      # Without this the container has no session registry, the roster is empty,
+      # every session reads as offline and Call cannot reach anything. Read-only
+      # — Agora only ever reads it. If you leave it out, the page says so rather
+      # than showing an empty roster as if nobody were running.
+      - ~/.claude/sessions:/root/.claude/sessions:ro
+    restart: unless-stopped
+
+  scratch:
+    # Not started by a bare `up`: the whole point is that the stable instance
+    # stays up while this one is torn down and rebuilt.
+    profiles: ["scratch"]
+    build:
+      context: .
+      args:
+        # This default never fires, and that is worth stating rather than
+        # leaving as a comment that lies: compose interpolates the whole file
+        # before it selects a profile, so the stable service's `:?` above has
+        # already failed by the time scratch is considered. Kept only to shape
+        # scratch's LABEL when the variable IS set.
+        AGORA_VERSION: ${AGORA_VERSION:-scratch}
+    image: agora:scratch
+    ports: ["127.0.0.1:8766:8765"]
+    environment:
+      # The published host port, not the bound one. This is the URL the invite
+      # text tells a human to run `claude mcp add` against.
+      AGORA_PUBLIC_URL: http://127.0.0.1:8766
+    volumes:
+      # A separate transcript directory. A scratch build must not be able to
+      # write into the meetings that are actually happening.
+      - ./rooms-scratch:/data/rooms
+      - ~/.claude/sessions:/root/.claude/sessions:ro

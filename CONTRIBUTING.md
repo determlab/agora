@@ -2,7 +2,7 @@
 type: contributing
 owner: repo-agent
 scope: repo/agora
-reviewed: 2026-08-31
+reviewed: 2026-09-01
 ---
 
 # Contributing to Agora
@@ -18,7 +18,7 @@ change what is required of a change; it changes who reads this file.
 ```
 python -m venv .venv
 .venv/Scripts/python -m pip install pytest
-.venv/Scripts/python -m pytest -q      # 130 tests, ~150s
+.venv/Scripts/python -m pytest -q      # 149 tests, ~150s
 .venv/Scripts/python -m agora.server   # http://127.0.0.1:8765
 ```
 
@@ -49,11 +49,13 @@ hooks/
   agora_hook.py  a Claude Code SessionStart hook. Runs in OTHER sessions
 rooms/
   <id>.jsonl     one file per meeting; replayed on restart, greppable without the server
+Dockerfile          the stable instance. Installs nothing — there is nothing to install
+docker-compose.yml  the two-instance case: stable on 8765, scratch on 8766
 ```
 
 ## Before you change anything
 
-Read `docs/DECISIONS.md`. Seven locked decisions govern this repo and four of
+Read `docs/DECISIONS.md`. Nine locked decisions govern this repo and four of
 them are hard stops in `.agent-loop.yml` — a change that breaks one is not a
 change, it is a proposal to supersede a decision, and it goes to the founder.
 
@@ -139,6 +141,158 @@ hand, restart one session, and confirm it still registers and still wakes.
 The seq the old line handed to `since` is not dropped — it moves into the
 `cursors` map under this room's id, which is where the wildcard reads it. The
 doubled braces are the f-string escape for the literal JSON object.
+
+## Running it in Docker
+
+Agora is developed **inside a meeting held in Agora**. Restarting the process to
+pick up a change drops every SSE stream, every parked `room_wait` and every hook
+registration — during the conversation about the change. There is one instance,
+it is the production instance, and it is also the development instance. The
+container is how those stop being the same process.
+
+### Build
+
+The image tag follows `agora/__init__.py` (D9). Read it out rather than typing
+it, or the tag starts naming a build the code disagrees with:
+
+```powershell
+$env:AGORA_VERSION = .venv\Scripts\python.exe -c "import agora; print(agora.__version__)"
+docker build --build-arg AGORA_VERSION=$env:AGORA_VERSION -t agora:$env:AGORA_VERSION .
+```
+
+Set it in the environment rather than a local `$v`, because compose reads it
+from there and the two must not be able to disagree. **`docker compose` refuses
+to build without it** — it is `${AGORA_VERSION:?...}`, not a default, so the
+stable instance cannot be built as `agora:dev` while the server inside it
+reports a real version. That was this PR's own bug before the reviewer caught
+it: a documented run path that quietly tagged the production image `dev`.
+
+`AGORA_VERSION` is a build arg, not a literal in the Dockerfile, so there is
+still exactly one place the number lives. `tests/test_version.py` fails if a
+version string is written into the Dockerfile, and fails if the four surfaces
+that report one — MCP `serverInfo`, the HTTP `Server:` header, `/api/state` and
+the page — stop agreeing. Bumping a version is a one-line edit and a rebuild.
+
+Nothing is installed in the image: no pip stage, no apt. Agora is
+standard-library only (D2) and the Dockerfile is the likeliest place for that to
+quietly stop being true, so a test asserts it.
+
+### The port convention
+
+| port | instance | what it is |
+|---|---|---|
+| **8765** | stable | the meetings. `hooks/agora_hook.py` defaults to `http://127.0.0.1:8765`, so nothing has to be configured for it |
+| **8766** | scratch | under development. Torn down and rebuilt while a meeting is live on 8765 |
+
+Both publish to `127.0.0.1` only. D4 — the loopback bind is the security
+boundary — survives the container by moving one layer out: the server binds
+`0.0.0.0` **inside the container's own network namespace**, which nothing but
+the published port can reach, and the port is published on the host loopback.
+Publishing on `0.0.0.0` would put an unauthenticated chair's seat on the LAN.
+
+```powershell
+$env:AGORA_VERSION = .venv\Scripts\python.exe -c "import agora; print(agora.__version__)"
+docker compose up -d --build agora                       # stable, 8765
+docker compose --profile scratch up -d --build scratch   # scratch, 8766
+docker compose --profile scratch down                    # rebuild without touching 8765
+```
+
+`scratch` sits behind a compose profile so a bare `docker compose up` cannot
+start it: the whole point is that one instance stays up while the other is
+destroyed.
+
+### rooms/ is a volume
+
+`rooms/<id>.jsonl` is the record. It is bind-mounted from the repo's own
+`rooms/` rather than kept in a named volume, so the transcripts stay where they
+already are and stay greppable without the server. Scratch writes to
+`rooms-scratch/` — a build under development must not be able to append to a
+meeting that is actually happening.
+
+Verified: a room created through the container survived `docker rm -f`, a
+`docker build --no-cache`, and a fresh `docker run`.
+
+### What the container costs: discovery does not work in it
+
+`agora/discovery.py` reads `~/.claude/sessions/*.json` — Claude Code's registry
+of who is running. Two things break in a container, and the second is the one
+that surprises people:
+
+1. **The path is not there.** `~` is `/root` in the image and nothing wrote a
+   registry into it. Mount it read-only —
+   `-v "$HOME/.claude/sessions:/root/.claude/sessions:ro"`; compose already does.
+2. **Mounting it is not enough.** Every entry is checked against its pid before
+   it is reported online, and those pids are Windows process ids. Inside the
+   container that check runs in the container's pid namespace, where they mean
+   nothing, so every session is dropped and the roster is empty anyway. No
+   `--pid=host` fixes it on Docker Desktop: the "host" there is the Linux VM,
+   not Windows.
+
+So: **discovery does not work in the container.** The cost is the roster and the
+Call button — the chair cannot see which sessions are running, or wake an idle
+one from the browser. Agents that join over MCP still appear, because a
+participant is a row in a room rather than a registry entry, and the hook's own
+registration still arrives (below).
+
+It does not fail silently, which is the part that matters (D3). An empty roster
+and an unreadable registry render identically, and "nobody is running" is the
+wrong reading of both. `/api/state` carries a `discovery` block with the path it
+looked at, how many session files it found and how many resolved; the page shows
+that where "no session can be called right now" would go; and the server prints
+it once at startup, where `docker logs` will show it:
+
+```
+Agora 0.3.0 on http://127.0.0.1:8766  (bound http://0.0.0.0:8765)
+  rooms   /data/rooms
+  agents  claude mcp add --transport http agora http://127.0.0.1:8766/mcp
+  WARNING 7 session files are readable but none names a process this server can
+  see, so the roster is empty. Agora is running in a container: the pids in
+  those files belong to the host, and they cannot be checked from in here.
+```
+
+Keep the mount anyway. It is what makes that message specific rather than "the
+directory is missing", and it is the half that stops working the moment
+discovery is ever made pid-independent.
+
+### The hook and the MCP registration still work
+
+Neither needs a change, and `hooks/agora_hook.py` was not edited — it is a
+protected path.
+
+**The hook.** It reads `os.environ.get("AGORA_URL", "http://127.0.0.1:8765")`,
+and it runs on the host, not in the container. With `-p 127.0.0.1:8765:8765` the
+default address is still correct, so the stable instance needs no configuration
+at all. To point a session at the scratch instance, start that session with
+`AGORA_URL=http://127.0.0.1:8766` in its environment; the hook reads that
+variable and nothing else. Verified against a running container: `/api/register`
+returns `{"ok": true, ...}`, and the `/api/summons` long poll returns 204 on
+timeout — the wake path the Call button depends on.
+
+The limit is that a session has **one** `AGORA_URL`, so it is hooked into one
+instance. A session started against 8765 does not appear to the scratch instance
+and cannot be called from it.
+
+**The MCP registration.** `claude mcp add --scope user --transport http agora
+http://127.0.0.1:8765/mcp` is unchanged for the stable instance. What the server
+*binds* is not what a client dials, so the URL it advertises — printed at
+startup and pasted into every invite — comes from `AGORA_PUBLIC_URL` (or
+`--public-url`) rather than from the bind. Without it a containerised server
+would hand out `http://0.0.0.0:8765/mcp`, a registration that reaches nothing.
+Compose sets it per instance.
+
+Registering a second server for scratch means a second name (`agora-scratch`),
+and MCP clients connect at session start: a session must be restarted once
+before it can reach a server added after it started (D1's neighbour).
+
+### What a restart still costs
+
+The summons registry is **in memory by design** — a summons is a live
+invitation, not a record, and a call that outlives the hook that would answer it
+is failure 4 in `HANDOFF.md`. Containerising does not change that. Restarting
+the container still drops every registration, every parked `room_wait` and every
+open SSE stream; sessions re-register when their hook next polls, and the chair
+watches them come back. That is the reason for the two-instance convention: the
+point is to restart the *other* one.
 
 ## Known limits
 

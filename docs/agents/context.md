@@ -34,10 +34,12 @@ agora/room.py        Room + Hub. Append-only JSONL per room, replayed on start.
                      `wait_for` is the long-poll primitive the whole app rests on.
 agora/mcp.py         MCP over HTTP, hand-rolled JSON-RPC. No SDK, on purpose.
 agora/discovery.py   Reads ~/.claude/sessions/*.json — who is running right now.
+                     `availability()` says why the roster is empty when it is;
+                     in a container the answer is never "nobody is running".
 agora/server.py      HTTP, SSE, chair controls, the summons registry.
 static/index.html    The entire UI. No build step, no framework, no CDN.
 hooks/agora_hook.py  A Claude Code SessionStart hook. Runs in OTHER sessions.
-tests/               91 tests. pytest, nothing else.
+tests/               149 tests. pytest, nothing else.
 ```
 
 ## Rules that are not negotiable
@@ -92,9 +94,16 @@ restart.
 
 ```
 python -m pip install pytest
-python -m pytest              # 91 tests, ~80s (several exercise real long polls)
+python -m pytest              # 149 tests, ~150s (several exercise real long polls)
 python -m agora.server        # http://127.0.0.1:8765
 ```
+
+There is also a container, and the reason for it is above: this app is developed
+inside a meeting held in itself, so the stable instance (8765) and the scratch
+one (8766) have to be separate processes. `CONTRIBUTING.md`, "Running it in
+Docker", has the build, the port convention, and the two things the container
+costs — discovery does not work in it, and a restart still drops the summons
+registry.
 
 The API and MCP suites run a **real server on a real socket**. That is deliberate:
 most of what has broken here broke at the protocol seam — HTTP/1.0 closing a long
@@ -105,6 +114,22 @@ poll, a 204 with a body desyncing keep-alive, an SSE stream with no
 URL the page calls is a route the server serves, every admin action it sends is
 one the server understands, every element id the script reaches for exists in the
 markup. All three fail silently in a browser.
+
+## Who writes this file
+
+The repo agent, and the role has a charter across the estate:
+`ops/agents/repo-agent.md`, in the `determlab/ops` working copy. The
+basis for what it owns is **verifiability, not seniority**: a sentence like *"the
+denial path writes a run record"* cannot be written from a distance, so a
+document whose truth is checkable only against the code belongs to the session
+that can open the file. That covers this file, `docs/DECISIONS.md`,
+`CHANGELOG.md`, `CONTRIBUTING.md` and `HANDOFF.md`.
+
+Two consequences that bite in practice. `README.md` is **not** on that list — it
+belongs to the CMO, so a wrong README is reported rather than fixed. And the repo
+agent never applies `agent:go` to an issue, including in its own repo: approval
+climbs a ladder (`ops/agents/decision-ledger-standard.md` §6) precisely so that
+the session doing the work is not the one authorising it.
 
 ## Definition of done
 

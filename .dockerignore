@@ -1,0 +1,14 @@
+# The build context is sent to the daemon in full before the first COPY runs,
+# so this is about build time, not about what lands in the image.
+.git
+.github
+.venv
+.pytest_cache
+__pycache__
+**/__pycache__
+# Transcripts are a volume, never image content — copying them in would bake one
+# evening's meetings into every rebuild.
+rooms
+tests
+docs
+*.md
