@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
-from .discovery import invite_text, roster
+from .discovery import claude_sessions, invite_text, roster
 from .mcp import ANY_ROOM, McpHandler
 from .room import (HUMAN, LOBBY, MESSAGE, NOTE, ONLINE_WINDOW, SUMMARY, Hub,
                    Muted, NotSeated, RoomClosed, mention_note)
@@ -57,6 +57,28 @@ def _parked(lobby) -> set[str]:
     now = time.time()
     return {name for name, p in lobby.participants.items()
             if p.last_seen and (now - p.last_seen) < LOBBY_FRESH}
+
+
+def _liveness(entry: dict[str, Any] | None) -> str:
+    """Whether a session could hear a post right now, per Claude Code's registry.
+
+    **A post is not a wake.** The Call button writes into the Lobby, and a Lobby
+    message is only seen by a session already looping on `room_wait`. A session
+    that is `idle` — parked on its human, not inside a tool call — never sees it,
+    so offering Call for one is the same false green this app has shipped on
+    three other surfaces. `busy` is the only registry state a queued call
+    actually lands in, at the end of that turn.
+
+    Anything the registry does not vouch for is `offline`, and that covers stale
+    on its own: `claude_sessions` drops an entry whose heartbeat is past
+    `STALE_AFTER`, so a stale file arrives here as no entry at all. A row can
+    outlive its entry — a seat held over MCP is still a row — and a seat is not
+    a session. An unrecognised status is read as `idle` for the same reason: the
+    honest default is the one that promises less.
+    """
+    if entry is None:
+        return "offline"
+    return "busy" if entry.get("status") == "busy" else "idle"
 
 
 class Summons:
@@ -296,6 +318,9 @@ class Handler(BaseHTTPRequestHandler):
         lobby = self.app.hub.get(LOBBY)
         waiting = _parked(lobby)
         rows = roster(self.app.hub)
+        # `roster` has just read the registry and that read is cached for a
+        # second, so this is a dict build rather than a second scan of disk.
+        live = {s["name"]: s for s in claude_sessions()}
         now = time.time()
         for row in rows:
             queued = self.app.summons.pending(row["name"])
@@ -305,24 +330,31 @@ class Handler(BaseHTTPRequestHandler):
                 handed = None
             row["hooked"] = row["name"] in reg
             row["in_lobby"] = row["name"] in waiting
+            # Same class of fact as the two above, and the one that decides
+            # whether Call is worth offering at all — see `_liveness`.
+            row["liveness"] = _liveness(live.get(row["name"]))
             row["pending"] = queued is not None
             row["queued_age"] = int(now - queued["queued_at"]) if queued else 0
             # Woken, told which room, not there yet. Usually it is mid-turn.
             row["awaiting"] = bool(handed)
             row["awaiting_age"] = int(now - handed[0]) if handed else 0
-            # Three honest states:
+            # How the summons stands, which is not the same question as whether
+            # anything is listening — `liveness` answers that one:
             #   now     — hooked or actively waiting; a call wakes it in ~1s
             #   queued  — a call is already sitting in the Lobby for it
-            #   later   — idle; the call queues and arrives on its next turn
-            # Call is never hidden: nothing is lost by calling an idle session,
-            # it just is not instant, and the result says which happened.
+            #   later   — nothing is parked; whether the call is ever picked up
+            #             depends on `liveness`, and for `idle` it is not
             row["reach"] = ("awaiting" if handed
                             else "now" if (row["hooked"] or row["in_lobby"])
                             else "queued" if queued else "later")
         # Reachable first. A session that parks under a role name ("CMO") sits
-        # beside its registry row ("ops-b0"); the callable one sorts up.
+        # beside its registry row ("ops-b0"); the callable one sorts up. A busy
+        # session sorts above an idle one within the same reach, because the
+        # call it queues does eventually land and an idle one's never does.
         order = {"now": 0, "awaiting": 1, "queued": 2, "later": 3}
-        rows.sort(key=lambda r: (order[r["reach"]], r["name"].lower()))
+        rows.sort(key=lambda r: (order[r["reach"]],
+                                 0 if r["liveness"] == "busy" else 1,
+                                 r["name"].lower()))
         return {
             "rooms": [r for r in self.app.hub.listing() if r["id"] != LOBBY],
             "lobby": {"waiting": sorted(waiting)},
@@ -560,6 +592,11 @@ class Handler(BaseHTTPRequestHandler):
             # and deregisters itself within microseconds, so asking afterwards
             # reports "not hooked" for a call that in fact landed.
             hooked = target in self.app.summons.registered()
+            # The same fact the roster row showed before the click, read the
+            # same way. A button that says "idle, not callable" and a response
+            # that says "woken" is how this app taught the chair to distrust it.
+            live = _liveness(next((s for s in claude_sessions()
+                                   if s["name"] == target), None))
             # Two ways to reach a session, tried together because each covers a
             # case the other does not: the hook reaches an idle session, the
             # Lobby reaches one that never restarted.
@@ -587,17 +624,33 @@ class Handler(BaseHTTPRequestHandler):
                     kind=MESSAGE, role=HUMAN, provider="human")
             room.post("agora", f"{target} called to the room by the chair",
                       kind="system", role=HUMAN)
+            # A parked hook and a parked `room_wait` are the two measured wake
+            # paths, and both work whatever the registry says the session is
+            # doing. Without one of them the call is only a Lobby post, so what
+            # happens next is `live`'s answer, not this button's.
             woke = hooked or reached_lobby
+            if woke:
+                note = ""
+            elif live == "busy":
+                note = (f"{target} is mid-turn, so nothing woke it just now. "
+                        f"The call is queued in the Lobby and arrives when it "
+                        f"finishes that turn. Nothing is lost; it is just not "
+                        f"instant.")
+            elif live == "idle":
+                note = (f"{target} is idle — waiting on its human, not in a "
+                        f"tool loop — and a call is a post, so there is nothing "
+                        f"there to read it. The call is parked in the Lobby, "
+                        f"but no session picks it up until that one takes a "
+                        f"turn. To reach it now, type in that session's "
+                        f"terminal.")
+            else:
+                note = (f"There is no live session called {target} — no "
+                        f"registry entry, or its heartbeat has gone stale. The "
+                        f"call is parked in the Lobby in case it comes back, "
+                        f"but nothing was reached.")
             return self._json({
                 "ok": True, "hooked": hooked, "in_lobby": reached_lobby,
-                "woke": woke,
-                "note": "" if woke else
-                        f"{target} is idle — not hooked and not actively "
-                        f"waiting — so nothing woke it just now. The call is "
-                        f"queued in the Lobby and will be delivered the next "
-                        f"time that session takes a turn and checks. Nothing "
-                        f"is lost; it is just not instant. To reach it now, "
-                        f"type in its window.",
+                "liveness": live, "woke": woke, "note": note,
             })
         if what == "prune":
             gone = room.prune()

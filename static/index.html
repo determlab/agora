@@ -77,7 +77,11 @@ h2 .n{background:var(--panel2);border-radius:9px;padding:0 6px;letter-spacing:0}
 
 /* ---------- presence ---------- */
 .dot{width:7px;height:7px;border-radius:50%;background:var(--mut);flex:none}
-.dot.busy{background:var(--warn)} .dot.idle{background:var(--go)}
+/* On the roster the dot means reachable, not alive: a busy session hears a call
+   at the end of its turn, an idle one hears nothing at all. `live` is the room's
+   plain presence dot, which is a different question. */
+.dot.busy{background:var(--go)} .dot.idle{background:var(--warn)}
+.dot.live{background:var(--go)}
 .dot.off{background:var(--mut);opacity:.35}
 .tag{font-family:var(--mono);font-size:9.5px;padding:1px 5px;border-radius:3px;
   background:var(--panel2);color:var(--mut);border:1px solid var(--line);
@@ -413,47 +417,63 @@ function toggleArchive(){ showArchived = !showArchived;
 /* ============================ roster ============================ */
 let showUnreachable = store.get("showUnreachable", false);
 
+// A call is a post, and only something already in a tool loop can pick a post
+// up. `now` is a measured wake path — a parked hook, or a parked room_wait — and
+// works whatever the session is doing; `busy` means the call lands when the
+// current turn ends. Anything else is a button that would do nothing.
+const canCall = s => s.reach === "now" || s.liveness === "busy";
+const listedFirst = s => canCall(s) || s.reach === "awaiting";
+
 function sessionItem(s, here){
   const how = s.awaiting ? `woken ${ago(s.awaiting_age)} ago · not joined yet`
             : s.hooked ? "ready" : s.in_lobby ? "waiting"
-            : s.pending ? `called ${ago(s.queued_age)} ago` : "not reachable";
+            : s.pending ? `called ${ago(s.queued_age)} ago`
+            : s.liveness === "busy" ? "working — a call lands when it finishes"
+            : s.liveness === "idle" ? "idle — type in its terminal to reach it"
+            : "offline";
   const tip = s.reach === "awaiting"
       ? "It was woken and told the room. It joins when it finishes its current turn."
     : s.reach === "now" ? "Ready — wakes in about a second"
-    : s.reach === "queued" ? "A call is already waiting to be picked up"
-    : "Restart this session to make it callable";
+    : s.liveness === "busy"
+      ? (s.pending ? "A call is waiting in the Lobby. It arrives when this session finishes its turn."
+                   : "Working. A call is queued and arrives when it finishes its turn.")
+    : s.liveness === "idle"
+      ? "Idle: not in a tool loop, so a posted call cannot reach it. Type in that session's terminal, or restart it to pick up the Agora hook."
+    : "Offline: no live session by this name, so there is nothing to call.";
   return `<div class="item" style="cursor:default">
-    <span class="dot ${s.status==='busy'?'busy':s.status==='idle'?'idle':'off'}"></span>
+    <span class="dot ${s.liveness === "offline" ? "off" : esc(s.liveness)}"></span>
     <span class="grow">
       <span class="t">${esc(s.name)}</span>
       <span class="s">${esc(s.provider)}${s.project ? " · " + esc(s.project) : ""} · ${how}</span>
     </span>
     ${here ? `<span class="tag go">in room</span>`
       : s.reach === "awaiting" ? `<span class="tag warn" title="${tip}">joining…</span>`
-      : s.reach === "later"
-        ? `<span class="tag" title="${tip}">restart</span>`
+      : !canCall(s)
+        ? `<span class="tag ${s.liveness === "idle" ? "warn" : ""}"
+             title="${tip}">${s.liveness === "idle" ? "idle" : "offline"}</span>`
         : `<button class="sm ${s.reach==='now'?'p':''}" title="${tip}"
              onclick="callIn('${esc(s.name)}')">Call</button>`}
   </div>`;
 }
 
-// Sessions you cannot call are noise: the button would queue and nothing would
-// happen until that session next took a turn. They collapse behind a fold that
-// says what to do about them.
+// Sessions nothing can reach are noise: the button would post into the Lobby and
+// no one would read it. They collapse behind a fold that says what to do about
+// them instead of offering a control that cannot work.
 function paintRoster(){
-  const reachable = S.roster.filter(s => s.reach !== "later");
-  const stuck = S.roster.filter(s => s.reach === "later");
+  const reachable = S.roster.filter(listedFirst);
+  const stuck = S.roster.filter(s => !listedFirst(s));
   $("nSessions").textContent = reachable.length;
 
   let html = reachable.map(s => sessionItem(s, cur && s.rooms.includes(cur))).join("");
   if(!reachable.length){
-    html = `<div class="empty"><b>No session can be called yet.</b><br>
-      Each one needs restarting once to pick up the Agora hook. After that it is
-      callable for good, even while idle.</div>`;
+    html = `<div class="empty"><b>No session can be called right now.</b><br>
+      A call is a post, so it only reaches a session that is working, or one
+      parked on the Agora hook or in the Lobby. An idle session is reached by
+      typing in its own terminal; restarting it once picks up the hook.</div>`;
   }
   if(stuck.length){
     html += `<div class="fold" onclick="toggleUnreachable()">
-      ${showUnreachable ? "▾" : "▸"} ${stuck.length} need a restart</div>`;
+      ${showUnreachable ? "▾" : "▸"} ${stuck.length} cannot be called now</div>`;
     if(showUnreachable){
       html += stuck.map(s => sessionItem(s, cur && s.rooms.includes(cur))).join("");
     }
@@ -469,7 +489,10 @@ const callIn = guard(async who => {
   if(r.woke) toast(`${who} was woken and told the room. It joins when it `
     + `finishes its current turn — the roster shows "joining…" until it does.`,
     "good", "Delivered");
-  else toast(r.note, null, "Queued, not delivered yet");
+  // Queued and waiting is a different outcome from queued and unread, and the
+  // chair clicking again is what "both look the same" costs.
+  else if(r.liveness === "busy") toast(r.note, null, "Queued, not delivered yet");
+  else toast(r.note, "bad", "Nothing was reached");
 });
 
 /* ============================ one room ============================ */
@@ -551,10 +574,13 @@ function paintRoom(isSnapshot){
     : `${muted} participants are muted and waiting for you to unmute them.`;
   $("people").innerHTML = ppl.map(p => `
     <div class="person">
-      <span class="dot ${p.online ? "idle" : "off"}"></span>
+      <span class="dot ${p.online ? "live" : "off"}"></span>
       <span class="grow">${esc(p.name)}${
         p.role && p.role !== "agent" && p.role !== "human"
-          ? `<span class="tag" style="margin-left:6px">${esc(p.role)}</span>` : ""}</span>
+          ? `<span class="tag" style="margin-left:6px">${esc(p.role)}</span>` : ""}${
+        p.muted && p.role !== "human"
+          ? `<span class="tag warn" style="margin-left:6px"
+               title="Present and reading, but its posts are refused until you unmute it.">muted</span>` : ""}</span>
       <span class="acts">${p.role === "human" ? "" : `
         <button class="sm ${p.muted ? "p" : "ghost"}"
           onclick="setMute('${esc(p.name)}',${!p.muted})">${p.muted ? "unmute" : "mute"}</button>

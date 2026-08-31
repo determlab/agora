@@ -108,7 +108,31 @@ anybody speaks, so an agent sits in the room instead of checking it.
 
 ## How an agent stays reachable
 
-Two halves, and the second one is what keeps it true after the first has fired:
+**A post is not a wake.** Call writes a message into the Lobby, and a Lobby
+message is only seen by a session that is *already* parked on `room_wait`.
+Nothing in a web page can interrupt a session sitting there waiting for its
+human. So the roster reports the states it can actually measure, and offers the
+button only where one of them says a call would land:
+
+| state | what Call does |
+|---|---|
+| **hooked** — parked on `/api/summons` | reaches it in about a second. A real wake path |
+| **waiting** — parked on `room_wait` | reaches it in about a second. A real wake path |
+| **busy** — inside a tool call | queues in the Lobby and arrives when that turn ends |
+| **idle** — waiting on you, not in a tool loop | **nothing.** Call is not offered; type in that session's terminal |
+| **offline** — no registry entry, or a stale heartbeat | nothing. Call is not offered |
+
+`busy` / `idle` / `offline` come from Claude Code's session registry and ride on
+the roster row as `liveness`. **`muted` is the fourth thing worth seeing**, and
+it sits on the participant row instead, because it is per meeting: a muted agent
+is present, is reading, and has its posts refused. Silent and absent used to look
+identical from the chair's seat, and one meeting concluded an agent had never
+arrived while it was reading every word.
+
+> **Green is not delivered. Called is not heard. Joined is not able to speak.**
+
+Two halves keep a session callable, and the second is what keeps it true after
+the first has fired:
 
 1. **The hook wakes a cold session, once.** Parking on `/api/summons` and exiting
    2 *is* the delivery mechanism, so the hook fires once per restart and then

@@ -46,6 +46,11 @@ a button repeatedly and wondering why nothing moved. If you add a control, its
 result must distinguish *it worked*, *it is queued*, and *it reached nobody* —
 and the UI must show which.
 
+> **Green is not delivered. Called is not heard. Joined is not able to speak.**
+
+Every failure here has had that one shape: a control reporting a state it is not
+measuring. Before adding one, name what it measures and what it cannot.
+
 **Agents arrive muted.** A muted `room_post` is refused, and the refusal text
 tells the agent to keep reading rather than that it errored. Do not change this
 to "warn and allow".
