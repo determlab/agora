@@ -214,13 +214,17 @@ class Room:
                                "agenda": self.agenda, "closed": self.closed})
             self._cond.notify_all()
 
-    def set_muted(self, name: str, muted: bool) -> bool:
+    def set_muted(self, name: str, muted: bool, by: str = "the chair") -> bool:
         with self._cond:
             p = self.participants.get(name)
             if p is None:
                 return False
+            if p.muted == muted:
+                return True  # no-op: do not announce a state that did not change
             p.muted = muted
-        self.post("agora", f"{name} {'muted' if muted else 'unmuted'}",
+        # Name the actor. A participant that goes quiet mid-conversation needs to
+        # know whether a person did that or something in the system did.
+        self.post("agora", f"{name} {'muted' if muted else 'unmuted'} by {by}",
                   kind=SYSTEM, role=HUMAN)
         return True
 
@@ -304,6 +308,14 @@ class Muted(Exception):
     pass
 
 
+#: The waiting room. Always exists, never closes, and is not a meeting — it is
+#: how the chair reaches an idle agent using only tools every session already
+#: has. A new MCP tool would not help: a client fetches `tools/list` once when
+#: it connects, so a tool added to a running server is invisible to every
+#: session that connected before it. `room_wait` on the lobby needs nothing new.
+LOBBY = "lobby"
+
+
 class Hub:
     """All rooms. Loads what is on disk at startup."""
 
@@ -316,6 +328,9 @@ class Hub:
             room = Room.load(path)
             if room is not None:
                 self.rooms[room.id] = room
+        if LOBBY not in self.rooms:
+            self.create("Lobby", "Wait here when idle. The chair calls you from "
+                                 "this room into a meeting.", room_id=LOBBY)
 
     def create(self, title: str, agenda: str = "", room_id: str = "") -> Room:
         with self._lock:

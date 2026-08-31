@@ -27,7 +27,7 @@ from urllib.parse import parse_qs, urlparse
 
 from .discovery import invite_text, roster
 from .mcp import McpHandler
-from .room import HUMAN, MESSAGE, NOTE, SUMMARY, Hub, Muted, RoomClosed
+from .room import HUMAN, LOBBY, MESSAGE, NOTE, SUMMARY, Hub, Muted, RoomClosed
 
 STATIC = Path(__file__).resolve().parent.parent / "static"
 CHAIR = "chair"
@@ -152,13 +152,19 @@ class Handler(BaseHTTPRequestHandler):
 
         if path == "/api/state":
             reg = self.app.summons.registered()
+            lobby = self.app.hub.get(LOBBY)
+            waiting = set(lobby.participants) if lobby else set()
             rows = roster(self.app.hub)
             for row in rows:
-                # "connected" means the session's hook checked in with this
-                # server, so a call button on that row will actually reach it.
-                row["connected"] = row["name"] in reg
+                # Two independent ways to be reachable, reported separately so
+                # the UI can say *why* a session cannot be called rather than
+                # offering a button that does nothing.
+                row["hooked"] = row["name"] in reg
+                row["in_lobby"] = row["name"] in waiting
+                row["callable"] = row["hooked"] or row["in_lobby"]
             return self._json({
-                "rooms": self.app.hub.listing(),
+                "rooms": [r for r in self.app.hub.listing() if r["id"] != LOBBY],
+                "lobby": {"waiting": sorted(waiting)},
                 "roster": rows,
                 "chair": self.app.chair_name,
                 "url": self.app.public_url,
@@ -327,21 +333,40 @@ class Handler(BaseHTTPRequestHandler):
                 room.set_meta(title=text)
                 return self._json({"ok": True})
             if what == "call":
-                # Summon a session into this room. Reaches it through its
-                # SessionStart hook's long-poll, which wakes the agent.
-                if target not in self.app.summons.registered():
-                    return self._json(
-                        {"error": f"{target} has no Agora hook running. Install "
-                                  f"the hook and restart that session — see "
-                                  f"README, 'Auto-connect'."}, 409)
-                self.app.summons.call(target, {
-                    "room": room.id, "title": room.title, "agenda": room.agenda,
-                    "seq": room.snapshot()["seq"], "name": target,
-                    "url": self.app.public_url,
-                })
+                # Three ways to reach a session, tried together because each
+                # covers a case the others do not.
+                payload = {"room": room.id, "title": room.title,
+                           "agenda": room.agenda, "seq": room.snapshot()["seq"],
+                           "name": target, "url": self.app.public_url}
+                # 1 + 2. The SessionStart hook's long-poll, and agora_standby.
+                #        Both land in the same registry.
+                self.app.summons.call(target, payload)
+                # 3. The lobby. An agent parked in `room_wait` on the lobby sees
+                #    this immediately, and `room_wait` exists in every session
+                #    already connected — which a newly added tool does not.
+                lobby = self.app.hub.get(LOBBY)
+                reached_lobby = False
+                if lobby is not None:
+                    reached_lobby = target in lobby.participants
+                    lobby.post(
+                        self.app.chair_name,
+                        f"@{target} — the chair calls you into "
+                        f"{room.title!r} (room id `{room.id}`). "
+                        f"room_join with room=\"{room.id}\" and name=\"{target}\", "
+                        f"then room_history, then loop on room_wait from seq "
+                        f"{payload['seq']}. You arrive muted; wait for the chair "
+                        f"to unmute you.",
+                        kind=MESSAGE, role=HUMAN, provider="human")
                 room.post("agora", f"{target} called to the room by the chair",
                           kind="system", role=HUMAN)
-                return self._json({"ok": True})
+                hooked = target in self.app.summons.registered()
+                return self._json({
+                    "ok": True, "hooked": hooked, "in_lobby": reached_lobby,
+                    "note": "" if (hooked or reached_lobby) else
+                            f"{target} is neither hooked nor waiting in the "
+                            f"lobby, so nothing woke it. The call is queued and "
+                            f"will be delivered the moment it parks.",
+                })
             if what == "prune":
                 gone = room.prune()
                 return self._json({"ok": True, "dropped": gone})
