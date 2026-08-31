@@ -20,9 +20,23 @@ from .room import AGENT, MESSAGE, NOTE, SUMMARY, Hub, Muted, RoomClosed
 PROTOCOL_VERSION = "2025-06-18"
 SERVER_INFO = {"name": "agora", "version": "0.1.0"}
 
-# Long-poll ceiling. Kept under a typical 60s client read timeout so `room_wait`
-# returns empty rather than dying, and the agent loops instead of erroring out.
-MAX_WAIT = 45.0
+# Long-poll ceiling.
+#
+# Was 45s. A session parked at exactly that value got
+# `The socket connection was closed unexpectedly.` while 20s returned cleanly,
+# so something between the two — a client read timeout, most likely — cuts the
+# connection below the value this tool advertised.
+#
+# The advertised maximum is the thing to fix, not the guidance. A ceiling nobody
+# can actually reach is a trap: it works in a live room, where a dropped poll is
+# invisible because you retry into an ongoing conversation, and it fails while
+# *parked*, where a dropped poll is a missed Call — the chair clicks, the button
+# reports success, nothing arrives. That is the same false-green this mechanism
+# exists to remove, one layer down.
+#
+# 25s is comfortably inside the observed-good range and still wakes in about a
+# second when something actually happens, because the wait returns on notify.
+MAX_WAIT = 25.0
 
 
 def _text(payload: Any) -> dict[str, Any]:
@@ -80,7 +94,10 @@ TOOLS: list[dict[str, Any]] = [
         "description": "Block until somebody speaks, then return what was said. "
                        "This is how you stay in a meeting: pass the highest seq you "
                        "have seen, and call it again after each reply. Returns an "
-                       "empty list on timeout — that is normal, call it again.",
+                       "empty list on timeout — that is normal, call it again. "
+                       "Also how you wait in the lobby: room_wait on room=\"lobby\" "
+                       "returns the moment the chair calls you into a meeting. "
+                       "Leave timeout unset unless you have a reason.",
         "inputSchema": {
             "type": "object",
             "properties": {

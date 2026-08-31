@@ -32,6 +32,26 @@ from .room import HUMAN, LOBBY, MESSAGE, NOTE, SUMMARY, Hub, Muted, RoomClosed
 STATIC = Path(__file__).resolve().parent.parent / "static"
 CHAIR = "chair"
 
+#: How recently a lobby participant must have polled to count as parked.
+#: `room_wait` refreshes `last_seen` on every call and its ceiling is 45s, so a
+#: session that is genuinely waiting touches this at least that often. Two
+#: windows allows one missed poll before we stop claiming it is reachable.
+#:
+#: Membership alone is NOT liveness. A session that joined the lobby and then
+#: crashed, was killed, or lost its connection stays in `participants` forever,
+#: and reporting that as reachable rebuilds the exact false-green this whole
+#: mechanism exists to remove — only with a longer fuse.
+LOBBY_FRESH = 95.0
+
+
+def _parked(lobby) -> set[str]:
+    """Who is actually waiting in the lobby right now, not who ever joined it."""
+    if lobby is None:
+        return set()
+    now = time.time()
+    return {name for name, p in lobby.participants.items()
+            if p.last_seen and (now - p.last_seen) < LOBBY_FRESH}
+
 
 class Summons:
     """The chair calling a session into a room.
@@ -91,7 +111,11 @@ class Agora:
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "Agora/0.1"
+    server_version = "Agora/0.2"
+    # BaseHTTPRequestHandler defaults to HTTP/1.0, which closes the connection
+    # after every response. Long polls and SSE both want a connection that
+    # survives, and every response here sets Content-Length, which 1.1 requires.
+    protocol_version = "HTTP/1.1"
     app: Agora  # injected on the server instance
 
     # ---- plumbing ----------------------------------------------------------
@@ -153,7 +177,7 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/state":
             reg = self.app.summons.registered()
             lobby = self.app.hub.get(LOBBY)
-            waiting = set(lobby.participants) if lobby else set()
+            waiting = _parked(lobby)
             rows = roster(self.app.hub)
             for row in rows:
                 # Two independent ways to be reachable, reported separately so
@@ -162,6 +186,10 @@ class Handler(BaseHTTPRequestHandler):
                 row["hooked"] = row["name"] in reg
                 row["in_lobby"] = row["name"] in waiting
                 row["callable"] = row["hooked"] or row["in_lobby"]
+            # Reachable first. A session that joined the lobby under a role name
+            # ("CMO") appears alongside its registry row ("ops-b0"); the chair
+            # cares about the one that can actually be called, so it sorts up.
+            rows.sort(key=lambda r: (not r["callable"], r["name"].lower()))
             return self._json({
                 "rooms": [r for r in self.app.hub.listing() if r["id"] != LOBBY],
                 "lobby": {"waiting": sorted(waiting)},
@@ -176,7 +204,9 @@ class Handler(BaseHTTPRequestHandler):
             secs = min(float((query.get("timeout") or ["300"])[0]), 900.0)
             payload = self.app.summons.wait(who, secs)
             if payload is None:
-                return self._json({"summoned": False}, 204)
+                # 204 must carry no body — sending one desyncs a keep-alive
+                # connection under HTTP/1.1.
+                return self._send(204, b"", "application/json")
             return self._json({"summoned": True, **payload})
 
         if path.startswith("/api/rooms/"):
@@ -216,7 +246,11 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream; charset=utf-8")
         self.send_header("Cache-Control", "no-store")
-        self.send_header("Connection", "keep-alive")
+        # No Content-Length and no chunked framing on this one, so under
+        # HTTP/1.1 it has to be read-until-close. Say so explicitly, or the
+        # client waits for a body length that never comes.
+        self.send_header("Connection", "close")
+        self.close_connection = True
         self.end_headers()
         seq = 0
         try:
@@ -347,7 +381,8 @@ class Handler(BaseHTTPRequestHandler):
                 lobby = self.app.hub.get(LOBBY)
                 reached_lobby = False
                 if lobby is not None:
-                    reached_lobby = target in lobby.participants
+                    # Parked means polling, not merely present — see LOBBY_FRESH.
+                    reached_lobby = target in _parked(lobby)
                     lobby.post(
                         self.app.chair_name,
                         f"@{target} — the chair calls you into "
