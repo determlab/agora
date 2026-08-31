@@ -347,3 +347,96 @@ def test_room_post_says_which_mentioned_seats_were_listening(server):
     assert is_error is False
     assert posted["mentions"] == [{"name": "ghost", "listening": False}]
     assert "nothing woke" in posted["note"]
+
+
+#: The three tools that write. Their replies carry a seq, and none of those seqs
+#: is a read position.
+WRITE_TOOLS = ("room_post", "room_note", "room_summarize")
+
+
+def test_a_write_seq_is_not_a_read_cursor(server):
+    """The test that would have caught it. Room 23c152bd: a `room_wait` returned
+    through seq 23, "CMO joined — muted" landed at 24, `room_post` returned 25,
+    and 25 was used as the next cursor. Seq 24 was never delivered, and the
+    session reported in the room and to the COO that the CMO had been woken
+    while the CMO sat there muted for ten minutes.
+
+    The gap is the whole defect: a write's seq is ahead of what you have read by
+    however much was said while you were composing, and skipping it is silent.
+    """
+    _, room = server.post("/api/rooms", {"title": "cursor", "name": "Hemi"})
+    rid = room["id"]
+    server.tool("room_join", {"room": rid, "name": "bot"})
+    server.post(f"/api/rooms/{rid}/admin", {"action": "unmute", "target": "bot"})
+
+    caught_up, _ = server.tool("room_wait", {"room": rid, "name": "bot",
+                                             "since": 0, "timeout": 1})
+    read_to = caught_up["seq"]
+
+    # Somebody arrives while the agent is composing, exactly as the CMO did.
+    server.tool("room_join", {"room": rid, "name": "CMO"})
+    posted, is_error = server.tool("room_post", {"room": rid, "name": "bot",
+                                                 "text": "CMO has been woken"})
+    assert is_error is False
+    assert posted["posted"] > read_to + 1, "there must be a real gap to skip"
+
+    from_the_real_cursor, _ = server.tool("room_wait", {"room": rid, "name": "bot",
+                                                        "since": read_to,
+                                                        "timeout": 1})
+    assert any("CMO joined" in e["text"]
+               for e in from_the_real_cursor["events"]), \
+        "the arrival is there for a cursor that came from a read"
+
+    from_the_posted_seq, _ = server.tool("room_wait", {"room": rid, "name": "bot",
+                                                       "since": posted["posted"],
+                                                       "timeout": 1})
+    assert from_the_posted_seq["events"] == [], \
+        "and gone for one that came from a write — the silent skip"
+
+    # So the reply has to say so, in the reply: a session already parked holds
+    # the tool schema it connected with and never re-reads the description.
+    assert "room_wait" in posted["cursor"]
+
+
+def test_every_write_tool_says_in_its_description_that_its_seq_is_not_a_cursor(
+        server):
+    """A tool description is a seam that fails silently, like the URLs and
+    element ids in tests/test_ui.py: it is fetched once at connect, nothing
+    renders it, and a safety warning that falls out of one is invisible until an
+    agent skips an event and reports something that did not happen."""
+    by_name = {t["name"]: t for t in server.rpc("tools/list")["tools"]}
+    for name in WRITE_TOOLS:
+        text = by_name[name]["description"]
+        assert "cursor" in text, f"{name} must say what its seq is not"
+        assert "room_wait" in text, f"{name} must say what does advance one"
+
+
+def test_only_the_wildcard_wait_hands_back_a_cursor(server):
+    """`cursors` is the resting state's whole contract, so nothing else may
+    return something a caller could take for it. Each write returns exactly one
+    number, and says beside it that the number is not a position to read from."""
+    _, room = server.post("/api/rooms", {"title": "one cursor", "name": "Hemi"})
+    rid = room["id"]
+    server.tool("room_join", {"room": rid, "name": "bot"})
+    server.post(f"/api/rooms/{rid}/admin", {"action": "unmute", "target": "bot"})
+
+    args = {"room": rid, "name": "bot", "text": "words"}
+    for name in WRITE_TOOLS:
+        payload, is_error = server.tool(name, args)
+        assert is_error is False
+        assert "cursors" not in payload, f"{name} must not look like a wait"
+        assert "room_wait" in payload["cursor"]
+        numbers = [k for k, v in payload.items() if isinstance(v, int)]
+        assert len(numbers) == 1, \
+            f"{name} returns one seq; a second number makes the wrong one a coin toss"
+
+    # The two replies that DO carry a usable start point carry it as `seq`, and
+    # both hand over everything below it — you have read what they returned.
+    for name in ("room_join", "room_history"):
+        payload, _ = server.tool(name, {"room": rid, "name": "bot"})
+        assert "cursors" not in payload and isinstance(payload["seq"], int)
+
+    wild, _ = server.tool("room_wait", {"room": ANY_ROOM, "name": "bot",
+                                        "timeout": 1})
+    assert isinstance(wild["cursors"], dict), \
+        "and the one map in the API comes from the one call that reads"

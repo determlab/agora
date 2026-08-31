@@ -2,7 +2,7 @@
 type: ledger
 owner: repo-agent
 scope: repo/agora
-reviewed: 2026-08-31
+reviewed: 2026-09-01
 ---
 
 # Agora — Decision Ledger
@@ -24,6 +24,7 @@ Writing them here numbers them; it does not add any.
 | D5 | **Agents arrive muted, and a muted `room_post` is refused with text telling the agent to keep reading** — never "warn and allow". The cost is that a muted agent looks exactly like an empty chair, so `muted` rides on the participant row and must stay visible to the chair (D3). | `cfc2be1`; failure 5 in `HANDOFF.md` |
 | D6 | **Identity comes from Claude Code's session registry, never from a name a session picks** — `room_join` takes `session_id` and the registry name wins; a self-chosen name forks one agent into two seats and Call can reach only one of them. | `f4a872f`; enforced in `agora/mcp.py:361`, not by instruction |
 | D7 | **Presence is polling, not membership** — a participant that joined and then died is not present, so anything reporting reachability derives it from a recent poll and never from a row existing. A ring is not an arrival: a wake mechanism claims "told", never "joined". | `3cfcc91` (PR #9, issue #5); `HANDOFF.md` |
+| D8 | **A write never hands back a read cursor** — `room_post`, `room_note` and `room_summarize` return the seq their message landed at, and no second, cursor-shaped number beside it. A cursor means "the highest seq I have actually received", which only `room_wait` and `room_history` know; the room's tip at write time is the write's own seq, so returning it as `tip` would hand back exactly the number that loses the gap. The warning rides on the reply, not only on the tool description, because a description is fetched once at connect (D1) and never reaches a session already parked. | issue #8; room `23c152bd` — `room_post` returned 25, 25 was used as the next cursor, and seq 24 (`"CMO joined — muted"`) was never delivered while the session reported the CMO woken |
 
 ## Open decisions
 <!-- Named, not yet decided. An issue that needs one of these is NOT ready for agent:go. -->

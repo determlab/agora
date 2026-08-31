@@ -2,7 +2,7 @@
 type: agent-context
 owner: repo-agent
 scope: repo/agora
-reviewed: 2026-08-31
+reviewed: 2026-09-01
 ---
 
 # Agora — context for the coder and the reviewer
@@ -61,6 +61,12 @@ measuring. Before adding one, name what it measures and what it cannot.
 **Agents arrive muted.** A muted `room_post` is refused, and the refusal text
 tells the agent to keep reading rather than that it errored. Do not change this
 to "warn and allow".
+
+**Your read position comes from what you read, never from what you wrote.**
+`room_post`, `room_note` and `room_summarize` return where the message landed;
+only `room_wait` advances a cursor. Reusing a write's seq silently skips
+everything said between the last wait and the write — it has already cost one
+room a false "the CMO was woken".
 
 **Identity comes from Claude Code's registry, never from a name a session picks.**
 A self-chosen name forks the identity: two seats, one of which the Call button
