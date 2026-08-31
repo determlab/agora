@@ -108,6 +108,73 @@ def claude_sessions(directory: Path | None = None,
     return out
 
 
+def _in_container() -> bool:
+    """Best-effort: is this process inside a container?
+
+    Only used to choose the wording of a warning, never to change behaviour —
+    a wrong guess costs a slightly off sentence, not a wrong roster.
+    """
+    if Path("/.dockerenv").exists():
+        return True
+    try:
+        return "docker" in Path("/proc/1/cgroup").read_text() or                Path("/run/.containerenv").exists()
+    except OSError:
+        return False
+
+
+def availability(directory: Path | None = None) -> dict[str, Any]:
+    """Whether the roster could be built, and what to say when it could not.
+
+    An empty roster has three causes that render identically, and only one of
+    them is "nobody is running":
+
+    1. The registry directory is not there at all. Normal inside a container,
+       where ``~/.claude`` belongs to a user who does not exist.
+    2. It is there and readable, but every entry names a pid this process cannot
+       see. Also normal inside a container: the session files were written by
+       Windows processes and the pid check runs in the container's own pid
+       namespace, where those numbers mean nothing or mean something else. On
+       Docker Desktop there is no ``--pid=host`` that fixes this — the "host"
+       is the Linux VM, not Windows. **Mounting the directory is necessary and
+       not sufficient**; discovery does not work in a container here.
+    3. Every session really has exited, leaving stale files behind — the case
+       the pid check exists for.
+
+    2 and 3 are the same measurement, so this reports the measurement (files
+    found, files that resolved) and names both readings rather than picking one.
+    Reporting any of the three as "nobody is running" is the defect class this
+    repo refuses (D3).
+
+    ``available`` answers only "can the directory be read". ``note`` carries the
+    second warning, so the page can show both without conflating them.
+    """
+    directory = directory or CLAUDE_SESSIONS
+    if not directory.exists():
+        return {
+            "available": False, "path": str(directory), "files": 0, "live": 0,
+            "note": "",
+            "reason": ("No Claude Code session registry at this path, so the "
+                       "roster cannot be built and nothing can be called — "
+                       "which is not the same as nobody running. In a "
+                       "container, mount the host's ~/.claude/sessions "
+                       "read-only; see CONTRIBUTING.md."),
+        }
+    files = len(list(directory.glob("*.json")))
+    live = len(claude_sessions(directory if directory != CLAUDE_SESSIONS else None))
+    note = ""
+    if files and not live:
+        note = (f"{files} session files are readable but none names a process "
+                f"this server can see, so the roster is empty.")
+        note += (" Agora is running in a container: the pids in those files "
+                 "belong to the host, and they cannot be checked from in here. "
+                 "Discovery does not work in a container — see CONTRIBUTING.md."
+                 if _in_container() else
+                 " Either every session has exited and left its file behind, "
+                 "or those pids belong to another machine.")
+    return {"available": True, "path": str(directory), "files": files,
+            "live": live, "note": note, "reason": ""}
+
+
 def canonical_name(session_id: str) -> str:
     """The registry's name for a session id, or "" if it is not a live session.
 

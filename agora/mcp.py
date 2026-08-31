@@ -15,12 +15,16 @@ from __future__ import annotations
 import json
 from typing import Any, Callable
 
+from . import __version__
 from .discovery import canonical_name
 from .room import (AGENT, LOBBY, MESSAGE, NOTE, SUMMARY, Hub, Muted,
                    NotSeated, RoomClosed, mention_note)
 
 PROTOCOL_VERSION = "2025-06-18"
-SERVER_INFO = {"name": "agora", "version": "0.1.0"}
+#: Read from `agora.__version__` rather than written out again — three
+#: hand-maintained version strings disagreeing is what D9 settled, and this is
+#: the one a client sees at `initialize`.
+SERVER_INFO = {"name": "agora", "version": __version__}
 
 # Long-poll ceiling.
 #

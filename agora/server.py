@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import threading
 import time
 import webbrowser
@@ -24,7 +25,8 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
-from .discovery import claude_sessions, invite_text, roster
+from . import __version__
+from .discovery import availability, claude_sessions, invite_text, roster
 from .mcp import ANY_ROOM, McpHandler
 from .room import (HUMAN, LOBBY, MESSAGE, NOTE, ONLINE_WINDOW, SUMMARY, Hub,
                    Muted, NotSeated, RoomClosed, mention_note)
@@ -197,7 +199,10 @@ class Agora:
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "Agora/0.2"
+    # Read from `agora.__version__` (D9). It used to say 0.2 while the package
+    # and `serverInfo` both said 0.1.0, which is how "which version am I
+    # looking at" had three answers.
+    server_version = f"Agora/{__version__}"
     # BaseHTTPRequestHandler defaults to HTTP/1.0, which closes the connection
     # after every response. Long polls and SSE both want a connection that
     # survives, and every response here sets Content-Length, which 1.1 requires.
@@ -361,6 +366,14 @@ class Handler(BaseHTTPRequestHandler):
             "roster": rows,
             "chair": self.app.chair_name,
             "url": self.app.public_url,
+            # The chair must be able to answer "which version is this" without
+            # leaving the browser — behaviour changing under someone mid-meeting
+            # is the reason this issue exists.
+            "version": __version__,
+            # Not the roster's contents, but whether the roster could be built
+            # at all. An unreadable registry and an empty one render identically
+            # otherwise, and "nobody is running" is the wrong reading (D3).
+            "discovery": availability(),
         }
 
     def _state_stream(self) -> None:
@@ -698,18 +711,38 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--root", type=Path, default=Path(__file__).resolve().parent.parent,
                         help="where rooms/ lives")
     parser.add_argument("--no-open", action="store_true", help="don't open a browser")
+    # What a *client* should dial, which is not always what the server binds.
+    # In a container the bind is 0.0.0.0 (the container's interface) while the
+    # reachable address is the host loopback and possibly a different published
+    # port; `claude mcp add http://0.0.0.0:8765/mcp` registers a server nothing
+    # can reach, and the invite text is the one place that URL is copied by hand.
+    parser.add_argument("--public-url", default=os.environ.get("AGORA_PUBLIC_URL", ""),
+                        help="the URL clients dial, if it differs from the bind "
+                             "(a published container port); env AGORA_PUBLIC_URL")
     args = parser.parse_args(argv)
 
-    url = f"http://{args.host}:{args.port}"
+    bound = f"http://{args.host}:{args.port}"
+    # A wildcard bind is not an address. Falling back to loopback keeps the
+    # printed and advertised URL dialable when nobody passed --public-url.
+    url = args.public_url.rstrip("/") or (
+        f"http://127.0.0.1:{args.port}" if args.host in ("0.0.0.0", "::", "")
+        else bound)
     app = Agora(args.root, url)
 
     handler = type("BoundHandler", (Handler,), {"app": app})
     httpd = ThreadingHTTPServer((args.host, args.port), handler)
     httpd.daemon_threads = True
 
-    print(f"Agora on {url}")
+    print(f"Agora {__version__} on {url}" + (f"  (bound {bound})" if url != bound else ""))
     print(f"  rooms   {app.hub.root}")
     print(f"  agents  claude mcp add --transport http agora {url}/mcp")
+    # Said once, loudly, at the only moment a human is definitely reading: an
+    # empty roster is otherwise indistinguishable from "nobody is running", and
+    # in a container that is the default state rather than an edge case. It is
+    # also on `/api/state`, because the chair is in a browser, not in this log.
+    seen = availability()
+    if seen["reason"] or seen["note"]:
+        print(f"  WARNING {seen['reason'] or seen['note']}")
     if not args.no_open:
         threading.Timer(0.4, lambda: webbrowser.open(url)).start()
     try:

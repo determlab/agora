@@ -167,6 +167,17 @@ footer{flex:none;border-top:1px solid var(--line);padding:11px 18px;
 .me .lbl{font-family:var(--mono);font-size:9.5px;letter-spacing:.14em;
   text-transform:uppercase;color:var(--mut)}
 .me strong{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+/* The build the chair is actually looking at. Development happens inside a
+   meeting held in this page, so "which version is this" has to be answerable
+   without leaving the browser — small enough to ignore, present enough to read
+   out when behaviour changes under someone mid-meeting. */
+.ver{font-family:var(--mono);font-size:9.5px;color:var(--mut);flex:none;
+  align-self:flex-end;letter-spacing:.04em}
+
+/* An unreadable session registry is not an empty one. This says which. */
+.alert{margin:0 14px 10px;padding:8px 10px;border-radius:7px;font-size:12px;
+  line-height:1.45;color:var(--warn);border:1px solid var(--warn)}
+.alert b{display:block;margin-bottom:2px}
 
 /* ---------- modal + toast ---------- */
 .mask{position:fixed;inset:0;background:rgba(0,0,0,.6);display:grid;
@@ -240,6 +251,7 @@ pre{background:var(--bg);border:1px solid var(--line);border-radius:var(--r);
       <span class="av" id="meAv">?</span>
       <span class="grow"><span class="lbl">You are</span><strong id="meName"></strong></span>
       <button class="ghost sm" onclick="askName()" title="Change your display name">edit</button>
+      <span class="ver" id="ver" title="The Agora server this page is talking to"></span>
     </div>
   </aside>
 
@@ -304,7 +316,8 @@ pre{background:var(--bg);border:1px solid var(--line);border-radius:var(--r);
 <script>
 "use strict";
 /* ============================ state ============================ */
-let S = {rooms:[], roster:[], chair:"chair", url:""};
+let S = {rooms:[], roster:[], chair:"chair", url:"", version:"",
+         discovery:{available:true, path:"", reason:"", note:""}};
 let cur = null, snap = null, roomES = null, stateES = null;
 let ME = "", seen = {}, unread = {};   // seen: messages already read per room
 
@@ -371,6 +384,7 @@ function watchState(){
       unread[r.id] = Math.max(0, r.messages - seen[r.id]);
     }
     store.set("seen", seen);
+    $("ver").textContent = S.version ? "v" + S.version : "";
     paintRooms(); paintRoster();
   });
   stateES.onopen = () => $("conn").classList.remove("show");
@@ -464,8 +478,22 @@ function paintRoster(){
   const stuck = S.roster.filter(s => !listedFirst(s));
   $("nSessions").textContent = reachable.length;
 
-  let html = reachable.map(s => sessionItem(s, cur && s.rooms.includes(cur))).join("");
-  if(!reachable.length){
+  // "Nobody is running" and "I cannot see the registry" produce the same empty
+  // list, and only one of them is about the sessions. The second is the normal
+  // state in a container with nothing mounted, so it says so rather than
+  // letting the chair read an empty roster as an answer.
+  // Two separate facts, and the second is the one that bites: the directory can
+  // be readable and still yield nothing, because the pids in it belong to a
+  // machine this process cannot see. Both produce an empty list; neither means
+  // "nobody is running", so the list does not get to imply it.
+  const d = S.discovery || {available:true, note:""};
+  const trouble = !d.available ? d.reason : d.note;
+  let html = trouble ? `<div class="alert">
+    <b>Session discovery is not working.</b>${esc(trouble)}
+    ${d.path ? `<br>Looked in <code>${esc(d.path)}</code>.` : ""}</div>` : "";
+
+  html += reachable.map(s => sessionItem(s, cur && s.rooms.includes(cur))).join("");
+  if(!reachable.length && !trouble){
     html = `<div class="empty"><b>No session can be called right now.</b><br>
       A call is a post, so it only reaches a session that is working, or one
       parked on the Agora hook or in the Lobby. An idle session is reached by

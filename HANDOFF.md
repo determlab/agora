@@ -2,7 +2,7 @@
 type: agent-context
 owner: repo-agent
 scope: repo/agora
-reviewed: 2026-08-31
+reviewed: 2026-09-01
 ---
 
 # Handoff — Agora development moves to its own session
@@ -15,8 +15,10 @@ this file is only what that one does not cover.
 
 **Agora is being developed inside a meeting held in Agora.** Every restart to
 pick up a change drops every SSE stream, every parked `room_wait` and every hook
-registration — during the conversation about the change. That is issue #10 and it
-should probably be the first thing you do.
+registration — during the conversation about the change. That was issue #10, and
+it is done: the container and the 8765/8766 port convention are in
+`CONTRIBUTING.md`. A restart still costs the summons registry, which is in
+memory by design — the point of two instances is to restart the other one.
 
 The COO session also has a company to run. Agora work belongs here now.
 
@@ -25,7 +27,7 @@ The COO session also has a company to run. Agora work belongs here now.
 | | |
 |---|---|
 | Repo | `determlab/agora`, private, default branch `main` |
-| Tests | 114, `.venv\Scripts\python.exe -m pytest -q`, ~150s |
+| Tests | 149, `.venv\Scripts\python.exe -m pytest -q`, ~150s |
 | CI | 8 cells, 3.10–3.13 × Linux/Windows, green |
 | Loop | `/agent-loop:watch` is set up and has run twice |
 | `auto_merge` | **false**, deliberately — branch protection needs GitHub Pro on a private repo. The loop stops at "ready to merge" and a human merges |
@@ -33,7 +35,9 @@ The COO session also has a company to run. Agora work belongs here now.
 **Open now:** PR #9 (issue #5, reviewer PASS, awaiting merge).
 
 **Queue with `agent:go`:** #6 (@mention), #8 (`room_post`'s cursor trap).
-**Filed, not queued:** #10 (Docker + versioning), #7 (**RFC — do not queue**).
+**Filed, not queued:** #7 (**RFC — do not queue**). #10 (Docker + versioning) is
+done; it also settled open decision O2 as **D9**, so there is one version string
+now and the image tag follows it.
 
 ## How the loop is configured, and the one thing to understand about it
 
