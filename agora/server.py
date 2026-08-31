@@ -25,7 +25,7 @@ from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 from .discovery import invite_text, roster
-from .mcp import McpHandler
+from .mcp import ANY_ROOM, McpHandler
 from .room import (HUMAN, LOBBY, MESSAGE, NOTE, ONLINE_WINDOW, SUMMARY, Hub,
                    Muted, NotSeated, RoomClosed)
 
@@ -574,9 +574,11 @@ class Handler(BaseHTTPRequestHandler):
                     f"@{target} — the chair calls you into "
                     f"{room.title!r} (room id `{room.id}`). "
                     f"room_join with room=\"{room.id}\" and name=\"{target}\", "
-                    f"then room_history, then loop on room_wait from seq "
-                    f"{payload['seq']}. You arrive muted; wait for the chair "
-                    f"to unmute you.",
+                    f"then room_history, then loop on room_wait. When idle, "
+                    f"rest on room_wait with room=\"{ANY_ROOM}\" and "
+                    f"cursors={{\"{room.id}\": {payload['seq']}}} — one call "
+                    f"covers every room you are in plus the lobby. You arrive "
+                    f"muted; wait for the chair to unmute you.",
                     kind=MESSAGE, role=HUMAN, provider="human")
             room.post("agora", f"{target} called to the room by the chair",
                       kind="system", role=HUMAN)

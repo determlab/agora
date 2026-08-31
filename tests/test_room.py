@@ -117,6 +117,99 @@ def test_wait_for_returns_immediately_when_the_room_closes(hub: Hub):
     assert time.time() - started < 1.0
 
 
+def test_wait_any_covers_every_room_from_one_parked_call(hub: Hub):
+    """The whole point of the wildcard: a session in three meetings parks once.
+
+    One waiter, not one per room — a thread or a held lock per room is what
+    deadlocks or leaks as soon as an agent sits in a few meetings.
+    """
+    rooms = [hub.create(f"m{i}") for i in range(3)]
+    for room in rooms:
+        room.join("bot", role=AGENT)
+        room.join("hemi", role=HUMAN)
+    _, cursors = hub.wait_any("bot", {}, timeout=0.1)   # park from now
+
+    got: list = []
+    threads_before = threading.active_count()
+
+    def waiter():
+        got.append(hub.wait_any("bot", cursors, timeout=5.0))
+
+    t = threading.Thread(target=waiter)
+    t.start()
+    time.sleep(0.2)
+    threads_during = threading.active_count()
+    started = time.time()
+    rooms[2].post("hemi", "over here", role=HUMAN)
+    t.join(timeout=5)
+
+    assert time.time() - started < 1.0, "it must wake on notify, not poll"
+    assert threads_during == threads_before + 1, "one parked call, not one per room"
+    events, _ = got[0]
+    assert [(rid, e.text) for rid, e in events] == [(rooms[2].id, "over here")]
+
+
+def test_wait_any_cursors_are_per_room_and_never_re_read(hub: Hub):
+    """A single integer cannot address several rooms — seqs are per room. The
+    caller echoes the cursor map back and loops without seeing anything twice."""
+    a, b = hub.create("a"), hub.create("b")
+    for room in (a, b):
+        room.join("bot", role=AGENT)
+        room.join("hemi", role=HUMAN)
+
+    _, cursors = hub.wait_any("bot", {}, timeout=0.1)
+    a.post("hemi", "in a", role=HUMAN)
+    b.post("hemi", "in b", role=HUMAN)
+
+    first, cursors = hub.wait_any("bot", cursors, timeout=5.0)
+    assert {(rid, e.text) for rid, e in first} == {(a.id, "in a"), (b.id, "in b")}
+    second, _ = hub.wait_any("bot", cursors, timeout=0.3)
+    assert second == [], "echoing the cursors back must not re-read those events"
+
+
+def test_wait_any_watches_the_lobby_and_your_own_rooms_only(hub: Hub):
+    """The Lobby is always in the set — that is where a call into a room you are
+    not in yet arrives. A meeting you are not seated in is not."""
+    mine = hub.create("mine")
+    mine.join("bot", role=AGENT)
+    theirs = hub.create("theirs")
+    theirs.join("someone-else", role=AGENT)
+    lobby = hub.get(LOBBY)
+
+    _, cursors = hub.wait_any("bot", {}, timeout=0.1)
+    assert set(cursors) == {LOBBY, mine.id}
+
+    theirs.post("hemi", "not for you", role=HUMAN)
+    events, cursors = hub.wait_any("bot", cursors, timeout=0.3)
+    assert events == []
+
+    lobby.post("hemi", "the chair calls you", role=HUMAN)
+    events, _ = hub.wait_any("bot", cursors, timeout=5.0)
+    assert [e.text for _, e in events] == ["the chair calls you"]
+
+
+def test_wait_any_does_not_wake_you_for_your_own_words(hub: Hub):
+    room = hub.create("echo")
+    room.join("bot", role=AGENT)
+    room.set_muted("bot", False)
+    _, cursors = hub.wait_any("bot", {}, timeout=0.1)
+    room.post("bot", "mine", role=AGENT)
+
+    events, cursors = hub.wait_any("bot", cursors, timeout=0.3)
+    assert events == []
+    assert cursors[room.id] == room.tip(), "but the cursor still moves past it"
+
+
+def test_wait_any_keeps_the_seats_it_is_waiting_on_alive(hub: Hub):
+    """Presence is polling. One parked call has to refresh every seat it covers,
+    or a session in three rooms is reported dead in two of them."""
+    room = hub.create("presence")
+    room.join("bot", role=AGENT)
+    room.participants["bot"].last_seen = 0.0
+    hub.wait_any("bot", {}, timeout=0.1)
+    assert time.time() - room.participants["bot"].last_seen < 5.0
+
+
 def test_a_room_replays_from_disk_exactly(hub: Hub, tmp_path):
     room = hub.create("persisted", agenda="does it come back")
     room.join("hemi", role=HUMAN)

@@ -32,6 +32,37 @@ AGENT = "agent"
 #: than in two places that can drift apart.
 ONLINE_WINDOW = 95.0
 
+#: One bell for every room, rung by every mutation.
+#:
+#: A wait across several rooms cannot block on each room's own condition: that is
+#: a lock held per room, or a thread spawned per room, and both fall over as soon
+#: as a session sits in a few meetings. So a fan-in waiter sleeps here and
+#: re-checks its rooms when it wakes. The counter is what makes a missed wake-up
+#: impossible — a waiter reads it *before* scanning and only sleeps if it has not
+#: moved since, so an event that lands mid-scan is picked up on the next pass
+#: instead of slept through. Rooms are never locked while this is held, so the
+#: two lock orders cannot meet.
+_bell = threading.Condition()
+_pulse = 0
+
+
+def _ring() -> None:
+    global _pulse
+    with _bell:
+        _pulse += 1
+        _bell.notify_all()
+
+
+def _bell_pulse() -> int:
+    with _bell:
+        return _pulse
+
+
+def _await_bell(pulse: int, timeout: float) -> None:
+    with _bell:
+        if _pulse == pulse:
+            _bell.wait(timeout=timeout)
+
 
 @dataclass
 class Event:
@@ -155,7 +186,8 @@ class Room:
                 p.last_seen = ev.ts
             self._append_disk({"t": "event", "e": ev.as_dict()})
             self._cond.notify_all()
-            return ev
+        _ring()
+        return ev
 
     def join(self, name: str, *, role: str = AGENT, provider: str = "",
              session_id: str = "", cwd: str = "") -> Participant:
@@ -239,6 +271,7 @@ class Room:
                                "agenda": self.agenda, "closed": self.closed,
                                "archived": self.archived})
             self._cond.notify_all()
+        _ring()
 
     def set_muted(self, name: str, muted: bool, by: str = "the chair") -> bool:
         with self._cond:
@@ -255,6 +288,12 @@ class Room:
         return True
 
     # ---- reads -------------------------------------------------------------
+
+    def tip(self) -> int:
+        """The highest seq in this room. `snapshot()` also reports it, but that
+        copies every event, and a fan-in wait asks this of every room it watches."""
+        with self._lock:
+            return self._seq
 
     def since(self, seq: int) -> list[Event]:
         with self._lock:
@@ -399,6 +438,58 @@ class Hub:
             if r.title == ref:
                 return r
         return None
+
+    def rooms_for(self, name: str) -> list[Room]:
+        """Every room *name* holds a seat in, plus the Lobby.
+
+        The Lobby is always in the set: a call into a meeting this session is not
+        in yet arrives there, so watching only the rooms already joined would
+        miss exactly the event that matters.
+        """
+        with self._lock:
+            rooms = list(self.rooms.values())
+        return [r for r in rooms if r.id == LOBBY or name in r.participants]
+
+    def wait_any(self, name: str, cursors: dict[str, int],
+                 timeout: float) -> tuple[list[tuple[str, Event]], dict[str, int]]:
+        """Fan-in over `Room.wait_for`: block until anything happens in any room
+        *name* is in, or in the Lobby.
+
+        Returns the events paired with the room they came from, and the cursors
+        to hand back on the next call. Sequence numbers are per room, so one
+        integer cannot address several rooms — the cursor is a map, and a caller
+        that echoes it back never re-reads an event it already has.
+
+        One parked call for a session in any number of rooms: the waiter sleeps
+        on the shared bell rather than on each room's own condition.
+        """
+        deadline = time.time() + timeout
+        cursors = dict(cursors)
+        while True:
+            pulse = _bell_pulse()
+            fresh: list[tuple[str, Event]] = []
+            for room in self.rooms_for(name):
+                room.touch(name)
+                seq = cursors.get(room.id)
+                if seq is None:
+                    # A room with no cursor starts at its tip. The resting state
+                    # is "tell me what happens next", not "replay every join the
+                    # Lobby has seen since the server started".
+                    seq = cursors[room.id] = room.tip()
+                for ev in room.since(seq):
+                    cursors[room.id] = ev.seq
+                    # Move past your own words without waking for them. A
+                    # single-room wait drops them from its reply; here that would
+                    # return an empty list the instant you spoke, which is a spin.
+                    if ev.author != name:
+                        fresh.append((room.id, ev))
+            if fresh:
+                fresh.sort(key=lambda pair: pair[1].ts)
+                return fresh, cursors
+            remaining = deadline - time.time()
+            if remaining <= 0:
+                return [], cursors
+            _await_bell(pulse, min(remaining, 5.0))
 
     def listing(self) -> list[dict[str, Any]]:
         return [{"id": r.id, "title": r.title, "agenda": r.agenda,

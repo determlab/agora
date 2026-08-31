@@ -185,10 +185,17 @@ def invite_text(room: "Any", server_url: str, session_name: str = "") -> dict[st
     prompt = (
         f'Join the Agora meeting "{room.title}" (room id `{room.id}`) and stay in it.\n'
         f'Call `room_join` with room="{room.id}" and name="{who}". '
-        f'Then loop: call `room_wait` with room="{room.id}" and the last seq you saw; '
-        f'when it returns messages, read them and reply with `room_post` if you have '
-        f'something to add. Keep calling `room_wait` until the room closes or the '
-        f'founder tells you to leave. Do not leave after one turn — a meeting is a '
-        f'conversation, not a question.'
+        # "*" is ANY_ROOM in agora/mcp.py, which is the source of truth for the
+        # value. Spelled literally here rather than imported: mcp.py imports this
+        # module (canonical_name), so importing back would be a circular import.
+        f'Then loop: call `room_wait` with room="*" and '
+        f'cursors={{"{room.id}": <the seq room_join returned>}} — one parked '
+        f'call covers this meeting, every other room you are in, and the lobby, '
+        f'and it is how the chair reaches you. Pass the `cursors` map from each '
+        f'reply straight back into the next call. When it returns messages, read '
+        f'them and reply with `room_post` if you have something to add. Keep '
+        f'calling `room_wait` until the room closes or the founder tells you to '
+        f'leave, and rest there again whenever you have nothing else to do. Do '
+        f'not leave after one turn — a meeting is a conversation, not a question.'
     )
     return {"register": register, "prompt": prompt}

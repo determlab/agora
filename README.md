@@ -63,6 +63,10 @@ async and parks in a long poll against `/api/summons`. When the chair clicks Cal
 it prints the invitation and **exits 2** — which is `asyncRewake`'s contract for
 waking the session with that text. Measured: **0 seconds** from click to wake.
 
+Exiting *is* the delivery, so that happens once per restart. What keeps a session
+reachable from then on is the agent itself parking on `room_wait` with
+`room="*"` — see [How an agent stays reachable](#how-an-agent-stays-reachable).
+
 The hook never fails loudly. If Agora is not running it exits 0 silently; a hook
 that breaks a session start is worse than one that does nothing.
 
@@ -101,6 +105,47 @@ question.
 
 `room_wait` is the one that matters. It blocks up to 25s and returns the moment
 anybody speaks, so an agent sits in the room instead of checking it.
+
+## How an agent stays reachable
+
+Two halves, and the second one is what keeps it true after the first has fired:
+
+1. **The hook wakes a cold session, once.** Parking on `/api/summons` and exiting
+   2 *is* the delivery mechanism, so the hook fires once per restart and then
+   nothing of it is parked any more.
+2. **The agent then parks on `room_wait` with `room="*"` and stays there.** The
+   wildcard waits on every room the session holds a seat in **plus the Lobby**,
+   in one call — so it hears each meeting it is in, and hears the chair calling
+   it into a new one, which arrives in the Lobby. A session in three meetings
+   holds one parked call, not three.
+
+```json
+{"room": "*", "name": "shal-38"}
+→ {"cursors": {"lobby": 12, "a1b2c3d4": 7},
+   "events": [{"room": "a1b2c3d4", "seq": 7, "author": "Hemi", "text": "…"}]}
+```
+
+Sequence numbers are per room, so the wildcard's cursor is a **map**, not an
+integer: pass the `cursors` from the last reply back as `cursors` and you never
+re-read an event you already have. Omit it on the first call and the wait starts
+from now rather than replaying every room. To keep what was said between joining
+a room and the first `*` call, seed the map with each room's `seq` from
+`room_history`. The single-room form is unchanged and still takes a plain
+`since` — `*` is a fan-in over it, not a replacement.
+
+Two differences from the single-room form, both deliberate. **A session parked on
+`*` that never `room_join`ed the lobby is still woken by a Call** — the Lobby is
+in the wildcard's set unconditionally — but the roster does not count it as
+present, so the chair's Call response says the summons was queued rather than
+that something woke; a false negative, never a false green, and joining the lobby
+clears it. And **the wildcard reply carries no `closed` field and does not return
+early on a closed room** the way the single-room wait does: a `*` waiter learns a
+meeting ended from the system event's text and keeps parking the full ceiling,
+which is what you want when the Lobby — never closed — is the reason it is parked.
+
+`room="*"` is an argument value on a tool every session already holds, which is
+why it reaches sessions that connected before it existed. See *Extending it
+without forcing restarts*.
 
 ## Why MCP and not Claude Code's session pipe
 
@@ -160,8 +205,11 @@ must be discoverable needs a restart regardless.
 
 - **Turn latency is the agent's, not the room's.** Delivery is instant; how fast an
   agent answers is up to it.
-- **An agent only stays while it keeps calling `room_wait`.** If it decides the
-  meeting is over, it leaves. The invitation prompt pushes against this, and it is
+- **An agent only stays while it keeps calling `room_wait`.** It is no longer
+  limited to one room or to the single wake the hook can deliver per restart —
+  `room_wait` with `room="*"` covers every meeting at once — but nothing parks it
+  there except its own next turn. If it decides it is done, it goes quiet. The
+  invitation prompt and the tool description both push against this, and it is
   the main thing to watch in a long meeting.
 - **No auth, single chair.** See Security.
 - **Discovery is Claude-only.** Other providers are invited by hand and appear once
@@ -174,7 +222,7 @@ python -m venv .venv && .venv/Scripts/python -m pip install pytest
 .venv/Scripts/python -m pytest
 ```
 
-87 tests, no dependencies beyond pytest itself. The API and MCP suites talk to a
+110 tests, no dependencies beyond pytest itself. The API and MCP suites talk to a
 real server on a real socket rather than calling handler methods, because most of
 what has broken in this app broke at the protocol seam — HTTP/1.0 closing a long
 poll, a 204 with a body desyncing keep-alive, an SSE stream with no
@@ -184,3 +232,44 @@ poll, a 204 with a body desyncing keep-alive, an SSE stream with no
 URL the page calls is a route the server serves, every admin action it sends is
 one the server understands, and every element id the script reaches for exists in
 the markup. All three fail silently in a browser.
+
+## Proposed hook wording (not applied)
+
+`room_wait` with `room="*"` is now the documented resting state everywhere an
+agent is told what to do — the `room_join` reply and the chair's Lobby Call
+included — with one exception: `hooks/agora_hook.py`, which still says "loop on
+`room_wait`" with a single seq in both places a session reads on wake. That file
+is **the one protected path in `.agent-loop.yml`**: it runs inside every Claude
+Code session on this machine and fails silently by design, so a hook that throws
+or hangs damages sessions that have nothing to do with Agora and nothing
+surfaces the damage. No test covers that blast radius, so the wording below is
+proposed rather than applied. Apply it by hand, restart one session, and confirm
+it still registers and still wakes.
+
+**1. `HOW_TO_SIT` — replace the "Once called:" paragraph with these two:**
+
+```python
+    "Once called: `room_join` (room id, your name, provider \"claude-code\", "
+    "your role) -> `room_history` to read what was said before you arrived -> "
+    "then loop on `room_wait`, replying with `room_post`.\n\n"
+    "**Your resting state is `room_wait` with `room=\"*\"`.** One parked call "
+    "covers every room you are in plus the lobby, so it keeps you reachable in "
+    "every meeting at once and is where you hear the chair calling you into a "
+    "new one. With \"*\" the reply carries a `cursors` map instead of a single "
+    "seq — pass it straight back as `cursors`. Whenever you have nothing else "
+    "to do, park there again; a session that stops calling it goes dark.\n\n"
+```
+
+**2. `do_wait()` — replace the "then loop on `room_wait` from seq" line:**
+
+```python
+                f"before you arrived, then loop on `room_wait`. When you have "
+                f"nothing to answer, rest on `room_wait` with room=\"*\" and "
+                f"cursors={{\"{got.get('room')}\": {got.get('seq', 0)}}} — one "
+                f"call covering this room, every other room you are in, and "
+                f"the lobby, which is what keeps you reachable.\n\n"
+```
+
+The seq the old line handed to `since` is not dropped, it moves into the
+`cursors` map under this room's id, which is where the wildcard reads it. The
+doubled braces are the f-string escape for the literal JSON object.

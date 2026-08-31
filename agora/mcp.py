@@ -40,12 +40,36 @@ SERVER_INFO = {"name": "agora", "version": "0.1.0"}
 # second when something actually happens, because the wait returns on notify.
 MAX_WAIT = 25.0
 
+#: `room_wait` on every room at once. An argument value, not a new tool: a client
+#: fetches `tools/list` once at connect, so a tool added later is invisible to
+#: every session already running — which is always the sessions that needed it.
+#: An unrecognised argument *value* reaches them untouched.
+ANY_ROOM = "*"
+
 
 def _text(payload: Any) -> dict[str, Any]:
     body = payload if isinstance(payload, str) else json.dumps(payload,
                                                                ensure_ascii=False,
                                                                indent=2)
     return {"content": [{"type": "text", "text": body}]}
+
+
+def _cursors(value: Any) -> dict[str, int]:
+    """The room→seq map a `*` wait resumes from, tolerant of what a model sends.
+
+    Anything that is not a map — missing, 0, a bare seq copied from a
+    single-room wait — means "start from now" rather than an error, because the
+    alternative is replaying every room's whole transcript at an agent.
+    """
+    if not isinstance(value, dict):
+        return {}
+    out: dict[str, int] = {}
+    for room_id, seq in value.items():
+        try:
+            out[str(room_id)] = int(seq)
+        except (TypeError, ValueError):
+            continue
+    return out
 
 
 def _err(message: str) -> dict[str, Any]:
@@ -104,17 +128,36 @@ TOOLS: list[dict[str, Any]] = [
                        "This is how you stay in a meeting: pass the highest seq you "
                        "have seen, and call it again after each reply. Returns an "
                        "empty list on timeout — that is normal, call it again. "
-                       "Also how you wait in the lobby: room_wait on room=\"lobby\" "
-                       "returns the moment the chair calls you into a meeting. "
+                       "USE room=\"*\" AS YOUR RESTING STATE: it waits on every "
+                       "room you are in and the lobby at once, so one call keeps "
+                       "you reachable in every meeting and hears the chair calling "
+                       "you into a new one. With \"*\" the reply carries a "
+                       "`cursors` map instead of a single seq — pass it straight "
+                       "back as `cursors` next call and you never re-read anything. "
+                       "Whenever you have nothing else to do, call this again with "
+                       "room=\"*\"; an agent that stops calling it goes dark. "
                        "Leave timeout unset unless you have a reason.",
         "inputSchema": {
             "type": "object",
             "properties": {
-                "room": {"type": "string"},
+                "room": {"type": "string",
+                         "description": "Room id or exact title, or \"*\" for "
+                                        "every room you are in plus the lobby"},
                 "name": {"type": "string"},
                 "since": {"type": "integer",
                           "description": "Highest seq you already have. 0 for "
-                                         "everything since you joined."},
+                                         "everything since you joined. Ignored "
+                                         "when room is \"*\" — seqs are per room, "
+                                         "so use `cursors` there."},
+                "cursors": {"type": "object",
+                            "description": "room=\"*\" only: the `cursors` map "
+                                           "from your last reply, echoed back. "
+                                           "Omit it on the first call and the "
+                                           "wait starts from now, which skips "
+                                           "anything said between joining a room "
+                                           "and this call — to keep that gap, "
+                                           "seed the map with each room's `seq` "
+                                           "from `room_history` instead."},
                 "timeout": {"type": "number",
                             "description": f"Seconds to wait, max {MAX_WAIT}"},
             },
@@ -219,7 +262,10 @@ class McpHandler:
                         "Agora is a meeting room shared by a human chair and any "
                         "number of agents. Join with room_join, read the room with "
                         "room_history, then loop on room_wait and reply with "
-                        "room_post. Stay until the room closes.",
+                        "room_post. Stay until the room closes, and whenever you "
+                        "have nothing else to do rest on room_wait with "
+                        "room=\"*\" — that covers every room you are in plus the "
+                        "lobby, and is how the chair reaches you.",
                 }
             elif method == "ping":
                 result = {}
@@ -267,10 +313,12 @@ class McpHandler:
         if not rooms:
             return _text("No rooms yet — the chair creates them. If you have "
                          "nothing else to do, room_join the \"lobby\" and "
-                         "room_wait there; the chair calls you from it.")
+                         "room_wait with room=\"*\"; the chair calls you from it.")
         return _text({"rooms": rooms,
-                      "lobby": "room_join \"lobby\" and room_wait there when "
-                               "idle — that is how the chair calls you."})
+                      "lobby": "room_join \"lobby\", then rest on room_wait with "
+                               "room=\"*\" — one call covers the lobby and every "
+                               "meeting you are in, and that is how the chair "
+                               "reaches you."})
 
     def _room_join(self, args: dict) -> dict:
         room = self._resolve(args)
@@ -297,8 +345,13 @@ class McpHandler:
             "agenda": room.agenda,
             "seq": snap["seq"],
             "participants": [p["name"] for p in snap["participants"]],
-            "next": "Call room_history for what was said before you arrived, then "
-                    "loop on room_wait with the seq above.",
+            # Read on every join, so it names the wildcard resting state but
+            # stays one sentence longer than the old line, not a paragraph.
+            "next": f"Call room_history for what was said before you arrived, "
+                    f"then loop on room_wait. When idle, rest on room_wait "
+                    f"with room=\"{ANY_ROOM}\" and "
+                    f"cursors={{\"{room.id}\": {snap['seq']}}} — one call "
+                    f"covers every room you are in plus the lobby.",
         })
 
     def _room_post(self, args: dict) -> dict:
@@ -314,11 +367,13 @@ class McpHandler:
         return _text({"posted": ev.seq})
 
     def _room_wait(self, args: dict) -> dict:
-        room = self._resolve(args)
         name = str(args.get("name") or "")
+        timeout = min(float(args.get("timeout") or MAX_WAIT), MAX_WAIT)
+        if str(args.get("room") or "").strip() == ANY_ROOM:
+            return self._room_wait_any(args, name, timeout)
+        room = self._resolve(args)
         room.touch(name)
         since = int(args.get("since") or 0)
-        timeout = min(float(args.get("timeout") or MAX_WAIT), MAX_WAIT)
         events = room.wait_for(since, timeout)
         room.touch(name)
         return _text({
@@ -330,6 +385,32 @@ class McpHandler:
                        if e.author != name],
             "note": "Empty means nobody spoke in the window. Call room_wait again."
                     if not events else "",
+        })
+
+    def _room_wait_any(self, args: dict, name: str, timeout: float) -> dict:
+        """`room_wait` with room="*" — one parked call for every meeting at once.
+
+        The cursor is a map, because sequence numbers are per room and a single
+        integer cannot address several of them. It is read from `cursors`, and
+        from `since` only when that is a map too: a session whose cached schema
+        predates this still sends `cursors` through untouched, whereas `since`
+        was already declared an integer there.
+        """
+        cursors = args.get("cursors")
+        if not isinstance(cursors, dict):
+            cursors = args.get("since")
+        events, cursors = self.hub.wait_any(name, _cursors(cursors), timeout)
+        return _text({
+            "room": ANY_ROOM,
+            "watching": sorted(cursors),
+            "cursors": cursors,
+            "events": [{"room": rid, "seq": e.seq, "author": e.author,
+                        "kind": e.kind, "text": e.text} for rid, e in events],
+            "next": "Pass `cursors` back as `cursors` and call room_wait with "
+                    "room=\"*\" again — that is your resting state, and it is "
+                    "what keeps you reachable in every room at once.",
+            "note": "Empty means nobody spoke in any of your rooms in the "
+                    "window. Call room_wait again." if not events else "",
         })
 
     def _room_history(self, args: dict) -> dict:
