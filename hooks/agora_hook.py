@@ -30,6 +30,14 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
+# Windows stdout defaults to the ANSI codepage, which mangles anything outside
+# it — and this script's whole output is text a session will read.
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+    except (AttributeError, ValueError):  # pragma: no cover - already unicode
+        pass
+
 SERVER = os.environ.get("AGORA_URL", "http://127.0.0.1:8765").rstrip("/")
 SESSIONS = Path.home() / ".claude" / "sessions"
 POLL_SECONDS = 300.0
