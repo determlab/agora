@@ -340,3 +340,68 @@ def test_responses_are_http_1_1_so_long_polls_survive(server):
     shape for a long poll."""
     status, _, headers = server.raw("/api/state")
     assert headers.get("Server", "").startswith("Agora/")
+
+
+# ---- regressions the CTO session found in live use -------------------------
+
+def test_a_registration_expires_when_its_hook_stops_polling(server, monkeypatch):
+    """The async hook exits the moment it delivers one summons. The
+    registration used to outlive it, so every later Call reported waking
+    something that was no longer listening — the chair's tell was clicking
+    three times in a row."""
+    from agora import server as srv
+    server.app.summons.register("bot", {"name": "bot", "via": "hook"})
+    assert "bot" in server.app.summons.registered()
+    monkeypatch.setattr(srv, "REGISTRATION_TTL", -1.0)
+    assert "bot" not in server.app.summons.registered()
+
+
+def test_delivering_a_summons_deregisters_the_hook(server):
+    _, room = server.post("/api/rooms", {"title": "one shot", "name": "Hemi"})
+    server.app.summons.register("bot", {"name": "bot", "via": "hook"})
+    server.post(f"/api/rooms/{room['id']}/admin",
+                {"action": "call", "target": "bot", "name": "Hemi"})
+    assert server.app.summons.wait("bot", 1.0) is not None
+    assert "bot" not in server.app.summons.registered(), (
+        "the hook exits when it delivers; claiming it is still parked is the "
+        "same false green one layer down")
+
+
+def test_a_delivered_call_shows_as_joining_until_the_agent_arrives(server,
+                                                                   monkeypatch,
+                                                                   tmp_path):
+    sessions = tmp_path / "s4"
+    _write_session(sessions, "bot", "sid-bot")
+    monkeypatch.setattr(discovery, "CLAUDE_SESSIONS", sessions)
+    monkeypatch.setattr(discovery, "_cache", (0.0, []))
+
+    _, room = server.post("/api/rooms", {"title": "arriving", "name": "Hemi"})
+    rid = room["id"]
+    server.app.summons.register("bot", {"name": "bot", "via": "hook"})
+    server.post(f"/api/rooms/{rid}/admin",
+                {"action": "call", "target": "bot", "name": "Hemi"})
+    server.app.summons.wait("bot", 1.0)          # the hook takes it and exits
+
+    monkeypatch.setattr(discovery, "_cache", (0.0, []))
+    row = next(r for r in server.get("/api/state")[1]["roster"]
+               if r["name"] == "bot")
+    assert row["reach"] == "awaiting", "woken but not there yet must be visible"
+
+    server.tool("room_join", {"room": rid, "name": "bot"})
+    monkeypatch.setattr(discovery, "_cache", (0.0, []))
+    row = next(r for r in server.get("/api/state")[1]["roster"]
+               if r["name"] == "bot")
+    assert row["reach"] != "awaiting", "arriving clears it"
+
+
+def test_deleting_a_room_cancels_calls_into_it(server):
+    """A call outlived its room: the agent was pulled toward nothing and could
+    not tell a deleted room from a wrong id."""
+    _, room = server.post("/api/rooms", {"title": "doomed", "name": "Hemi"})
+    rid = room["id"]
+    server.post(f"/api/rooms/{rid}/admin",
+                {"action": "call", "target": "bot", "name": "Hemi"})
+    assert server.app.summons.pending("bot") is not None
+    _, res = server.post(f"/api/rooms/{rid}/admin", {"action": "delete"})
+    assert res["cancelled_calls"] == ["bot"]
+    assert server.app.summons.pending("bot") is None

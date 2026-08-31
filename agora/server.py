@@ -44,6 +44,11 @@ CHAIR = "chair"
 #: mechanism exists to remove — only with a longer fuse.
 LOBBY_FRESH = ONLINE_WINDOW
 
+#: A hook re-registers on every summons poll. Anything older than one poll plus
+#: slack is a hook that has exited, and reporting it as reachable is a false
+#: green that the chair discovers only by clicking three times.
+REGISTRATION_TTL = 400.0
+
 
 def _parked(lobby) -> set[str]:
     """Who is actually waiting in the lobby right now, not who ever joined it."""
@@ -71,6 +76,11 @@ class Summons:
     def __init__(self) -> None:
         self._pending: dict[str, dict[str, Any]] = {}
         self._registered: dict[str, dict[str, Any]] = {}
+        #: name -> (when it was handed over, which room). Delivering a call is
+        #: not the same as the agent arriving, and the chair needs to see the
+        #: difference: clicking Call three times because nothing visibly
+        #: happened is what a missing "delivered, waiting" state looks like.
+        self._delivered: dict[str, tuple[float, str]] = {}
         self._cond = threading.Condition()
 
     def register(self, name: str, info: dict[str, Any]) -> None:
@@ -79,8 +89,38 @@ class Summons:
             self._registered[name] = info
 
     def registered(self) -> dict[str, dict[str, Any]]:
+        """Only sessions whose hook is still parked.
+
+        A registration used to live forever. The async hook exits as soon as it
+        delivers one summons, so after the first Call the entry stayed and the
+        button kept reporting that it had woken something that was no longer
+        listening — the same false green, arriving later. The hook re-registers
+        on every poll, so anything older than a poll interval plus slack is not
+        parked any more.
+        """
+        cutoff = time.time() - REGISTRATION_TTL
         with self._cond:
-            return dict(self._registered)
+            return {k: v for k, v in self._registered.items()
+                    if v.get("registered_at", 0) > cutoff}
+
+    def forget(self, name: str) -> None:
+        """Drop a registration. Called when a summons is delivered, because the
+        hook exits at that moment and nothing is parked any more."""
+        with self._cond:
+            self._registered.pop(name, None)
+
+    def drop_calls_for_room(self, room_id: str) -> list[str]:
+        """Cancel pending calls into a room that no longer exists.
+
+        A call outlived its room: the agent was pulled toward nothing and could
+        not tell a deleted room from a wrong id.
+        """
+        with self._cond:
+            gone = [n for n, p in self._pending.items()
+                    if p.get("room") == room_id]
+            for n in gone:
+                self._pending.pop(n, None)
+            return gone
 
     def call(self, name: str, payload: dict[str, Any]) -> None:
         with self._cond:
@@ -96,12 +136,26 @@ class Summons:
         with self._cond:
             return self._pending.get(name)
 
+    def delivered(self, name: str) -> tuple[float, str] | None:
+        with self._cond:
+            return self._delivered.get(name)
+
+    def arrived(self, name: str) -> None:
+        with self._cond:
+            self._delivered.pop(name, None)
+
     def wait(self, name: str, timeout: float) -> dict[str, Any] | None:
         deadline = time.time() + timeout
         with self._cond:
             while True:
                 pending = self._pending.pop(name, None)
                 if pending is not None:
+                    # The caller is about to exit and wake its session, so it is
+                    # no longer parked. Saying otherwise is a lie the Call button
+                    # would repeat.
+                    self._registered.pop(name, None)
+                    self._delivered[name] = (time.time(),
+                                             str(pending.get("room", "")))
                     return pending
                 remaining = deadline - time.time()
                 if remaining <= 0:
@@ -245,21 +299,29 @@ class Handler(BaseHTTPRequestHandler):
         now = time.time()
         for row in rows:
             queued = self.app.summons.pending(row["name"])
+            handed = self.app.summons.delivered(row["name"])
+            if handed and handed[1] in row["rooms"]:
+                self.app.summons.arrived(row["name"])   # it turned up
+                handed = None
             row["hooked"] = row["name"] in reg
             row["in_lobby"] = row["name"] in waiting
             row["pending"] = queued is not None
             row["queued_age"] = int(now - queued["queued_at"]) if queued else 0
+            # Woken, told which room, not there yet. Usually it is mid-turn.
+            row["awaiting"] = bool(handed)
+            row["awaiting_age"] = int(now - handed[0]) if handed else 0
             # Three honest states:
             #   now     — hooked or actively waiting; a call wakes it in ~1s
             #   queued  — a call is already sitting in the Lobby for it
             #   later   — idle; the call queues and arrives on its next turn
             # Call is never hidden: nothing is lost by calling an idle session,
             # it just is not instant, and the result says which happened.
-            row["reach"] = ("now" if (row["hooked"] or row["in_lobby"])
+            row["reach"] = ("awaiting" if handed
+                            else "now" if (row["hooked"] or row["in_lobby"])
                             else "queued" if queued else "later")
         # Reachable first. A session that parks under a role name ("CMO") sits
         # beside its registry row ("ops-b0"); the callable one sorts up.
-        order = {"now": 0, "queued": 1, "later": 2}
+        order = {"now": 0, "awaiting": 1, "queued": 2, "later": 3}
         rows.sort(key=lambda r: (order[r["reach"]], r["name"].lower()))
         return {
             "rooms": [r for r in self.app.hub.listing() if r["id"] != LOBBY],
@@ -468,8 +530,13 @@ class Handler(BaseHTTPRequestHandler):
             # harder to reach, because the transcript is the record.
             if room.id == LOBBY:
                 return self._json({"error": "the Lobby is not deletable"}, 400)
+            # A call must not outlive the room it points at: the agent would
+            # be pulled toward nothing, unable to tell a deleted room from a
+            # wrong id.
+            cancelled = self.app.summons.drop_calls_for_room(room.id)
             self.app.hub.delete(room.id)
-            return self._json({"ok": True, "deleted": room.id})
+            return self._json({"ok": True, "deleted": room.id,
+                               "cancelled_calls": cancelled})
         if what == "agenda":
             room.set_meta(agenda=text)
             room.post("agora", f"agenda set: {text}", kind="system", role=HUMAN)
@@ -478,21 +545,25 @@ class Handler(BaseHTTPRequestHandler):
             room.set_meta(title=text)
             return self._json({"ok": True})
         if what == "call":
+            if self.app.hub.get(room.id) is None:
+                return self._json({"error": "that meeting no longer exists"}, 404)
             if room.closed:
                 return self._json(
                     {"error": "this meeting is closed — reopen it before "
                               "calling anyone in"}, 409)
-            # Three ways to reach a session, tried together because each
-            # covers a case the others do not.
+            # Read this BEFORE calling. A parked hook wakes, takes the summons
+            # and deregisters itself within microseconds, so asking afterwards
+            # reports "not hooked" for a call that in fact landed.
+            hooked = target in self.app.summons.registered()
+            # Two ways to reach a session, tried together because each covers a
+            # case the other does not: the hook reaches an idle session, the
+            # Lobby reaches one that never restarted.
             payload = {"room": room.id, "title": room.title,
                        "agenda": room.agenda, "seq": room.snapshot()["seq"],
                        "name": target, "url": self.app.public_url}
-            # 1 + 2. The SessionStart hook's long-poll, and agora_standby.
-            #        Both land in the same registry.
             self.app.summons.call(target, payload)
-            # 3. The lobby. An agent parked in `room_wait` on the lobby sees
-            #    this immediately, and `room_wait` exists in every session
-            #    already connected — which a newly added tool does not.
+            # The Lobby. `room_wait` on it exists in every session already
+            # connected, which a newly added tool never would.
             lobby = self.app.hub.get(LOBBY)
             reached_lobby = False
             if lobby is not None:
@@ -509,7 +580,6 @@ class Handler(BaseHTTPRequestHandler):
                     kind=MESSAGE, role=HUMAN, provider="human")
             room.post("agora", f"{target} called to the room by the chair",
                       kind="system", role=HUMAN)
-            hooked = target in self.app.summons.registered()
             woke = hooked or reached_lobby
             return self._json({
                 "ok": True, "hooked": hooked, "in_lobby": reached_lobby,

@@ -386,9 +386,12 @@ function toggleArchive(){ showArchived = !showArchived;
 let showUnreachable = store.get("showUnreachable", false);
 
 function sessionItem(s, here){
-  const how = s.hooked ? "ready" : s.in_lobby ? "waiting"
+  const how = s.awaiting ? `woken ${ago(s.awaiting_age)} ago · not joined yet`
+            : s.hooked ? "ready" : s.in_lobby ? "waiting"
             : s.pending ? `called ${ago(s.queued_age)} ago` : "not reachable";
-  const tip = s.reach === "now" ? "Ready — wakes in about a second"
+  const tip = s.reach === "awaiting"
+      ? "It was woken and told the room. It joins when it finishes its current turn."
+    : s.reach === "now" ? "Ready — wakes in about a second"
     : s.reach === "queued" ? "A call is already waiting to be picked up"
     : "Restart this session to make it callable";
   return `<div class="item" style="cursor:default">
@@ -398,6 +401,7 @@ function sessionItem(s, here){
       <span class="s">${esc(s.provider)}${s.project ? " · " + esc(s.project) : ""} · ${how}</span>
     </span>
     ${here ? `<span class="tag go">in room</span>`
+      : s.reach === "awaiting" ? `<span class="tag warn" title="${tip}">joining…</span>`
       : s.reach === "later"
         ? `<span class="tag" title="${tip}">restart</span>`
         : `<button class="sm ${s.reach==='now'?'p':''}" title="${tip}"
@@ -434,7 +438,9 @@ function toggleUnreachable(){ showUnreachable = !showUnreachable;
 const callIn = guard(async who => {
   if(!cur) return toast("Open a meeting first.", "bad");
   const r = await post(`/api/rooms/${cur}/admin`, {action:"call", target:who, name:ME});
-  if(r.woke) toast(`${who} was woken and is joining.`, "good");
+  if(r.woke) toast(`${who} was woken and told the room. It joins when it `
+    + `finishes its current turn — the roster shows "joining…" until it does.`,
+    "good", "Delivered");
   else toast(r.note, null, "Queued, not delivered yet");
 });
 

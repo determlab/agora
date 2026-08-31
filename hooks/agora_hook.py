@@ -52,15 +52,21 @@ def _payload() -> dict:
 
 
 def _lookup(session_id: str) -> dict | None:
-    """One pass over the registry for this session id."""
-    if not SESSIONS.exists():
+    """One pass over the registry for this session id.
+
+    An empty `session_id` must find nothing. It used to fall through the filter
+    and return whichever file glob yielded first — another session's name, given
+    to this one, matching no room and no registry entry. Guessing an identity is
+    worse than having none.
+    """
+    if not session_id or not SESSIONS.exists():
         return None
     for path in SESSIONS.glob("*.json"):
         try:
             rec = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             continue
-        if session_id and rec.get("sessionId") != session_id:
+        if rec.get("sessionId") != session_id:
             continue
         return {"name": rec.get("name") or "", "cwd": rec.get("cwd") or os.getcwd(),
                 "pid": rec.get("pid") or os.getppid(), "session_id": session_id}
