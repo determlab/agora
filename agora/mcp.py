@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 from typing import Any, Callable
 
+from .discovery import canonical_name
 from .room import AGENT, MESSAGE, NOTE, SUMMARY, Hub, Muted, RoomClosed
 
 PROTOCOL_VERSION = "2025-06-18"
@@ -71,6 +72,13 @@ TOOLS: list[dict[str, Any]] = [
                 "provider": {"type": "string", "description": "claude-code, codex, "
                                                               "cursor, gemini, …"},
                 "role": {"type": "string", "description": "Your seat, e.g. 'CTO'"},
+                "session_id": {"type": "string",
+                               "description": "ALWAYS send this. Your Claude Code "
+                                              "session id. It is what ties you to "
+                                              "the chair's roster; without it a "
+                                              "name you chose can fork your "
+                                              "identity and the Call button will "
+                                              "reach a seat you are not in."},
             },
             "required": ["room", "name"],
         },
@@ -301,8 +309,19 @@ class McpHandler:
         name = str(args.get("name") or "").strip()
         if not name:
             return _err("name is required — it is how you appear in the room")
-        room.join(name, role=str(args.get("role") or AGENT),
-                  provider=str(args.get("provider") or ""))
+        # If a session id is supplied and it is a live Claude Code session, the
+        # registry's name wins over whatever the caller passed. The chair's
+        # roster is built from that registry, so a self-chosen name forks the
+        # identity: two seats, one of which the Call button can never reach.
+        session_id = str(args.get("session_id") or "")
+        canonical = canonical_name(session_id)
+        role = str(args.get("role") or AGENT)
+        if canonical and canonical != name:
+            role = name if role == AGENT else role  # keep the chosen name as a label
+            name = canonical
+        room.join(name, role=role,
+                  provider=str(args.get("provider") or ""),
+                  session_id=session_id)
         snap = room.snapshot(limit=50)
         return _text({
             "joined": room.id,

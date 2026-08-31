@@ -88,6 +88,22 @@ def claude_sessions(directory: Path | None = None) -> list[dict[str, Any]]:
     return out
 
 
+def canonical_name(session_id: str) -> str:
+    """The registry's name for a session id, or "" if it is not a live session.
+
+    Identity has to come from the same source the chair's roster is built from.
+    A name a session picks for itself is a second source of truth by
+    construction: it forks the moment the two disagree, and then the roster
+    offers a Call that reaches a seat nobody is sitting in.
+    """
+    if not session_id:
+        return ""
+    for s in claude_sessions():
+        if s["session_id"] == session_id:
+            return s["name"]
+    return ""
+
+
 def roster(hub) -> list[dict[str, Any]]:
     """Discovered sessions, annotated with which rooms they are already in.
 
