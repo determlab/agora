@@ -30,11 +30,21 @@ input,textarea{background:var(--bg);border:1px solid var(--line);border-radius:5
   padding:7px 9px;width:100%}
 input:focus,textarea:focus{outline:none;border-color:var(--acc)}
 .app{display:grid;grid-template-columns:250px 1fr 290px;height:100vh}
-aside,.side{background:var(--panel);overflow-y:auto;display:flex;flex-direction:column}
+aside,.side{background:var(--panel);display:flex;flex-direction:column;min-height:0}
 aside{border-right:1px solid var(--line)}
-.side{border-left:1px solid var(--line)}
+.side{border-left:1px solid var(--line);overflow-y:auto}
+/* Each list scrolls on its own, so a long room list cannot push the roster —
+   or the "you are" footer — off the bottom of the pane. min-height:0 again:
+   without it a flex child sizes to its content instead of scrolling. */
+#rooms,#roster{overflow-y:auto;min-height:0}
+#rooms{flex:0 1 auto;max-height:42vh}
+#roster{flex:1 1 auto}
 h2{font-size:10.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--mut);
-  margin:0;padding:14px 14px 7px;font-weight:600;font-family:var(--mono)}
+  margin:0;padding:14px 14px 7px;font-weight:600;font-family:var(--mono);flex:none}
+.pad{flex:none}
+.arch{font-size:11px;color:var(--mut);cursor:pointer;padding:2px 14px 8px;
+  font-family:var(--mono)}
+.arch:hover{color:var(--acc)}
 .pad{padding:0 14px 14px}
 /* rooms + roster */
 .row{padding:8px 14px;border-left:2px solid transparent;cursor:pointer}
@@ -115,7 +125,14 @@ pre{background:var(--bg);border:1px solid var(--line);border-radius:5px;padding:
     <div class="pad"><button class="p" style="width:100%" onclick="newRoom()">+ New meeting</button></div>
     <h2>Live sessions</h2>
     <div id="roster"></div>
-    <div class="pad"><button style="width:100%" onclick="refresh()">Refresh</button></div>
+    <div class="pad" style="margin-top:auto;border-top:1px solid var(--line);padding-top:12px">
+      <div class="s" style="margin-bottom:6px">You are</div>
+      <div style="display:flex;gap:6px;align-items:center">
+        <span class="av" id="meav">?</span>
+        <strong id="me" style="flex:1"></strong>
+        <button class="x" style="opacity:1" onclick="setMe(true)">change</button>
+      </div>
+    </div>
   </aside>
 
   <main>
@@ -146,6 +163,7 @@ pre{background:var(--bg);border:1px solid var(--line);border-radius:5px;padding:
       <button onclick="localSummary()">Local digest</button>
       <button onclick="adm('prune','')" title="Drop seats not seen in 15 min — restarted or renamed sessions leave ghosts">Prune ghosts</button>
       <button class="d" onclick="closeRoom()" id="bcl">Close</button>
+      <button onclick="archiveRoom()" id="bar" title="Hide a finished meeting from the list. The transcript is kept.">Archive</button>
     </div>
     <h2>Notes</h2>
     <div class="pad">
@@ -159,7 +177,25 @@ pre{background:var(--bg);border:1px solid var(--line);border-radius:5px;padding:
 
 <script>
 let S = {rooms:[], roster:[], url:"", chair:"chair"};
-let cur = null, es = null, snap = null;
+let cur = null, es = null, snap = null, stateES = null, ME = "";
+
+// Who is chairing. Asked once, kept per browser. Everything you say in a room
+// is attributed to this, so a transcript read later says who spoke rather than
+// "chair".
+function setMe(force){
+  let saved = "";
+  try { saved = localStorage.getItem("agora.me") || ""; } catch(e){}
+  if(force || !saved){
+    const v = prompt("Your name — this is how you appear in every room.",
+                     saved || "");
+    if(v && v.trim()) saved = v.trim();
+  }
+  if(!saved) saved = "chair";
+  ME = saved;
+  try { localStorage.setItem("agora.me", ME); } catch(e){}
+  $("me").textContent = ME;
+  $("meav").textContent = initials(ME);
+}
 
 const $ = id => document.getElementById(id);
 const esc = s => (s||"").replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
@@ -175,17 +211,41 @@ async function api(path, opts){
 const post = (p,b) => api(p,{method:"POST",headers:{"Content-Type":"application/json"},
                             body:JSON.stringify(b||{})});
 
-async function refresh(){
-  S = await api("/api/state");
-  drawRooms(); drawRoster();
+// No Refresh button: the server holds one connection open and pushes state only
+// when it actually changes. The roster's sources (the session registry on disk,
+// the summons registry) cannot notify, so the server polls them and diffs —
+// which is the right place to do it, once, rather than in every browser tab.
+function watchState(){
+  if(stateES) stateES.close();
+  stateES = new EventSource("/api/stream");
+  stateES.addEventListener("state", e => {
+    S = JSON.parse(e.data);
+    drawRooms(); drawRoster();
+  });
+  // EventSource reconnects on its own; this only covers a server restart that
+  // outlives its backoff.
+  stateES.onerror = () => { setTimeout(() => { if(stateES.readyState===2) watchState(); }, 3000); };
 }
 
+let showArch = false;
+const roomRow = r => `
+  <div class="row ${r.id===cur?'on':''}" onclick="open_('${r.id}')">
+    <div class="t">${esc(r.title)}</div>
+    <div class="s">${r.participants} in · ${r.messages} msg${
+      r.archived?' · archived':r.closed?' · closed':''}</div>
+  </div>`;
+
 function drawRooms(){
-  $("rooms").innerHTML = S.rooms.length ? S.rooms.map(r => `
-    <div class="row ${r.id===cur?'on':''}" onclick="open_('${r.id}')">
-      <div class="t">${esc(r.title)}</div>
-      <div class="s">${r.participants} in · ${r.messages} msg${r.closed?' · closed':''}</div>
-    </div>`).join("") : `<div class="empty">No meetings yet.</div>`;
+  const live = S.rooms.filter(r => !r.archived);
+  const arch = S.rooms.filter(r => r.archived);
+  let html = live.length ? live.map(roomRow).join("")
+                         : `<div class="empty">No meetings yet.</div>`;
+  if(arch.length){
+    html += `<div class="arch" onclick="showArch=!showArch;drawRooms()">`
+          + `${showArch?'▾':'▸'} archived (${arch.length})</div>`;
+    if(showArch) html += arch.map(roomRow).join("");
+  }
+  $("rooms").innerHTML = html;
 }
 
 function drawRoster(){
@@ -206,8 +266,12 @@ function drawRoster(){
            title="${s.reach==='now'?'Waiting — wakes in about a second'
                   :s.reach==='queued'?'A call is already waiting for it'
                   :'Idle — the call queues and arrives on its next turn'}">Call</button>`;
+    // A queued call that ages invisibly is the same failure as a green PR
+    // nobody merges: 'queued 2m' reads as working, 'queued 3h' says that
+    // session is not coming and to reach it another way.
+    const age = n => n<60?`${n}s`:n<3600?`${Math.round(n/60)}m`:`${Math.round(n/3600)}h`;
     const how = s.hooked ? 'hooked' : s.in_lobby ? 'waiting'
-              : s.pending ? 'call queued' : 'idle';
+              : s.pending ? `queued ${age(s.queued_age)}` : 'idle';
     return `<div class="pr" style="padding:8px 14px;display:block">
       <div style="display:flex;justify-content:space-between;align-items:center;gap:6px">
         <span class="t"><span class="dot ${s.status==='busy'?'busy':s.status==='idle'?'idle':'off'}"></span>${esc(s.name)}</span>
@@ -250,6 +314,7 @@ function render(){
   $("ag").textContent = snap.agenda || "";
   $("stat").textContent = snap.closed ? "closed" : "live";
   $("bcl").textContent = snap.closed ? "Reopen" : "Close";
+  $("bar").textContent = snap.archived ? "Unarchive" : "Archive";
 
   const log = $("log");
   const stick = log.scrollTop + log.clientHeight >= log.scrollHeight - 60;
@@ -291,7 +356,7 @@ function key(e){ if(e.key==="Enter" && !e.shiftKey){ e.preventDefault(); send();
 async function send(){
   const t = $("say").value.trim(); if(!t || !cur) return;
   $("say").value=""; grow($("say"));
-  try { await post(`/api/rooms/${cur}/post`, {name:S.chair, text:t}); }
+  try { await post(`/api/rooms/${cur}/post`, {name:ME, text:t}); }
   catch(err){ alert(err.message); }
 }
 
@@ -299,13 +364,13 @@ async function newRoom(){
   const title = prompt("Meeting title"); if(!title) return;
   const agenda = prompt("Agenda — the one question this meeting answers") || "";
   const r = await post("/api/rooms", {title, agenda});
-  await refresh(); open_(r.id);
+  open_(r.id);
 }
 
 async function addNote(){
   const t = $("nt").value.trim(); if(!t||!cur) return;
   $("nt").value="";
-  await post(`/api/rooms/${cur}/note`, {name:S.chair, text:t});
+  await post(`/api/rooms/${cur}/note`, {name:ME, text:t});
 }
 
 const adm = (action,target) => post(`/api/rooms/${cur}/admin`, {action,target});
@@ -316,10 +381,12 @@ async function setAgenda(){
 const askSummary = () => post(`/api/rooms/${cur}/admin`, {action:"ask_summary", target:""});
 async function localSummary(){
   const d = await api(`/api/rooms/${cur}/summary`);
-  await post(`/api/rooms/${cur}/summary`, {name:"agora", text:d.text});
+  await post(`/api/rooms/${cur}/summary`, {name:ME, text:d.text});
 }
 const closeRoom = () => post(`/api/rooms/${cur}/admin`,
   {action: snap?.closed ? "reopen" : "close"});
+const archiveRoom = () => post(`/api/rooms/${cur}/admin`,
+  {action: snap?.archived ? "unarchive" : "archive"});
 const exportMd = () => location.href = `/api/rooms/${cur}/export`;
 
 async function invite(who){
@@ -347,8 +414,8 @@ function cp(id, btn){
   const was = btn.textContent; btn.textContent = "Copied"; setTimeout(()=>btn.textContent=was, 1200);
 }
 
-refresh();
-setInterval(refresh, 12000);
+setMe(false);
+watchState();
 </script>
 </body>
 </html>

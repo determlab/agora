@@ -70,6 +70,7 @@ class Room:
         self.agenda = agenda
         self.created = time.time()
         self.closed = False
+        self.archived = False
         self.events: list[Event] = []
         self.participants: dict[str, Participant] = {}
         self._path = path
@@ -111,6 +112,7 @@ class Room:
                     room.title = rec.get("title", room.title)
                     room.agenda = rec.get("agenda", room.agenda)
                     room.closed = rec.get("closed", room.closed)
+                    room.archived = rec.get("archived", room.archived)
         except (json.JSONDecodeError, KeyError, TypeError):
             # A truncated last line is normal after a hard kill; keep what parsed.
             pass
@@ -202,7 +204,7 @@ class Room:
                 p.last_seen = time.time()
 
     def set_meta(self, *, title: str | None = None, agenda: str | None = None,
-                 closed: bool | None = None) -> None:
+                 closed: bool | None = None, archived: bool | None = None) -> None:
         with self._cond:
             if title is not None:
                 self.title = title
@@ -210,8 +212,14 @@ class Room:
                 self.agenda = agenda
             if closed is not None:
                 self.closed = closed
+            if archived is not None:
+                # Archiving hides a finished meeting from the list. It never
+                # deletes: the transcript is the record, and a room you cannot
+                # read is worse than a list you have to scroll.
+                self.archived = archived
             self._append_disk({"t": "meta", "title": self.title,
-                               "agenda": self.agenda, "closed": self.closed})
+                               "agenda": self.agenda, "closed": self.closed,
+                               "archived": self.archived})
             self._cond.notify_all()
 
     def set_muted(self, name: str, muted: bool, by: str = "the chair") -> bool:
@@ -260,6 +268,7 @@ class Room:
                 "agenda": self.agenda,
                 "created": self.created,
                 "closed": self.closed,
+                "archived": self.archived,
                 "seq": self._seq,
                 "participants": [p.as_dict() for p in self.participants.values()],
                 "events": [e.as_dict() for e in evs],
@@ -359,7 +368,7 @@ class Hub:
 
     def listing(self) -> list[dict[str, Any]]:
         return [{"id": r.id, "title": r.title, "agenda": r.agenda,
-                 "closed": r.closed, "created": r.created,
+                 "closed": r.closed, "archived": r.archived, "created": r.created,
                  "participants": len(r.participants),
                  "messages": sum(1 for e in r.events if e.kind == MESSAGE)}
                 for r in sorted(self.rooms.values(), key=lambda x: -x.created)]

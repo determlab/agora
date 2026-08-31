@@ -83,6 +83,11 @@ class Summons:
 
     def call(self, name: str, payload: dict[str, Any]) -> None:
         with self._cond:
+            # Stamped so the roster can show a queued call's age. A call that
+            # has waited three hours is telling the chair something a call that
+            # has waited two minutes is not, and an invitation that ages
+            # invisibly is the same failure as a green PR nobody merges.
+            payload = {**payload, "queued_at": time.time()}
             self._pending[name] = payload
             self._cond.notify_all()
 
@@ -178,39 +183,11 @@ class Handler(BaseHTTPRequestHandler):
             # rather than holding a socket that will never carry anything.
             return self._json({"error": "this server is POST-only"}, 405)
 
+        if path == "/api/stream":
+            return self._state_stream()
+
         if path == "/api/state":
-            reg = self.app.summons.registered()
-            lobby = self.app.hub.get(LOBBY)
-            waiting = _parked(lobby)
-            rows = roster(self.app.hub)
-            for row in rows:
-                # Two independent ways to be reachable, reported separately so
-                # the UI can say *why* a session cannot be called rather than
-                # offering a button that does nothing.
-                row["hooked"] = row["name"] in reg
-                row["in_lobby"] = row["name"] in waiting
-                row["pending"] = self.app.summons.pending(row["name"]) is not None
-                # Three honest states, not two:
-                #   now     — parked or hooked; a call wakes it in about a second
-                #   queued  — a call is already waiting to be picked up
-                #   later   — idle; a call will be delivered when it next checks in
-                # Call is never hidden. Nothing is lost by calling an idle
-                # session; it just arrives on that session's next turn instead
-                # of immediately, and the result says which happened.
-                row["reach"] = ("now" if (row["hooked"] or row["in_lobby"])
-                                else "queued" if row["pending"] else "later")
-                row["callable"] = True
-            # Reachable first. A session that joined the lobby under a role name
-            # ("CMO") appears alongside its registry row ("ops-b0"); the chair
-            # cares about the one that can actually be called, so it sorts up.
-            rows.sort(key=lambda r: (not r["callable"], r["name"].lower()))
-            return self._json({
-                "rooms": [r for r in self.app.hub.listing() if r["id"] != LOBBY],
-                "lobby": {"waiting": sorted(waiting)},
-                "roster": rows,
-                "chair": self.app.chair_name,
-                "url": self.app.public_url,
-            })
+            return self._json(self._state())
 
         if path == "/api/summons":
             # The async half of a session's SessionStart hook parks here.
@@ -244,6 +221,76 @@ class Handler(BaseHTTPRequestHandler):
                                   {"Content-Disposition":
                                    f'attachment; filename="{room.id}.md"'})
         self._json({"error": "not found"}, 404)
+
+    def _state(self) -> dict[str, Any]:
+        """Everything the left-hand panes render: rooms, and who can be reached."""
+        reg = self.app.summons.registered()
+        lobby = self.app.hub.get(LOBBY)
+        waiting = _parked(lobby)
+        rows = roster(self.app.hub)
+        now = time.time()
+        for row in rows:
+            queued = self.app.summons.pending(row["name"])
+            row["hooked"] = row["name"] in reg
+            row["in_lobby"] = row["name"] in waiting
+            row["pending"] = queued is not None
+            row["queued_age"] = int(now - queued["queued_at"]) if queued else 0
+            # Three honest states:
+            #   now     — hooked or actively waiting; a call wakes it in ~1s
+            #   queued  — a call is already sitting in the Lobby for it
+            #   later   — idle; the call queues and arrives on its next turn
+            # Call is never hidden: nothing is lost by calling an idle session,
+            # it just is not instant, and the result says which happened.
+            row["reach"] = ("now" if (row["hooked"] or row["in_lobby"])
+                            else "queued" if queued else "later")
+        # Reachable first. A session that parks under a role name ("CMO") sits
+        # beside its registry row ("ops-b0"); the callable one sorts up.
+        order = {"now": 0, "queued": 1, "later": 2}
+        rows.sort(key=lambda r: (order[r["reach"]], r["name"].lower()))
+        return {
+            "rooms": [r for r in self.app.hub.listing() if r["id"] != LOBBY],
+            "lobby": {"waiting": sorted(waiting)},
+            "roster": rows,
+            "chair": self.app.chair_name,
+            "url": self.app.public_url,
+        }
+
+    def _state_stream(self) -> None:
+        """Push state when it actually changes. Replaces a Refresh button.
+
+        The roster's source is the filesystem (Claude Code's session registry)
+        and the summons registry, neither of which can notify, so this polls
+        them server-side and sends only on a real change. The browser holds one
+        connection instead of asking every few seconds and mostly getting the
+        same answer back.
+        """
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Connection", "close")
+        self.close_connection = True
+        self.end_headers()
+        last = None
+        try:
+            while True:
+                state = self._state()
+                # `queued_age` ticks every second and would defeat the diff, so
+                # compare everything else and let the client age it locally.
+                fingerprint = json.dumps(
+                    {**state, "roster": [{k: v for k, v in r.items()
+                                          if k != "queued_age"}
+                                         for r in state["roster"]]},
+                    sort_keys=True)
+                if fingerprint != last:
+                    last = fingerprint
+                    self.wfile.write(b"event: state\ndata: "
+                                     + json.dumps(state).encode("utf-8") + b"\n\n")
+                else:
+                    self.wfile.write(b": keepalive\n\n")
+                self.wfile.flush()
+                time.sleep(2.0)
+        except (BrokenPipeError, ConnectionAbortedError, ConnectionResetError, OSError):
+            return
 
     def _static(self, rel: str) -> None:
         target = (STATIC / rel).resolve()
@@ -372,6 +419,14 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json({"ok": True})
             if what == "reopen":
                 room.set_meta(closed=False)
+                return self._json({"ok": True})
+            if what == "archive":
+                # Closes as well: an archived meeting that still accepts posts
+                # is a meeting, not an archive.
+                room.set_meta(archived=True, closed=True)
+                return self._json({"ok": True})
+            if what == "unarchive":
+                room.set_meta(archived=False)
                 return self._json({"ok": True})
             if what == "agenda":
                 room.set_meta(agenda=text)
