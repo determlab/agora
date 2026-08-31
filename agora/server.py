@@ -193,6 +193,13 @@ class Handler(BaseHTTPRequestHandler):
             # The async half of a session's SessionStart hook parks here.
             who = (query.get("session") or [""])[0]
             secs = min(float((query.get("timeout") or ["300"])[0]), 900.0)
+            # Polling IS the registration. The registry is in memory, so a
+            # restart of this server would otherwise leave every hooked session
+            # invisible until its own next session start — which for an idle
+            # session may be tomorrow. A hook that is parked here is reachable
+            # by definition, so say so on every poll and the state heals itself.
+            if who:
+                self.app.summons.register(who, {"name": who, "via": "hook"})
             payload = self.app.summons.wait(who, secs)
             if payload is None:
                 # 204 must carry no body — sending one desyncs a keep-alive
@@ -368,7 +375,10 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/rooms":
             title = str(body.get("title") or "").strip() or "Untitled meeting"
             room = self.app.hub.create(title, str(body.get("agenda") or ""))
-            room.join(self.app.chair_name, role=HUMAN, provider="human")
+            # The chair's own name, sent by the browser. Hardcoding "chair" made
+            # every transcript say "chair" no matter who was running the meeting.
+            chair = str(body.get("name") or "").strip() or self.app.chair_name
+            room.join(chair, role=HUMAN, provider="human")
             return self._json(room.snapshot())
 
         if path.startswith("/api/rooms/"):
@@ -453,7 +463,7 @@ class Handler(BaseHTTPRequestHandler):
                     # Parked means polling, not merely present — see LOBBY_FRESH.
                     reached_lobby = target in _parked(lobby)
                     lobby.post(
-                        self.app.chair_name,
+                        name,
                         f"@{target} — the chair calls you into "
                         f"{room.title!r} (room id `{room.id}`). "
                         f"room_join with room=\"{room.id}\" and name=\"{target}\", "
@@ -480,7 +490,7 @@ class Handler(BaseHTTPRequestHandler):
                 gone = room.prune()
                 return self._json({"ok": True, "dropped": gone})
             if what == "ask_summary":
-                room.post(self.app.chair_name,
+                room.post(name,
                           f"@{target or 'everyone'} please post a summary of this "
                           f"meeting: call room_history, then room_summarize.",
                           kind=MESSAGE, role=HUMAN)

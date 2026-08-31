@@ -364,9 +364,10 @@ async function send(){
 }
 
 async function newRoom(){
+  if(!ME || ME==="chair") setMe(true);
   const title = prompt("Meeting title"); if(!title) return;
   const agenda = prompt("Agenda — the one question this meeting answers") || "";
-  const r = await post("/api/rooms", {title, agenda});
+  const r = await post("/api/rooms", {title, agenda, name:ME});
   open_(r.id);
 }
 
@@ -381,7 +382,7 @@ async function setAgenda(){
   const a = prompt("Agenda", snap?.agenda||""); if(a===null) return;
   await post(`/api/rooms/${cur}/admin`, {action:"agenda", text:a});
 }
-const askSummary = () => post(`/api/rooms/${cur}/admin`, {action:"ask_summary", target:""});
+const askSummary = () => post(`/api/rooms/${cur}/admin`, {action:"ask_summary", target:"", name:ME});
 async function localSummary(){
   const d = await api(`/api/rooms/${cur}/summary`);
   await post(`/api/rooms/${cur}/summary`, {name:ME, text:d.text});
