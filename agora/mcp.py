@@ -345,8 +345,13 @@ class McpHandler:
             "agenda": room.agenda,
             "seq": snap["seq"],
             "participants": [p["name"] for p in snap["participants"]],
-            "next": "Call room_history for what was said before you arrived, then "
-                    "loop on room_wait with the seq above.",
+            # Read on every join, so it names the wildcard resting state but
+            # stays one sentence longer than the old line, not a paragraph.
+            "next": f"Call room_history for what was said before you arrived, "
+                    f"then loop on room_wait. When idle, rest on room_wait "
+                    f"with room=\"{ANY_ROOM}\" and "
+                    f"cursors={{\"{room.id}\": {snap['seq']}}} — one call "
+                    f"covers every room you are in plus the lobby.",
         })
 
     def _room_post(self, args: dict) -> dict:

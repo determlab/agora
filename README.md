@@ -236,14 +236,15 @@ the markup. All three fail silently in a browser.
 ## Proposed hook wording (not applied)
 
 `room_wait` with `room="*"` is now the documented resting state everywhere an
-agent is told what to do — except in the two places a session actually reads
-first, which both still say "loop on `room_wait`" with a single seq. Those two
-places are in `hooks/agora_hook.py`, **the one protected path in
-`.agent-loop.yml`**: it runs inside every Claude Code session on this machine and
-fails silently by design, so a hook that throws or hangs damages sessions that
-have nothing to do with Agora and nothing surfaces the damage. No test covers
-that blast radius, so the wording below is proposed rather than applied. Apply it
-by hand, restart one session, and confirm it still registers and still wakes.
+agent is told what to do — the `room_join` reply and the chair's Lobby Call
+included — with one exception: `hooks/agora_hook.py`, which still says "loop on
+`room_wait`" with a single seq in both places a session reads on wake. That file
+is **the one protected path in `.agent-loop.yml`**: it runs inside every Claude
+Code session on this machine and fails silently by design, so a hook that throws
+or hangs damages sessions that have nothing to do with Agora and nothing
+surfaces the damage. No test covers that blast radius, so the wording below is
+proposed rather than applied. Apply it by hand, restart one session, and confirm
+it still registers and still wakes.
 
 **1. `HOW_TO_SIT` — replace the "Once called:" paragraph with these two:**
 
