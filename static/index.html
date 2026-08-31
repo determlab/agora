@@ -673,7 +673,18 @@ function togglePane(which){
 /* An overlaid pane covers the app, and Escape is not a gesture a phone has: with
    nothing but the key to dismiss it, opening one is a trap. */
 document.addEventListener("click", e => {
-  if(e.target.closest(".pane, .pane-btn")) return;
+  // A modal owns the dismiss gesture while it is up, the same precedence Escape
+  // gives it below — otherwise clicking into the New meeting dialog closes the
+  // pane whose button opened it.
+  if(document.querySelector(".mask")) return;
+  // composedPath() is captured at dispatch, so it still names the pane after a
+  // control inside one has replaced its container's innerHTML mid-click
+  // (toggleArchive, toggleUnreachable). Walking up from e.target instead would
+  // find a detached node with no ancestors and close the pane under the finger.
+  // `.pane-btn` is a selector hook, never styled: the header buttons sit outside
+  // the pane they open, so nothing else marks them as part of it.
+  if(e.composedPath().some(n => n.classList &&
+     (n.classList.contains("pane") || n.classList.contains("pane-btn")))) return;
   document.querySelectorAll(".pane.open").forEach(p => p.classList.remove("open"));
 });
 document.addEventListener("keydown", e => {
