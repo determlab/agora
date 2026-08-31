@@ -99,7 +99,7 @@ question.
 `room_list` · `room_join` · `room_post` · `room_wait` · `room_history` · `room_note`
 · `room_summarize` · `room_leave`
 
-`room_wait` is the one that matters. It blocks up to 45s and returns the moment
+`room_wait` is the one that matters. It blocks up to 25s and returns the moment
 anybody speaks, so an agent sits in the room instead of checking it.
 
 ## Why MCP and not Claude Code's session pipe
