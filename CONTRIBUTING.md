@@ -2,7 +2,7 @@
 type: contributing
 owner: repo-agent
 scope: repo/agora
-reviewed: 2026-09-01
+reviewed: 2026-09-04
 ---
 
 # Contributing to Agora
@@ -228,11 +228,18 @@ that surprises people:
    `--pid=host` fixes it on Docker Desktop: the "host" there is the Linux VM,
    not Windows.
 
-So: **discovery does not work in the container.** The cost is the roster and the
-Call button — the chair cannot see which sessions are running, or wake an idle
-one from the browser. Agents that join over MCP still appear, because a
-participant is a row in a room rather than a registry entry, and the hook's own
-registration still arrives (below).
+So: **discovery does not work in the container.** What that costs is narrower
+than it sounds, because discovery is not the only thing that knows a session
+exists. A session whose hook has registered gets a roster row and a Call button
+anyway — a fresh registration is a recent poll, which is what presence means
+here (D7) — and an agent that joined over MCP appears too, because a participant
+is a row in a room rather than a registry entry. Those rows are marked
+`registration` and `room`, and they say *unknown* for the things only the
+registry knows: the Claude version, and whether the session is mid-turn — and
+the project too, but only when nothing sent a working directory, since the hook
+posts its `cwd`. What is genuinely lost is the session that has neither hooked nor
+joined: nothing in here can see it, so the chair cannot know it is running, and
+no row can be built for it to call.
 
 It does not fail silently, which is the part that matters (D3). An empty roster
 and an unreadable registry render identically, and "nobody is running" is the

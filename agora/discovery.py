@@ -198,11 +198,32 @@ def canonical_name(session_id: str) -> str:
     return ""
 
 
-def roster(hub) -> list[dict[str, Any]]:
-    """Discovered sessions, annotated with which rooms they are already in.
+def roster(hub, registered: dict[str, dict[str, Any]] | None = None
+           ) -> list[dict[str, Any]]:
+    """Everyone the chair could call, annotated with which rooms they are in.
 
-    The web UI needs both halves in one place: who exists, and who is already
-    seated. A session in no room is what the invite button is for.
+    Three sources, and every row carries the one it came from in ``source``,
+    because they do not know the same things:
+
+    ``registry``      Claude Code's session registry: name, pid, cwd, project,
+                      version, and a live busy/idle status.
+    ``room``          a seat held over MCP — a Codex or Cursor client. Real,
+                      but nothing outside this process vouches for it.
+    ``registration``  a session the summons registry knows and discovery does
+                      not: its hook is parked on ``/api/summons``, or it was
+                      just woken by a call and has not arrived yet. Reachable —
+                      exiting that hook wakes the session — but nothing outside
+                      the registration is known, so most fields are unknown.
+
+    The third source exists because of the container. The registry mounts
+    read-only and every pid in it belongs to the host, so ``claude_sessions``
+    resolves nothing while ``/api/register`` works perfectly: the chair had no
+    row, and therefore no Call button, for a session Agora could reach.
+
+    ``registered`` is the summons registry's *live* view, filtered by freshness
+    before it gets here. A hook that stopped polling falls out of the roster
+    rather than lingering as a row nothing can reach — presence is polling, and
+    a fresh registration is exactly the recent poll D7 asks for.
     """
     sessions = claude_sessions()
     seated: dict[str, list[str]] = {}
@@ -211,6 +232,7 @@ def roster(hub) -> list[dict[str, Any]]:
             seated.setdefault(name, []).append(room.id)
     for s in sessions:
         s["rooms"] = seated.get(s["name"], [])
+        s["source"] = "registry"
     # A participant that is not a live Claude Code session still deserves a row
     # — a Codex or Cursor client is real — but only while it is actually there.
     # A renamed or restarted session leaves its old seat behind, and a roster
@@ -238,8 +260,44 @@ def roster(hub) -> list[dict[str, Any]]:
                 "updated": p.last_seen,
                 "socket": "",
                 "rooms": seated.get(name, []),
+                "source": "room",
             }
-    return sessions + list(extra.values())
+    # A hook registration is the only evidence left when discovery cannot work.
+    # Joined on the session id as well as the name, so a session that registered
+    # AND resolves in the registry is one row rather than two — the registry's
+    # row wins, because identity comes from it (D6) and it knows strictly more.
+    ids = {s["session_id"] for s in sessions if s["session_id"]}
+    ids |= {r["session_id"] for r in extra.values() if r["session_id"]}
+    hooked: dict[str, dict[str, Any]] = {}
+    for name, info in (registered or {}).items():
+        if not name or name in known or name in extra:
+            continue
+        sid = str(info.get("session_id") or "")
+        if sid and sid in ids:
+            continue
+        cwd = str(info.get("cwd") or "")
+        hooked[name] = {
+            "provider": str(info.get("provider") or "claude-code"),
+            "name": name,
+            "session_id": sid,
+            "pid": int(info.get("pid") or 0),
+            "cwd": cwd,
+            # "" is what every other row uses for a field it does not have. The
+            # page turns it into "unknown" for these rows; a placeholder string
+            # invented here would render as if it were a project called that.
+            "project": Path(cwd).name if cwd else "",
+            # Not "idle": busy/idle is the registry's answer and the registry
+            # has nothing to say about this session. Either value would be the
+            # roster reporting something it did not measure.
+            "status": "unknown",
+            "kind": "",
+            "version": "",
+            "updated": float(info.get("registered_at") or 0.0),
+            "socket": "",
+            "rooms": seated.get(name, []),
+            "source": "registration",
+        }
+    return sessions + list(extra.values()) + list(hooked.values())
 
 
 def invite_text(room: "Any", server_url: str, session_name: str = "") -> dict[str, str]:
