@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import os
 import time
+from pathlib import Path
 
 from agora import discovery
 from agora.discovery import GHOST_AFTER, canonical_name, claude_sessions, roster
@@ -59,8 +60,7 @@ def test_sessions_come_back_newest_first(tmp_path):
     assert [s["name"] for s in claude_sessions(tmp_path)] == ["newer", "older"]
 
 
-def test_the_cache_makes_repeat_reads_cheap_but_a_directory_arg_bypasses_it(
-        tmp_path, monkeypatch):
+def test_the_cache_makes_repeat_reads_cheap(tmp_path, monkeypatch):
     _session(tmp_path, "one")
     monkeypatch.setattr(discovery, "CLAUDE_SESSIONS", tmp_path)
     monkeypatch.setattr(discovery, "_cache", (0.0, []))
@@ -68,6 +68,103 @@ def test_the_cache_makes_repeat_reads_cheap_but_a_directory_arg_bypasses_it(
     _session(tmp_path, "two", sid="s2")
     assert len(claude_sessions()) == 1, "within the TTL the cache should hold"
     assert len(claude_sessions(fresh=True)) == 2
+
+
+def _count_scans(monkeypatch):
+    """Every registry scan, counted. `glob` is the one call a scan cannot skip.
+
+    Counting the scans is the only honest way to prove a cache was read: a
+    timing assertion passes on a slow machine that did all the work anyway.
+    """
+    scans: list[str] = []
+    real = Path.glob
+
+    def counting(self, pattern, *a, **kw):
+        scans.append(str(self))
+        return real(self, pattern, *a, **kw)
+
+    monkeypatch.setattr(Path, "glob", counting)
+    return scans
+
+
+def test_the_registry_path_and_none_hit_the_same_cache(tmp_path, monkeypatch):
+    """`claude_sessions(CLAUDE_SESSIONS)` and `claude_sessions()` are the same
+    read, so they must cost the same. They did not: the read gate tested
+    `directory is None` and the write gate tested the resolved path, so the
+    explicit form wrote a cache it could never read. It cost a full uncached
+    scan per state build — and, worse, made the correct call at the call site
+    in `availability` look like a mistake worth "simplifying" away."""
+    _session(tmp_path, "one")
+    monkeypatch.setattr(discovery, "CLAUDE_SESSIONS", tmp_path)
+    monkeypatch.setattr(discovery, "_cache", (0.0, []))
+    scans = _count_scans(monkeypatch)
+
+    assert len(claude_sessions(tmp_path)) == 1        # scans once, fills cache
+    assert len(scans) == 1
+    for _ in range(4):
+        claude_sessions(tmp_path)
+        claude_sessions()
+        claude_sessions(None)
+    assert len(scans) == 1, (
+        "within the TTL every form of the registry read must come from the "
+        f"cache; the disk was scanned {len(scans)} times")
+
+
+def test_fresh_scans_disk_in_both_forms(tmp_path, monkeypatch):
+    _session(tmp_path, "one")
+    monkeypatch.setattr(discovery, "CLAUDE_SESSIONS", tmp_path)
+    monkeypatch.setattr(discovery, "_cache", (0.0, []))
+    claude_sessions()                                  # warm it
+    scans = _count_scans(monkeypatch)
+    claude_sessions(fresh=True)
+    claude_sessions(tmp_path, fresh=True)
+    assert len(scans) == 2, "fresh=True must never answer from the cache"
+
+
+def test_another_directory_neither_reads_nor_writes_the_cache(
+        tmp_path, monkeypatch):
+    """The tests pass a fixture directory. If that shared the module cache,
+    one test's sessions would leak into the next one's roster."""
+    registry, other = tmp_path / "registry", tmp_path / "other"
+    _session(registry, "real")
+    _session(other, "fixture")
+    monkeypatch.setattr(discovery, "CLAUDE_SESSIONS", registry)
+    monkeypatch.setattr(discovery, "_cache", (0.0, []))
+    scans = _count_scans(monkeypatch)
+
+    assert [s["name"] for s in claude_sessions(other)] == ["fixture"]
+    assert [s["name"] for s in claude_sessions(other)] == ["fixture"]
+    assert len(scans) == 2, "a foreign directory must be read from disk"
+    assert discovery._cache == (0.0, []), (
+        "a foreign directory must not write the cache the registry reads")
+    assert [s["name"] for s in claude_sessions()] == ["real"]
+
+
+def test_availability_counts_files_separately_from_the_cached_read(
+        tmp_path, monkeypatch):
+    """`files` and `live` are two measurements, and the gap between them is
+    what tells "readable but nothing resolves" from "genuinely nobody" (D3).
+    The cache may make `live` cheap; it may not make `files` a copy of it."""
+    _session(tmp_path, "alive")
+    _session(tmp_path, "ghost", sid="s2", pid=999_999)
+    monkeypatch.setattr(discovery, "CLAUDE_SESSIONS", tmp_path)
+    monkeypatch.setattr(discovery, "_cache", (0.0, []))
+    seen = discovery.availability()
+    assert seen["available"] is True
+    assert (seen["files"], seen["live"]) == (2, 1)
+    assert seen["note"] == "" and seen["reason"] == ""
+    # Same answer on the second call, now served from the warm cache.
+    assert discovery.availability()["files"] == 2
+
+
+def test_availability_still_names_both_readings_when_nothing_resolves(
+        tmp_path, monkeypatch):
+    _session(tmp_path, "ghost", pid=999_999)
+    monkeypatch.setattr(discovery, "CLAUDE_SESSIONS", tmp_path)
+    monkeypatch.setattr(discovery, "_cache", (0.0, []))
+    seen = discovery.availability()
+    assert seen["available"] is True and seen["files"] == 1 and seen["live"] == 0
+    assert "readable but none names a process" in seen["note"]
 
 
 def test_canonical_name_maps_a_session_id_to_the_registry_name(

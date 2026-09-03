@@ -66,13 +66,23 @@ _cache_lock = threading.Lock()
 
 def claude_sessions(directory: Path | None = None,
                     *, fresh: bool = False) -> list[dict[str, Any]]:
-    """Every live Claude Code session on this machine, newest first."""
-    if directory is None and not fresh:
+    """Every live Claude Code session on this machine, newest first.
+
+    The cache covers the real registry however it is named: ``None`` and
+    ``CLAUDE_SESSIONS`` are the same read and must behave the same way. They
+    did not once — the read gate tested ``directory is None`` while the write
+    gate tested the resolved path — so passing the path explicitly wrote a
+    cache it could never read, and the obvious call at the obvious call site
+    paid a full scan every time. Any other directory is a test's fixture and
+    stays uncached, so no two tests share state through this.
+    """
+    directory = directory or CLAUDE_SESSIONS
+    cacheable = directory == CLAUDE_SESSIONS
+    if cacheable and not fresh:
         with _cache_lock:
             at, cached = _cache
             if (time.time() - at) < _CACHE_TTL:
                 return cached
-    directory = directory or CLAUDE_SESSIONS
     if not directory.exists():
         return []
     now = time.time()
@@ -102,7 +112,7 @@ def claude_sessions(directory: Path | None = None,
             "socket": rec.get("messagingSocketPath", ""),
         })
     out.sort(key=lambda s: -s["updated"])
-    if directory == CLAUDE_SESSIONS:
+    if cacheable:
         with _cache_lock:
             globals()["_cache"] = (time.time(), out)
     return out
@@ -161,13 +171,12 @@ def availability(directory: Path | None = None) -> dict[str, Any]:
                        "container, mount the host's ~/.claude/sessions "
                        "read-only; see CONTRIBUTING.md."),
         }
+    # `files` and `live` stay two separate measurements. The gap between them
+    # is the whole point of this function (D3), so the count is taken here from
+    # disk rather than folded into the cached read, where it would become one
+    # number reported twice.
     files = len(list(directory.glob("*.json")))
-    # `None`, not `directory`, in the default case: claude_sessions reads its
-    # cache only when passed None (it writes it whenever the resolved path is
-    # CLAUDE_SESSIONS — the two gates disagree). Passing the resolved path here
-    # is correct and costs a full uncached scan of the registry on every state
-    # build, which _state_stream does every 2s per open tab.
-    live = len(claude_sessions(None if directory == CLAUDE_SESSIONS else directory))
+    live = len(claude_sessions(directory))
     note = ""
     if files and not live:
         note = (f"{files} session files are readable but none names a process "
