@@ -26,7 +26,8 @@ from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 from . import __version__
-from .discovery import availability, claude_sessions, invite_text, roster
+from .discovery import (GHOST_AFTER, availability, claude_sessions,
+                        invite_text, roster)
 from .mcp import ANY_ROOM, McpHandler
 from .room import (HUMAN, LOBBY, MESSAGE, NOTE, ONLINE_WINDOW, SUMMARY, Hub,
                    Muted, NotSeated, RoomClosed, mention_note)
@@ -61,8 +62,8 @@ def _parked(lobby) -> set[str]:
             if p.last_seen and (now - p.last_seen) < LOBBY_FRESH}
 
 
-def _liveness(entry: dict[str, Any] | None) -> str:
-    """Whether a session could hear a post right now, per Claude Code's registry.
+def _liveness(entry: dict[str, Any] | None, *, registered: bool = False) -> str:
+    """Whether a session could hear a call right now.
 
     **A post is not a wake.** The Call button writes into the Lobby, and a Lobby
     message is only seen by a session already looping on `room_wait`. A session
@@ -77,9 +78,18 @@ def _liveness(entry: dict[str, Any] | None) -> str:
     outlive its entry — a seat held over MCP is still a row — and a seat is not
     a session. An unrecognised status is read as `idle` for the same reason: the
     honest default is the one that promises less.
+
+    `registered` is the one thing that outranks a missing entry, and only when
+    there is no entry at all: a hook parked on `/api/summons` is a wake path
+    the registry knows nothing about, and in a container it is the only one
+    there is. It gets its own value rather than being folded into `busy` or
+    `idle`, because those are statements about what the session is doing and
+    this measures something else — that something is listening. Freshness is
+    already applied by `Summons.registered`, so a hook that stopped polling
+    arrives here as `False` and the row falls back to `offline` (D7).
     """
     if entry is None:
-        return "offline"
+        return "hooked" if registered else "offline"
     return "busy" if entry.get("status") == "busy" else "idle"
 
 
@@ -126,6 +136,21 @@ class Summons:
         with self._cond:
             return {k: v for k, v in self._registered.items()
                     if v.get("registered_at", 0) > cutoff}
+
+    def outstanding(self, max_age: float) -> dict[str, dict[str, Any]]:
+        """Sessions woken by a call that have not turned up yet.
+
+        A hook deregisters the instant it takes a summons, so a session Agora
+        knows *only* by its registration would drop off the roster in the one
+        window the chair is watching it — between "woken" and "joined" — while
+        the Call button's own toast promises a row saying "joining…". Bounded,
+        because a call nobody ever answered stops being evidence of anything.
+        """
+        cutoff = time.time() - max_age
+        with self._cond:
+            return {name: {"name": name, "registered_at": at}
+                    for name, (at, _room) in self._delivered.items()
+                    if at > cutoff}
 
     def forget(self, name: str) -> None:
         """Drop a registration. Called when a summons is delivered, because the
@@ -322,7 +347,11 @@ class Handler(BaseHTTPRequestHandler):
         reg = self.app.summons.registered()
         lobby = self.app.hub.get(LOBBY)
         waiting = _parked(lobby)
-        rows = roster(self.app.hub)
+        # A parked hook and an unanswered call are both the summons registry
+        # knowing a session that discovery cannot see. `reg` wins the merge: a
+        # session that has re-registered since being called is parked again.
+        rows = roster(self.app.hub,
+                      {**self.app.summons.outstanding(GHOST_AFTER), **reg})
         # `roster` has just read the registry and that read is cached for a
         # second, so this is a dict build rather than a second scan of disk.
         live = {s["name"]: s for s in claude_sessions()}
@@ -337,7 +366,8 @@ class Handler(BaseHTTPRequestHandler):
             row["in_lobby"] = row["name"] in waiting
             # Same class of fact as the two above, and the one that decides
             # whether Call is worth offering at all — see `_liveness`.
-            row["liveness"] = _liveness(live.get(row["name"]))
+            row["liveness"] = _liveness(live.get(row["name"]),
+                                        registered=row["hooked"])
             row["pending"] = queued is not None
             row["queued_age"] = int(now - queued["queued_at"]) if queued else 0
             # Woken, told which room, not there yet. Usually it is mid-turn.
@@ -609,7 +639,8 @@ class Handler(BaseHTTPRequestHandler):
             # same way. A button that says "idle, not callable" and a response
             # that says "woken" is how this app taught the chair to distrust it.
             live = _liveness(next((s for s in claude_sessions()
-                                   if s["name"] == target), None))
+                                   if s["name"] == target), None),
+                             registered=hooked)
             # Two ways to reach a session, tried together because each covers a
             # case the other does not: the hook reaches an idle session, the
             # Lobby reaches one that never restarted.

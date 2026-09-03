@@ -108,6 +108,37 @@ def test_a_non_claude_participant_gets_a_row_while_it_is_fresh(
         "that no longer exists")
 
 
+def test_a_registration_earns_a_row_of_its_own_when_nothing_else_has_one(
+        tmp_path, monkeypatch):
+    """The container: no registry to read, and the hook is the only evidence
+    that the session exists at all. The row says so in `source`, and it says
+    "unknown" for what the registry would have told us."""
+    monkeypatch.setattr(discovery, "CLAUDE_SESSIONS", tmp_path / "empty")
+    monkeypatch.setattr(discovery, "_cache", (0.0, []))
+    hub = Hub(tmp_path / "rooms")
+    [row] = roster(hub, {"shal-7": {"name": "shal-7", "session_id": "sid-7",
+                                    "cwd": "C:/PlayGround/agora",
+                                    "registered_at": time.time()}})
+    assert row["name"] == "shal-7" and row["source"] == "registration"
+    assert row["status"] == "unknown" and row["pid"] == 0
+    assert row["project"] == "agora" and row["rooms"] == []
+
+
+def test_a_registration_under_a_second_name_does_not_fork_the_session(
+        tmp_path, monkeypatch):
+    """Identity comes from the registry (D6). A session that registered as
+    "CMO" and resolves as "ops-b0" is one agent, and two rows would offer the
+    chair two seats with only one of them reachable."""
+    _session(tmp_path, "ops-b0", sid="sid-1")
+    monkeypatch.setattr(discovery, "CLAUDE_SESSIONS", tmp_path)
+    monkeypatch.setattr(discovery, "_cache", (0.0, []))
+    hub = Hub(tmp_path / "rooms")
+    rows = roster(hub, {"CMO": {"name": "CMO", "session_id": "sid-1",
+                                "registered_at": time.time()}})
+    assert [r["name"] for r in rows] == ["ops-b0"]
+    assert rows[0]["source"] == "registry"
+
+
 def test_the_chair_is_not_listed_as_a_callable_session(tmp_path, monkeypatch):
     monkeypatch.setattr(discovery, "CLAUDE_SESSIONS", tmp_path / "empty")
     monkeypatch.setattr(discovery, "_cache", (0.0, []))

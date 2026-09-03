@@ -83,6 +83,9 @@ h2 .n{background:var(--panel2);border-radius:9px;padding:0 6px;letter-spacing:0}
 .dot.busy{background:var(--go)} .dot.idle{background:var(--warn)}
 .dot.live{background:var(--go)}
 .dot.off{background:var(--mut);opacity:.35}
+/* Reachable — its hook is parked — but known only by that hook, so the ring
+   without the fill: the same green, minus what the registry would have told us. */
+.dot.hooked{background:none;box-shadow:inset 0 0 0 1.5px var(--go)}
 .tag{font-family:var(--mono);font-size:9.5px;padding:1px 5px;border-radius:3px;
   background:var(--panel2);color:var(--mut);border:1px solid var(--line);
   white-space:nowrap}
@@ -439,15 +442,23 @@ const canCall = s => s.reach === "now" || s.liveness === "busy";
 const listedFirst = s => canCall(s) || s.reach === "awaiting";
 
 function sessionItem(s, here){
+  // Known only because its hook registered: callable, but Claude Code's session
+  // registry cannot be read from here, so project, version and busy/idle are
+  // genuinely unknown. The row says "unknown" rather than leaving them blank —
+  // blank reads as "nothing there", which is a different and wrong answer.
+  const only = s.source === "registration";
   const how = s.awaiting ? `woken ${ago(s.awaiting_age)} ago · not joined yet`
-            : s.hooked ? "ready" : s.in_lobby ? "waiting"
+            : s.hooked ? (only ? "ready — hook only, not in the registry" : "ready")
+            : s.in_lobby ? "waiting"
             : s.pending ? `called ${ago(s.queued_age)} ago`
             : s.liveness === "busy" ? "working — a call lands when it finishes"
             : s.liveness === "idle" ? "idle — type in its terminal to reach it"
             : "offline";
   const tip = s.reach === "awaiting"
       ? "It was woken and told the room. It joins when it finishes its current turn."
-    : s.reach === "now" ? "Ready — wakes in about a second"
+    : s.reach === "now" ? (only
+      ? "Ready — its parked hook wakes it in about a second. It is not in Claude Code's session registry, so nothing else about it is known: not its project, not its version, not whether it is mid-turn."
+      : "Ready — wakes in about a second")
     : s.liveness === "busy"
       ? (s.pending ? "A call is waiting in the Lobby. It arrives when this session finishes its turn."
                    : "Working. A call is queued and arrives when it finishes its turn.")
@@ -458,7 +469,8 @@ function sessionItem(s, here){
     <span class="dot ${s.liveness === "offline" ? "off" : esc(s.liveness)}"></span>
     <span class="grow">
       <span class="t">${esc(s.name)}</span>
-      <span class="s">${esc(s.provider)}${s.project ? " · " + esc(s.project) : ""} · ${how}</span>
+      <span class="s">${esc(s.provider)}${s.project ? " · " + esc(s.project)
+        : only ? " · project unknown" : ""} · ${how}</span>
     </span>
     ${here ? `<span class="tag go">in room</span>`
       : s.reach === "awaiting" ? `<span class="tag warn" title="${tip}">joining…</span>`

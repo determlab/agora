@@ -6,11 +6,13 @@ import os
 import threading
 import time
 import urllib.request
+from pathlib import Path
 
 import pytest
 
 from agora import discovery
 from agora.room import LOBBY
+from agora.server import REGISTRATION_TTL
 
 
 def _write_session(directory, name, sid, pid=None, status="idle", updated=None):
@@ -312,6 +314,119 @@ def test_a_stale_registry_entry_is_reported_offline(server, monkeypatch,
 
     server.tool("room_join", {"room": LOBBY, "name": "ancient"})
     assert _row(server, "ancient")["liveness"] == "offline"
+
+
+# ---- a session Agora can reach that discovery cannot see -------------------
+
+def _no_registry_at_all(monkeypatch):
+    """The container, exactly: `~/.claude/sessions` is not mounted, so
+    `availability` reports unavailable and `claude_sessions` is empty."""
+    monkeypatch.setattr(discovery, "CLAUDE_SESSIONS",
+                        Path("/definitely/not/mounted/sessions"))
+    monkeypatch.setattr(discovery, "_cache", (0.0, []))
+
+
+def test_a_hook_registered_session_gets_a_row_when_discovery_sees_nothing(
+        server, monkeypatch):
+    """The container case. `/api/register` works and the summons long poll
+    works, so the session is genuinely callable — and it used to get no roster
+    row, so the chair had no button for something Agora could reach."""
+    _no_registry_at_all(monkeypatch)
+    status, res = server.post("/api/register",
+                              {"name": "shal-7", "session_id": "sid-7",
+                               "cwd": "/work/agora"})
+    assert status == 200 and res["ok"] is True
+
+    _, state = server.get("/api/state")
+    assert [r["name"] for r in state["roster"]] == ["shal-7"]
+    row = state["roster"][0]
+    assert row["reach"] == "now" and row["hooked"] is True
+    assert row["liveness"] == "hooked", (
+        "not `offline` — a parked hook is a wake path the registry knows "
+        "nothing about; and not `idle` or `busy`, which would be the roster "
+        "reporting a registry state it never read")
+    # What the row does NOT know has to stay legible as unknown rather than
+    # blank, so the chair does not read it as a registry row with empty fields.
+    assert row["source"] == "registration"
+    assert row["status"] == "unknown"
+    assert row["pid"] == 0 and row["version"] == ""
+    assert row["project"] == "agora", "whatever the hook did send is still used"
+
+    # #19 must not be papered over by #20: the row says this one is reachable,
+    # the banner still says discovery is broken. Two facts, both shown.
+    assert state["discovery"]["available"] is False
+    assert state["discovery"]["reason"]
+
+
+def test_a_session_known_only_by_its_registration_can_actually_be_called(
+        server, monkeypatch):
+    """The row is worth nothing if the Call behind it does not land, so this
+    parks a real hook and checks the summons arrives."""
+    _no_registry_at_all(monkeypatch)
+    _, room = server.post("/api/rooms", {"title": "container call",
+                                         "name": "Hemi"})
+    got: list = []
+
+    def hook():
+        got.append(server.get("/api/summons?session=shal-7&timeout=20",
+                              timeout=30))
+
+    t = threading.Thread(target=hook)
+    t.start()
+    time.sleep(0.5)  # let the poll register itself
+    assert _row(server, "shal-7")["source"] == "registration"
+
+    _, res = server.post(f"/api/rooms/{room['id']}/admin",
+                         {"action": "call", "target": "shal-7", "name": "Hemi"})
+    t.join(timeout=25)
+    assert res["woke"] is True and res["hooked"] is True
+    assert got[0][1]["summoned"] is True and got[0][1]["room"] == room["id"]
+
+    # The hook deregisters the instant it takes the summons. Without the
+    # delivered-but-not-arrived rows the roster would drop this session in
+    # exactly the window the Call button's own toast points the chair at.
+    assert _row(server, "shal-7")["reach"] == "awaiting"
+
+
+def test_a_stale_registration_is_not_reported_as_reachable(server, monkeypatch):
+    """D7, read the right way round. A fresh registration IS the recent poll,
+    which is why it earns a row — but the row is not what makes it reachable,
+    the freshness is. A hook that stopped polling has to fall off."""
+    _no_registry_at_all(monkeypatch)
+    server.post("/api/register", {"name": "shal-7", "session_id": "sid-7"})
+    assert _row(server, "shal-7")["liveness"] == "hooked"
+
+    server.app.summons._registered["shal-7"]["registered_at"] = (
+        time.time() - REGISTRATION_TTL - 1)
+    names = [r["name"] for r in server.get("/api/state")[1]["roster"]]
+    assert "shal-7" not in names
+
+    _, room = server.post("/api/rooms", {"title": "stale reg", "name": "Hemi"})
+    _, res = server.post(f"/api/rooms/{room['id']}/admin",
+                         {"action": "call", "target": "shal-7", "name": "Hemi"})
+    assert res["woke"] is False and res["liveness"] == "offline"
+    assert res["note"], "a call that reached nobody must say so"
+
+
+def test_a_registry_row_and_a_registration_for_one_session_stay_one_row(
+        server, monkeypatch, tmp_path):
+    """Discovery coming back must not fork the session into two seats — the
+    chair would get two rows and Call would reach only one of them."""
+    sessions = tmp_path / "sessions-both"
+    _write_session(sessions, "ops-b0", "sid-1", status="busy")
+    monkeypatch.setattr(discovery, "CLAUDE_SESSIONS", sessions)
+    monkeypatch.setattr(discovery, "_cache", (0.0, []))
+    server.post("/api/register", {"name": "ops-b0", "session_id": "sid-1"})
+    monkeypatch.setattr(discovery, "_cache", (0.0, []))
+
+    rows = [r for r in server.get("/api/state")[1]["roster"]
+            if r["session_id"] == "sid-1"]
+    assert len(rows) == 1
+    assert rows[0]["source"] == "registry", "the source that knows more wins"
+    assert rows[0]["liveness"] == "busy", (
+        "a registry entry outranks the registration: it measures what the "
+        "session is doing, which a registration cannot")
+    assert rows[0]["hooked"] is True, "the registration still says it is parked"
 
 
 # ---- streams and export ----------------------------------------------------
