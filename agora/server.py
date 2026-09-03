@@ -114,7 +114,8 @@ class Summons:
         #: not the same as the agent arriving, and the chair needs to see the
         #: difference: clicking Call three times because nothing visibly
         #: happened is what a missing "delivered, waiting" state looks like.
-        self._delivered: dict[str, tuple[float, str]] = {}
+        # (when, room, the registration it had at delivery)
+        self._delivered: dict[str, tuple[float, str, dict[str, Any]]] = {}
         self._cond = threading.Condition()
 
     def register(self, name: str, info: dict[str, Any]) -> None:
@@ -148,8 +149,8 @@ class Summons:
         """
         cutoff = time.time() - max_age
         with self._cond:
-            return {name: {"name": name, "registered_at": at}
-                    for name, (at, _room) in self._delivered.items()
+            return {name: {**was, "name": name, "registered_at": at}
+                    for name, (at, _room, was) in self._delivered.items()
                     if at > cutoff}
 
     def forget(self, name: str) -> None:
@@ -185,7 +186,7 @@ class Summons:
         with self._cond:
             return self._pending.get(name)
 
-    def delivered(self, name: str) -> tuple[float, str] | None:
+    def delivered(self, name: str) -> tuple[float, str, dict[str, Any]] | None:
         with self._cond:
             return self._delivered.get(name)
 
@@ -202,9 +203,14 @@ class Summons:
                     # The caller is about to exit and wake its session, so it is
                     # no longer parked. Saying otherwise is a lie the Call button
                     # would repeat.
-                    self._registered.pop(name, None)
+                    was = self._registered.pop(name, None)
+                    # Keep what the registration knew. `outstanding` rebuilds the
+                    # row from here, and a row that degrades to "project unknown"
+                    # the instant Call lands is a worse answer than the one it
+                    # had a second earlier — from the same evidence.
                     self._delivered[name] = (time.time(),
-                                             str(pending.get("room", "")))
+                                             str(pending.get("room", "")),
+                                             was or {})
                     return pending
                 remaining = deadline - time.time()
                 if remaining <= 0:

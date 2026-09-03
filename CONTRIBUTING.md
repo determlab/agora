@@ -235,8 +235,9 @@ anyway — a fresh registration is a recent poll, which is what presence means
 here (D7) — and an agent that joined over MCP appears too, because a participant
 is a row in a room rather than a registry entry. Those rows are marked
 `registration` and `room`, and they say *unknown* for the things only the
-registry knows: the project, the Claude version, and whether the session is
-mid-turn. What is genuinely lost is the session that has neither hooked nor
+registry knows: the Claude version, and whether the session is mid-turn — and
+the project too, but only when nothing sent a working directory, since the hook
+posts its `cwd`. What is genuinely lost is the session that has neither hooked nor
 joined: nothing in here can see it, so the chair cannot know it is running, and
 no row can be built for it to call.
 
