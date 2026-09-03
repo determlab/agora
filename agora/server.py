@@ -119,9 +119,20 @@ class Summons:
         self._cond = threading.Condition()
 
     def register(self, name: str, info: dict[str, Any]) -> None:
+        """Refresh a registration, keeping what earlier ones knew.
+
+        Merge rather than replace, because the two callers say different
+        amounts. `/api/register` arrives once at session start with cwd,
+        session_id and pid; the summons poll re-registers every few seconds
+        with only a name, to heal the registry across a server restart. A
+        replace let the poll erase the identifying half within a second of it
+        arriving, so a roster row built from a registration could never show a
+        project and the session_id dedup could never match — both silently,
+        because a field that is empty looks the same as a field nobody sent.
+        """
         with self._cond:
             info["registered_at"] = time.time()
-            self._registered[name] = info
+            self._registered[name] = {**self._registered.get(name, {}), **info}
 
     def registered(self) -> dict[str, dict[str, Any]]:
         """Only sessions whose hook is still parked.

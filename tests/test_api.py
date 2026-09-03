@@ -547,6 +547,43 @@ def test_delivering_a_summons_deregisters_the_hook(server):
         "same false green one layer down")
 
 
+def test_the_woken_row_still_knows_what_the_registration_told_it(server,
+                                                                monkeypatch):
+    """Written in the order production actually runs, which is the whole point.
+
+    `/api/register` arrives once with a cwd; the summons poll then re-registers
+    every few seconds with only a name. A replace erased the cwd within a second
+    of it arriving, so a row that showed `agora` before the call blanked to
+    `project unknown` the instant it was woken — from evidence that had not
+    changed. A test written in test order (register, call, assert) passes over
+    that gap, because nothing polls in between.
+    """
+    _no_registry_at_all(monkeypatch)
+    server.post("/api/register", {"name": "shal-8", "session_id": "sid-8",
+                                  "cwd": "/work/agora"})
+
+    # The poll, which is what the hook does next and every few seconds after.
+    server.app.summons.register("shal-8", {"name": "shal-8", "via": "hook"})
+    row = next(r for r in server.get("/api/state")[1]["roster"]
+               if r["name"] == "shal-8")
+    assert row["project"] == "agora", "the poll must refresh, not forget"
+    assert row["session_id"] == "sid-8", (
+        "and the id has to survive, or the dedup that stops one session "
+        "forking into two rows can never match")
+
+    _, room = server.post("/api/rooms", {"title": "woken", "name": "Hemi"})
+    server.post(f"/api/rooms/{room['id']}/admin",
+                {"action": "call", "target": "shal-8", "name": "Hemi"})
+    server.app.summons.wait("shal-8", 1.0)   # the hook takes it and exits
+
+    row = next(r for r in server.get("/api/state")[1]["roster"]
+               if r["name"] == "shal-8")
+    assert row["reach"] == "awaiting"
+    assert row["project"] == "agora", (
+        "woken is not amnesia: the row knew this a second ago and nothing "
+        "since then measured otherwise")
+
+
 def test_a_delivered_call_shows_as_joining_until_the_agent_arrives(server,
                                                                    monkeypatch,
                                                                    tmp_path):
