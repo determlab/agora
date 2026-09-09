@@ -84,6 +84,20 @@ milestones in the history, not tagged releases.
 
 ### Fixed
 
+- A message mixing Hebrew and English rendered with the Latin run in the wrong
+  place: the message container set no direction, so every message inherited the
+  page's. Each message body now carries `dir="auto"` — direction is read off that
+  message's own first strong character, so a Hebrew message and the English one
+  under it are each laid out correctly — and inside a message that mixes scripts
+  the Latin runs are wrapped in `<bdi>`, which is what keeps `roadmap.md` and
+  `agora/mcp.py` from losing their dots and slashes to the surrounding paragraph.
+  The isolation is one pass over the raw text rather than a second pattern over
+  the escaped HTML the mention pass produced; that ordering is the point of D10.
+  The composer reads its own direction too, since it is where the text is typed.
+  Nothing about the wire format changed — a message is still the same string.
+  Author names, room titles and the roster rows are **not** included: they
+  truncate with `text-overflow`, and which end truncates follows the direction,
+  so turning them around is a layout change and not this fix. (issue #25, D10)
 - Call reported success while reaching nobody. Calls are now durable and report
   three reach states instead of reachable/not (D3). (`7cf3fa3`, `d61dbf4`)
 - A registration outlived the hook that made it, so Call kept claiming a wake

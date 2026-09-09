@@ -155,14 +155,76 @@ def test_the_transcript_paints_the_mentions_the_server_resolved(html: str):
     the text it would light up an address or a pasted snippet as a mention of
     somebody who is not in the room — the exact thing resolving server-side
     against the participant list prevents."""
-    fn = re.search(r"function withMentions\(e\)\{(.*?)\n\}", html, re.S)
+    fn = re.search(r"function withMentions\([^)]*\)\{(.*?)\n\}", html, re.S)
     assert fn, "the transcript should render mentions through withMentions"
     body = fn.group(1)
     assert "e.mentions" in body, \
         "the highlight must come from the server's list, not from the text"
-    assert "esc(e.text)" in body, \
-        "escape before inserting markup — every word here is somebody else's"
     assert "${withMentions(e)}" in html, "nothing calls withMentions"
+
+
+#: The one interpolation in the message renderer that is neither esc() nor a
+#: piece the bidi helper already escaped: a literal class name picked by a bool.
+SAFE_INTERPOLATIONS = {'mine ? " me" : ""'}
+
+
+def test_the_message_renderer_escapes_every_piece_it_emits(html: str):
+    """The renderer builds HTML out of somebody else's words, and it now builds
+    it in more than one place — the mention spans and the bidi isolates. The
+    guard is therefore about the shape rather than about one call: everything
+    either function puts in the DOM comes out of esc(). An interpolation that
+    does not is an injection, and it would not look like one in a browser."""
+    for name in ("withMentions", "bidiEsc"):
+        fn = re.search(rf"function {name}\([^)]*\)\{{(.*?)\n\}}", html, re.S)
+        assert fn, f"{name}() is gone — the escaping seam moved"
+        for expr in re.findall(r"\$\{([^}]*)\}", fn.group(1)):
+            if expr.strip() in SAFE_INTERPOLATIONS:
+                continue
+            assert "esc(" in expr, \
+                f"{name}() interpolates {expr!r} without escaping it"
+    assert "${e.text}" not in html, \
+        "a message's text must never reach innerHTML unescaped"
+
+
+def test_every_message_body_carries_dir_auto(html: str):
+    """Issue #25. A Hebrew message that names a file or an issue number renders
+    with the Latin run misplaced when nothing sets the direction. `dir="auto"`
+    is resolved per element, which is what makes it per *message*: the page
+    never picks one direction for a transcript that has both in it."""
+    bodies = re.findall(r'<div class="bd"[^>]*>', html)
+    assert bodies, "the transcript should be rendering message bodies"
+    for tag in bodies:
+        assert 'dir="auto"' in tag, f"a message body with no direction: {tag}"
+    assert re.search(r"\.bd\{[^}]*text-align:start", html), \
+        "the body aligns to the start of its own direction, never to the left"
+    assert 'id="say"' in html and re.search(
+        r'<textarea id="say"[^>]*dir="auto"', html), \
+        "the composer types the same text; it reads its own direction too"
+
+
+def test_a_latin_run_inside_a_mixed_message_is_isolated(html: str):
+    """`dir="auto"` settles the paragraph. It does not stop that paragraph
+    claiming the neutral characters at the edge of a Latin run inside it, so
+    `roadmap.md` still loses its dot and `agora/mcp.py` its slash. Each run gets
+    its own isolate.
+
+    This asserts the two rules that keep the isolation safe rather than the
+    output, because the output is a browser's business: the scan runs over the
+    raw text (never over the escaped HTML, where it would match inside `&amp;`
+    and inside the mention markup), and the first strong run is left outside an
+    isolate, because `dir="auto"` does not look inside `<bdi>` and would
+    otherwise read an English message that quotes Hebrew as right-to-left."""
+    fn = re.search(r"function bidiEsc\([^)]*\)\{(.*?)\n\}", html, re.S)
+    assert fn, "the bidi helper is gone"
+    body = fn.group(1)
+    assert "<bdi>" in body, "a Latin run inside an RTL message needs isolating"
+    assert "firstStrong" in body, \
+        "the run dir=auto reads the direction from must stay outside an isolate"
+    caller = re.search(r"function withMentions\([^)]*\)\{(.*?)\n\}", html, re.S).group(1)
+    assert "text.slice" in caller, \
+        "the isolation must be applied to the raw text, not to the escaped HTML"
+    assert re.search(r"\.mention\{[^}]*unicode-bidi:isolate", html), \
+        "a resolved mention is a Latin run too, and CSS isolates it in place"
 
 
 def test_a_mention_of_you_looks_different_from_a_mention_of_someone_else(html: str):
