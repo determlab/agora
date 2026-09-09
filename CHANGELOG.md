@@ -86,15 +86,26 @@ milestones in the history, not tagged releases.
 
 - A message mixing Hebrew and English rendered with the Latin run in the wrong
   place: the message container set no direction, so every message inherited the
-  page's. Each message body now carries `dir="auto"` — direction is read off that
+  page's. Each message body now carries `dir="auto"` - direction is read off that
   message's own first strong character, so a Hebrew message and the English one
-  under it are each laid out correctly — and inside a message that mixes scripts
-  the Latin runs are wrapped in `<bdi>`, which is what keeps `roadmap.md` and
-  `agora/mcp.py` from losing their dots and slashes to the surrounding paragraph.
-  The isolation is one pass over the raw text rather than a second pattern over
-  the escaped HTML the mention pass produced; that ordering is the point of D10.
-  The composer reads its own direction too, since it is where the text is typed.
-  Nothing about the wire format changed — a message is still the same string.
+  under it are each laid out correctly - and `.bd` aligns to `start` rather than
+  to `left`, so the alignment follows whichever direction that resolved to. The
+  composer reads its own direction too, since it is where the text is typed.
+  Nothing about the wire format changed - a message is still the same string.
+
+  The Latin runs inside a mixed message are deliberately **not** isolated. A
+  `<bdi>` around each run was written, then measured in a browser by glyph
+  position, and it made the rendering worse: an isolate is a single neutral
+  object to the paragraph around it, so `roadmap.md #141` inside a Hebrew
+  sentence came out `#141 roadmap.md` and `the wire format` came out
+  `format wire the`. The runs never needed protecting - the bidi algorithm
+  already resolves the dot in `roadmap.md` between two Latin letters as
+  left-to-right. `dir="auto"` alone renders the reported case correctly.
+
+  What did change under the hood is the renderer: it now escapes and builds its
+  markup in a single pass over the raw text instead of running a second pattern
+  over the HTML the mention pass had already produced. That ordering is D10, and
+  it is the half of this change with a test behind it.
   Author names, room titles and the roster rows are **not** included: they
   truncate with `text-overflow`, and which end truncates follows the direction,
   so turning them around is a layout change and not this fix. (issue #25, D10)

@@ -155,13 +155,11 @@ header .ag:empty::before{content:"add an agenda";color:var(--mut);font-style:ita
    `left` so the alignment follows whichever way that resolved. */
 .bd{white-space:pre-wrap;word-wrap:break-word;overflow-wrap:anywhere;text-align:start}
 /* A mention of somebody else is a marker; a mention of you is addressed to you,
-   so it is filled in rather than tinted. `isolate` is the <bdi> the span cannot
-   be: a Latin name inside a Hebrew line otherwise lets the paragraph claim the
-   punctuation on either side of it. It stays a CSS isolate rather than a real
-   <bdi> on purpose — dir="auto" skips <bdi>, and a message that opens with a
-   mention should still take its direction from that first word. */
+   so it is filled in rather than tinted. Deliberately NOT a bidi isolate: an
+   isolate is one neutral object to the line around it, so inside a Hebrew
+   message `@bob later` renders as `later @bob`. Measured, see D10. */
 .mention{color:var(--acc);background:var(--acc-bg);border-radius:3px;
-  padding:0 3px;font-weight:600;unicode-bidi:isolate}
+  padding:0 3px;font-weight:600}
 .mention.me{background:var(--acc);color:var(--acc-ink)}
 .sys{color:var(--mut);font-size:11.5px;font-family:var(--mono);text-align:center;
   padding:5px 0}
@@ -762,9 +760,11 @@ function paintRoom(isSnapshot){
   $("nNotes").textContent = notes.length;
   $("nSums").textContent = sums.length;
   $("notes").innerHTML = notes.map(n =>
-    `<div class="note"><b>${esc(n.author)}</b><br>${esc(n.text)}</div>`).join("");
+    `<div class="note"><b>${esc(n.author)}</b><br>` +
+    `<span dir="auto">${esc(n.text)}</span></div>`).join("");
   $("sums").innerHTML = sums.length
-    ? sums.map(s => `<div class="note"><b>${esc(s.author)} · ${clock(s.ts)}</b><br>${esc(s.text)}</div>`).join("")
+    ? sums.map(s => `<div class="note"><b>${esc(s.author)} · ${clock(s.ts)}</b><br>` +
+        `<span dir="auto">${esc(s.text)}</span></div>`).join("")
     : `<div class="empty" style="padding:0">None yet. Ask a participant, or take a local digest.</div>`;
 }
 
@@ -772,53 +772,26 @@ function paintRoom(isSnapshot){
 const rxEsc = s => String(s).replace(/[.*+?^${}()|[\]\\-]/g, "\\$&");
 
 /* Bidirectional text. A message here is often Hebrew with an English file name,
-   an issue number or a tool name inside it. dir="auto" on the body element gets
-   the paragraph right; what it does not fix is that the browser resolves the
-   neutral characters at the edges of a Latin run — the dot in `roadmap.md`, the
-   slashes in `agora/mcp.py` — against the paragraph rather than against the run,
-   so the token lands in the wrong place. <bdi> makes each run resolve on its own.
+   an issue number or a tool name inside it. `dir="auto"` on the body element is
+   the whole fix: the browser takes the paragraph direction from the message's
+   first strong character, and the Unicode bidi algorithm places the Latin runs
+   inside it.
 
-   Three rules decide where an isolate may go, and the first is the one that
-   keeps this safe:
+   This deliberately does NOT isolate those runs, and that is worth writing down
+   because isolating them is the obvious next step and it is wrong. An isolate
+   participates in the parent paragraph as a single neutral object, so two Latin
+   tokens that sit next to each other inside a Hebrew sentence get laid out
+   right-to-left: `roadmap.md #141` renders as `#141 roadmap.md`, and `the wire
+   format` as `format wire the`. The runs that isolation was supposed to protect
+   need no protection — rule N1 already resolves the dot in `roadmap.md` and the
+   slashes in `agora/mcp.py` between two Latin letters as left-to-right. Measured
+   in a browser, by glyph position, on both variants of eleven message shapes.
 
-   1. **The scan runs over the raw text, never over markup.** The result is built
-      by concatenating esc()'d pieces with literal tags, so no pattern in here
-      can match inside `&amp;` or inside a mention span, and none of them can
-      open an escaping hole. A second pass over the first pass's output is
-      exactly how such a hole gets opened by an unrelated feature later.
-   2. **Only a message that actually mixes scripts is touched.** An all-Latin
-      message would otherwise collect a <bdi> around every word for no effect.
-   3. **The first strong run is left alone.** dir="auto" takes the direction from
-      the first strong character and does not look inside <bdi>, so isolating
-      that run would flip an English message that merely quotes Hebrew to RTL.
-      The rule the page follows is: the first strong run decides the direction,
-      whatever script it is in, and every run after it is isolated. */
-const RTL_CHAR = /[\u0590-\u08FF\uFB1D-\uFDFF\uFE70-\uFEFF]/;
-const STRONG_CHAR = /[A-Za-z\u0590-\u08FF\uFB1D-\uFDFF\uFE70-\uFEFF]/;
-// A run starts with a Latin letter and takes in the path punctuation *between*
-// its parts, which is the whole point: `roadmap.md` and `agora/mcp.py` lose
-// their dots and slashes to the paragraph otherwise. Leading and trailing
-// punctuation stays outside the isolate, where the paragraph still governs it —
-// that is what keeps the comma closing a Hebrew clause on the reader's side.
-// A digits-only token (`141`, `#141`, a date) is deliberately not a run: digits
-// already resolve left-to-right inside an RTL paragraph, so an isolate around
-// one would change nothing and only add markup.
-const LATIN_RUN = /[A-Za-z][A-Za-z0-9]*(?:[.:\/#_-]+[A-Za-z0-9]+)*/g;
-
-/* Escapes `s` and isolates the Latin runs in it. `base` is where `s` starts in
-   the whole message, because rule 3 is about the message and not the slice. */
-function bidiEsc(s, mixed, firstStrong, base){
-  if(!mixed) return esc(s);
-  let out = "", at = 0, m;
-  LATIN_RUN.lastIndex = 0;
-  while((m = LATIN_RUN.exec(s)) !== null){
-    out += esc(s.slice(at, m.index));
-    out += ((base + m.index) === firstStrong)
-      ? esc(m[0]) : `<bdi>${esc(m[0])}</bdi>`;
-    at = m.index + m[0].length;
-  }
-  return out + esc(s.slice(at));
-}
+   What the single pass below IS for is escaping. It builds the result by
+   concatenating esc()'d slices of the RAW text with the literal tags this
+   function adds, so no pattern here can match inside `&amp;` or inside a mention
+   span. A second pass over the first pass's output is exactly how an escaping
+   hole gets opened later by an unrelated feature. */
 
 /* Paints the mentions the SERVER resolved against the participant list. It never
    decides what a mention is: a pattern over somebody's words turns an address or
@@ -827,9 +800,7 @@ function bidiEsc(s, mixed, firstStrong, base){
    function adds. */
 function withMentions(e){
   const text = String(e.text ?? "");
-  const mixed = RTL_CHAR.test(text);
-  const firstStrong = mixed ? text.search(STRONG_CHAR) : -1;
-  const plain = (from, to) => bidiEsc(text.slice(from, to), mixed, firstStrong, from);
+  const plain = (from, to) => esc(text.slice(from, to));
 
   // Longest name first, so one name that merely starts another cannot claim it;
   // (?![\w-]) is the same boundary the server matched with.
