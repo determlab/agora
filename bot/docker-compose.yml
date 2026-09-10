@@ -1,0 +1,174 @@
+# bot/docker-compose.yml — Zulip, for issue #37 (chat rebuild, step 1 of 4).
+#
+# Base: zulip/docker-zulip (the project's own published compose, 11.x branch —
+# https://github.com/zulip/docker-zulip/blob/11.x/docker-compose.yml), not
+# hand-rolled. Trimmed and adapted:
+#   - all passwords/secrets moved out of the file and into bot/.env
+#     (gitignored — see bot/README.md)
+#   - published port remapped from 80 to 8090, and bound to 127.0.0.1 only,
+#     matching this repo's D4 (loopback is the boundary) even though Zulip is
+#     a separate stack — see bot/README.md for the "why" and the netstat check
+#   - port 25 (SMTP) and 443 (HTTPS) dropped — see EXTERNAL_HOST comment below
+#     for why plain HTTP turned out to be the right call, not a shortcut
+#   - `build:` dropped in favour of the pre-built image; nothing here needs a
+#     custom Zulip fork
+#
+# This is a separate compose *project* (`name: agora-zulip`) from the repo
+# root's docker-compose.yml (which runs the agora app itself on 8765/8766) —
+# two independent stacks, so this file does not touch or clobber that one.
+#
+# Start:  cd bot && docker compose up -d
+# Stop:   cd bot && docker compose down          (add -v to also drop the data)
+
+name: agora-zulip
+
+services:
+  database:
+    image: "zulip/zulip-postgresql:14"
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: "zulip"
+      POSTGRES_USER: "zulip"
+      POSTGRES_PASSWORD: "${ZULIP_POSTGRES_PASSWORD}"
+    volumes:
+      - "postgresql-14:/var/lib/postgresql/data:rw"
+
+  memcached:
+    image: "memcached:alpine"
+    restart: unless-stopped
+    command:
+      - "sh"
+      - "-euc"
+      - |
+        echo 'mech_list: plain' > "$$SASL_CONF_PATH"
+        echo "zulip@$$HOSTNAME:$$MEMCACHED_PASSWORD" > "$$MEMCACHED_SASL_PWDB"
+        echo "zulip@localhost:$$MEMCACHED_PASSWORD" >> "$$MEMCACHED_SASL_PWDB"
+        exec memcached -S
+    environment:
+      SASL_CONF_PATH: "/home/memcache/memcached.conf"
+      MEMCACHED_SASL_PWDB: "/home/memcache/memcached-sasl-db"
+      MEMCACHED_PASSWORD: "${ZULIP_MEMCACHED_PASSWORD}"
+
+  rabbitmq:
+    image: "rabbitmq:4.1"
+    restart: unless-stopped
+    environment:
+      RABBITMQ_DEFAULT_USER: "zulip"
+      RABBITMQ_DEFAULT_PASS: "${ZULIP_RABBITMQ_PASSWORD}"
+    volumes:
+      - "rabbitmq:/var/lib/rabbitmq:rw"
+
+  redis:
+    image: "redis:alpine"
+    restart: unless-stopped
+    command:
+      - "sh"
+      - "-euc"
+      - |
+        echo "requirepass '$$REDIS_PASSWORD'" > /etc/redis.conf
+        exec redis-server /etc/redis.conf
+    environment:
+      REDIS_PASSWORD: "${ZULIP_REDIS_PASSWORD}"
+    volumes:
+      - "redis:/data:rw"
+
+  zulip:
+    image: "zulip/docker-zulip:11.6-0"
+    restart: unless-stopped
+    ports:
+      # Loopback-only (D4's spirit): 8090 chosen after checking `netstat`
+      # for this machine's in-use ports (8765, 8804 were both taken
+      # tonight; 8090 was free). No 25 or 443 published — see below.
+      - "127.0.0.1:8090:80"
+    environment:
+      DB_HOST: "database"
+      DB_HOST_PORT: "5432"
+      DB_USER: "zulip"
+      # nginx inside the container needs a cert to start regardless of
+      # whether 443 is published to the host; "none" leaves it missing and
+      # the container loops "Certificates configuration failed." forever
+      # (confirmed by trying it) — self-signed is what upstream defaults to,
+      # and it's never actually served since DISABLE_HTTPS below is set and
+      # 443 isn't published.
+      SSL_CERTIFICATE_GENERATION: "self-signed"
+      # 443 is not published, so the default "redirect HTTP to HTTPS" would
+      # make port 8090 unreachable (confirmed: 301 to https://127.0.0.1/).
+      # This is upstream's documented escape hatch for plain-HTTP local use
+      # — see the EXTERNAL_HOST comment below for why plain HTTP is safe
+      # here rather than a security shortcut.
+      DISABLE_HTTPS: "True"
+      # Without a real reverse proxy in front, Zulip refuses plain HTTP
+      # outright ("Configuration error", confirmed by trying it) unless told
+      # which source to trust as already TLS-terminated. Nothing reaches
+      # this container except Docker's own bridge gateway, since the port
+      # is published to 127.0.0.1 only (see `ports:` above) — trusting that
+      # one gateway is the loopback-only boundary one layer out, not a
+      # weaker one (the root docker-compose.yml's D4 comment makes the same
+      # argument for the agora container).
+      TRUST_GATEWAY_IP: "True"
+      SETTING_MEMCACHED_LOCATION: "memcached:11211"
+      SETTING_RABBITMQ_HOST: "rabbitmq"
+      SETTING_REDIS_HOST: "redis"
+      SECRETS_email_password: "unused-local-dev"
+      SECRETS_rabbitmq_password: "${ZULIP_RABBITMQ_PASSWORD}"
+      SECRETS_postgres_password: "${ZULIP_POSTGRES_PASSWORD}"
+      SECRETS_memcached_password: "${ZULIP_MEMCACHED_PASSWORD}"
+      SECRETS_redis_password: "${ZULIP_REDIS_PASSWORD}"
+      SECRETS_secret_key: "${ZULIP_SECRET_KEY}"
+      # Three things confirmed by trying them, in order:
+      #   1. EXTERNAL_HOST must contain a domain part (a bare "localhost" is
+      #      rejected: zulip.E002) — "localhost.localdomain" passes that,
+      #      but Zulip then generates every static-asset/API URL as
+      #      https://localhost.localdomain/..., which has no DNS record on
+      #      this machine — the shell HTML loads but every webpack bundle
+      #      404s and the app never gets past the loading spinner (no fix
+      #      available here: that needs a hosts-file edit, out of reach).
+      #   2. "127.0.0.1.nip.io" (public wildcard DNS resolving <ip>.nip.io
+      #      to <ip>, confirmed via `nslookup`) fixes the DNS problem with
+      #      no local config — but the browser then refuses to send this
+      #      app's Secure-flagged session/CSRF cookies (Zulip's Django
+      #      settings mark them Secure whenever PRODUCTION=True, which the
+      #      Docker image always is), because a domain that merely
+      #      *resolves* to a loopback IP is not treated as a browser
+      #      "potentially trustworthy origin" — only https, or the literal
+      #      hostname localhost/*.localhost/127.0.0.1/[::1], qualifies.
+      #      Every cookie-bearing POST 403s ("browser did not send the
+      #      credentials required") — confirmed by trying it.
+      #   3. "*.localhost" is the fix for both at once: RFC 6761 makes it
+      #      resolve to loopback in the OS/browser with zero configuration
+      #      (confirmed: `nslookup zulip.localhost` → 127.0.0.1/::1, no
+      #      hosts-file edit), it contains a dot (passes E002), and Chrome
+      #      (and other browsers) treat *.localhost as a trustworthy origin
+      #      the same as literal 127.0.0.1 — so Secure cookies work over
+      #      plain HTTP here specifically.
+      # Port included so generated links (static assets, API base) point at
+      # 8090, the port actually published — EXTERNAL_HOST accepts
+      # "host:port" for exactly this non-default-port case.
+      SETTING_EXTERNAL_HOST: "zulip.localhost:8090"
+      # Zulip's own default (zproject/default_settings.py) hard-codes
+      # EXTERNAL_URI_SCHEME = "https://" independent of DISABLE_HTTPS, so
+      # every generated URL (webpack bundles included) pointed at
+      # https://zulip.localhost:8090/... which nothing here serves, and the
+      # SPA silently failed to boot (confirmed by trying it — scripts 404,
+      # blank page). SETTING_ prefixes pass straight through to Django
+      # settings (docker-zulip's own convention), so this overrides it.
+      SETTING_EXTERNAL_URI_SCHEME: "http://"
+      SETTING_ZULIP_ADMINISTRATOR: "admin@example.com"
+      ZULIP_AUTH_BACKENDS: "EmailAuthBackend"
+    volumes:
+      - "zulip:/data:rw"
+    ulimits:
+      nofile:
+        soft: 1000000
+        hard: 1048576
+    depends_on:
+      - database
+      - memcached
+      - rabbitmq
+      - redis
+
+volumes:
+  zulip:
+  postgresql-14:
+  rabbitmq:
+  redis:

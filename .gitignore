@@ -4,3 +4,6 @@ __pycache__/
 .venv/
 rooms/
 rooms-scratch/
+
+# bot/ — Zulip stack (issue #37). Secrets + coo-bot API key, never committed.
+bot/.env

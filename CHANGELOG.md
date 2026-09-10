@@ -26,6 +26,24 @@ milestones in the history, not tagged releases.
 
 ### Added
 
+- `bot/`: Zulip brought up in Docker (`bot/docker-compose.yml`, based on
+  `zulip/docker-zulip`'s own published compose, 11.x branch — not
+  hand-rolled) and a `coo-bot` listener proving the premise behind rebuilding
+  chat on a real product: a long-poll event queue holds messages while a bot
+  is busy for minutes, and the bot resumes from its last event id rather than
+  needing to acknowledge within seconds. The durability test
+  (`bot/durability_test.py`) is the number this was run to produce — it
+  registers a queue, does **not** poll for a real 3 minutes while 6 messages
+  send from a second thread spaced across the gap, then resumes: **all 6
+  arrived, in order, resumed from the stored event id.** `bot/resume.py`
+  holds the resume logic (advance `last_event_id` to the max seen; never
+  echo the bot's own messages) with a unit suite
+  (`bot/test_resume.py`, mocked HTTP, no live server needed). stdlib-only
+  (`urllib`+`json`) — no `zulip` pip package, matching this repo's zero
+  runtime-dependency rule (D2); `bot/zulip_client.py`'s docstring has the
+  reasoning. The bot's API key lives in `bot/.env`, gitignored. Out of scope
+  here (later issues): migrating rooms/transcripts/other roles, the
+  status/roadmap tab, retiring the existing 8765 server. (D12, issue #37)
 - `GET /api/heartbeat` and a Heartbeat view in the page: one row per known
   session — alive, listening, timer armed, loop last-ran, queue depth — so
   "anyone here?" has an answer nobody has to type. `alive`/`listening` are
