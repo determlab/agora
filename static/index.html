@@ -86,12 +86,37 @@ h2 .n{background:var(--panel2);border-radius:9px;padding:0 6px;letter-spacing:0}
 /* Reachable — its hook is parked — but known only by that hook, so the ring
    without the fill: the same green, minus what the registry would have told us. */
 .dot.hooked{background:none;box-shadow:inset 0 0 0 1.5px var(--go)}
+.dot.stop{background:var(--stop)}
 .tag{font-family:var(--mono);font-size:9.5px;padding:1px 5px;border-radius:3px;
   background:var(--panel2);color:var(--mut);border:1px solid var(--line);
   white-space:nowrap}
 .tag.go{color:var(--go);border-color:var(--go)}
 .tag.warn{color:var(--warn);border-color:var(--warn)}
 .tag.stop{color:var(--stop);border-color:var(--stop)}
+
+/* ---------- heartbeat (issue #26) ---------- */
+/* A second full-screen view, not a third pane: #appView and #heartbeatView are
+   mutually exclusive (one always [hidden]), so this reuses the 100vh the
+   3-pane layout already claims rather than fighting it for space. */
+#heartbeatView{height:100vh;overflow-y:auto;background:var(--panel);
+  display:flex;flex-direction:column}
+.hbHead{flex:none;padding:12px 20px;border-bottom:1px solid var(--line);
+  display:flex;align-items:center;gap:14px;flex-wrap:wrap;background:var(--panel)}
+.hbHead h1{font-size:15.5px;margin:0;font-weight:700}
+.hbMeta{font-size:11px;color:var(--mut);font-family:var(--mono)}
+.hbBody{padding:14px 20px 40px;max-width:960px}
+.hbEmpty{color:var(--mut);font-size:12.5px;padding:6px 0}
+.hbRow{display:flex;flex-wrap:wrap;gap:5px 18px;align-items:center;
+  padding:10px 14px;border:1px solid var(--line);border-radius:var(--r);
+  margin-bottom:7px;font-size:12.5px}
+.hbRow.red{border-color:var(--stop)}
+.hbRow .name{font-weight:600;min-width:110px;display:flex;align-items:center;gap:6px}
+.hbCell{display:flex;flex-direction:column;gap:1px;min-width:96px}
+.hbCell .k{color:var(--mut);font-size:9.5px;text-transform:uppercase;
+  letter-spacing:.08em;font-family:var(--mono)}
+.hbCell .v{font-family:var(--mono);font-size:11.5px}
+.hbCell .v.na{color:var(--mut);font-style:italic}
+.hbReasons{flex:1 1 100%;color:var(--stop);font-size:11.5px;font-family:var(--mono)}
 
 /* ---------- centre ---------- */
 main{display:flex;flex-direction:column;min-width:0;min-height:0;background:var(--bg)}
@@ -238,7 +263,7 @@ pre{background:var(--bg);border:1px solid var(--line);border-radius:var(--r);
 </head>
 <body>
 <div id="conn">Disconnected from Agora — retrying…</div>
-<div class="app">
+<div class="app" id="appView">
 
   <!-- ================= left ================= -->
   <aside class="pane left" id="paneLeft">
@@ -272,6 +297,8 @@ pre{background:var(--bg);border:1px solid var(--line);border-radius:var(--r);
       <span class="tag" id="stat" hidden></span>
       <button class="ghost sm pane-btn" id="btnPeople" onclick="togglePane('right')" hidden>People</button>
       <button class="ghost sm" onclick="exportRoom()" id="btnExport" disabled>Export</button>
+      <button class="ghost sm" onclick="showHeartbeat()" id="btnHeartbeat"
+              title="One row per session: alive, listening, timers, loop, queue">Heartbeat</button>
     </header>
 
     <div id="log" class="scroll" aria-live="polite"></div>
@@ -314,6 +341,18 @@ pre{background:var(--bg);border:1px solid var(--line);border-radius:var(--r);
     <div class="pad" id="sums"></div>
   </div>
 </div>
+
+<!-- ================= heartbeat (issue #26) ================= -->
+<div id="heartbeatView" hidden>
+  <div class="hbHead">
+    <button class="ghost sm" onclick="hideHeartbeat()">← Meetings</button>
+    <h1>Heartbeat</h1>
+    <span class="hbMeta" id="hbMeta"></span>
+    <span class="hbMeta" id="hbRepoMeta"></span>
+  </div>
+  <div class="hbBody" id="hbRows"></div>
+</div>
+
 <div id="toasts" aria-live="assertive"></div>
 
 <script>
@@ -535,6 +574,75 @@ const callIn = guard(async who => {
   else if(r.liveness === "busy") toast(r.note, null, "Queued, not delivered yet");
   else toast(r.note, "bad", "Nothing was reached");
 });
+
+/* ============================ heartbeat (issue #26) ============================ */
+// "make the sessions boring — one page with a heartbeat someone can read"
+// (room 03627270 seq 177). Two axes are real (alive, listening — the same
+// data the roster pane already shows) and two are honestly "not reported"
+// until a session's hook actually sends timers/loop, which nothing does yet
+// — see agora/heartbeat.py. This view must never paint a state it was not
+// given; that is the whole point of the page it replaces ("anyone here?").
+let hbTimer = null;
+const hbLabel = (field, okWord) => {
+  if(!field || field.status === "not_reported") return {v:"not reported", na:true};
+  if(field.status === "no_data") return {v:"no data", na:true};
+  return {v: okWord, na:false};
+};
+
+function hbCell(k, v, na){
+  return `<span class="hbCell"><span class="k">${esc(k)}</span>
+    <span class="v${na ? " na" : ""}">${esc(v)}</span></span>`;
+}
+
+function hbRowHtml(r){
+  const listening = r.listening === null ? {v:"not in a room", na:true}
+    : r.listening ? {v:"listening", na:false} : {v:"not listening", na:false};
+  const timers = hbLabel(r.timers,
+    r.timers && r.timers.items && r.timers.items.length
+      ? `${r.timers.items.length} armed` : "reported, none");
+  const loop = hbLabel(r.loop, r.loop && r.loop.outcome ? r.loop.outcome : "reported");
+  const queue = hbLabel(r.queue_depth,
+    r.queue_depth && r.queue_depth.value != null ? `${r.queue_depth.value} queued` : "reported");
+  return `<div class="hbRow${r.red ? " red" : ""}">
+    <span class="name"><span class="dot ${r.red ? "stop" : r.alive ? "busy" : "off"}"></span>${esc(r.name)}</span>
+    ${hbCell("alive", r.alive ? "yes" : "no")}
+    ${hbCell("listening", listening.v, listening.na)}
+    ${hbCell("timer armed", timers.v, timers.na)}
+    ${hbCell("loop last ran", loop.v, loop.na)}
+    ${hbCell("queue depth", queue.v, queue.na)}
+    ${r.red_reasons && r.red_reasons.length
+      ? `<span class="hbReasons">${r.red_reasons.map(esc).join(" · ")}</span>` : ""}
+  </div>`;
+}
+
+async function paintHeartbeat(){
+  let hb;
+  try{ hb = await api("/api/heartbeat"); }
+  catch(e){ $("hbRows").innerHTML = `<div class="hbEmpty">Could not reach
+    /api/heartbeat: ${esc(e.message || e)}</div>`; return; }
+  $("hbMeta").textContent = `updated ${new Date(hb.generated_at*1000).toTimeString().slice(0,8)}`;
+  const rd = hb.repo && hb.repo.queue_depth;
+  $("hbRepoMeta").textContent = (rd && rd.status === "reported")
+    ? `this repo: ${rd.value} queued` : "this repo: no data (gh not available here)";
+  $("hbRows").innerHTML = hb.rows.length
+    ? hb.rows.map(hbRowHtml).join("")
+    : `<div class="hbEmpty">No sessions known yet — a session shows up here once
+       its hook has registered or it has joined a room.</div>`;
+}
+
+function showHeartbeat(){
+  $("appView").hidden = true;
+  $("heartbeatView").hidden = false;
+  paintHeartbeat();
+  // Cheap and server-cached (repo_snapshot), but only while this view is open.
+  if(hbTimer) clearInterval(hbTimer);
+  hbTimer = setInterval(paintHeartbeat, 5000);
+}
+function hideHeartbeat(){
+  $("heartbeatView").hidden = true;
+  $("appView").hidden = false;
+  if(hbTimer){ clearInterval(hbTimer); hbTimer = null; }
+}
 
 /* ============================ one room ============================ */
 function openRoom(id){
