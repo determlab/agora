@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from agora import discovery
+from agora import discovery, heartbeat
 from agora.room import LOBBY
 from agora.server import REGISTRATION_TTL
 
@@ -650,3 +650,65 @@ def test_the_composer_is_told_a_mention_reached_nobody(server):
     _, snap = server.get(f"/api/rooms/{rid}")
     said = [e for e in snap["events"] if e["text"] == "@CTO still there?"]
     assert said and said[0]["mentions"] == ["CTO"]
+
+
+# ---- heartbeat (issue #26) --------------------------------------------------
+
+def test_register_accepts_timers_and_loop_but_they_stay_optional(server):
+    """Additive to /api/register (D3, D1's shape): a caller that sends nothing
+    new — every caller today, hooks/agora_hook.py included — must see no
+    change at all. One that does send timers/loop gets them stored."""
+    status, res = server.post("/api/register", {"name": "shal-7"})
+    assert status == 200 and res["ok"] is True
+
+    status, res = server.post("/api/register", {
+        "name": "shal-7",
+        "timers": [{"name": "loop", "cron": "*/5 * * * *", "next": time.time() + 300}],
+        "loop": {"last_run": time.time(), "last_issue": 26, "outcome": "ok"},
+    })
+    assert status == 200 and res["ok"] is True
+    reg = server.app.summons.registered()["shal-7"]
+    assert reg["timers"][0]["name"] == "loop"
+    assert reg["loop"]["last_issue"] == 26
+
+
+def test_heartbeat_endpoint_matches_the_page_and_marks_unreported_fields(
+        server, monkeypatch):
+    """No live gh/network call here: the server fixture's root is a bare
+    tmp_path with no .git, so `repo_snapshot` short-circuits to no_data before
+    it would ever shell out — see `agora/heartbeat.repo_snapshot`."""
+    _no_registry_at_all(monkeypatch)
+    server.post("/api/register", {"name": "shal-7", "session_id": "sid-7"})
+
+    status, hb = server.get("/api/heartbeat")
+    assert status == 200
+    assert "generated_at" in hb and "repo" in hb
+    row = next(r for r in hb["rows"] if r["name"] == "shal-7")
+    assert row["alive"] is True          # hooked, from the same liveness the roster uses
+    assert row["listening"] is None      # not seated in any room yet — rule N/A
+    assert row["timers"] == {"status": "not_reported", "items": []}
+    assert row["loop"] == {"status": "not_reported"}
+    assert row["queue_depth"] == {"status": "no_data", "value": None}
+    assert row["red"] is False
+
+    # The JSON endpoint is the same computation the UI reads (acceptance
+    # criterion 2): a row present in one is present in the other.
+    _, state = server.get("/api/state")
+    assert {r["name"] for r in state["roster"]} == {r["name"] for r in hb["rows"]}
+
+
+def test_heartbeat_goes_red_when_a_seated_session_stops_listening(server, monkeypatch):
+    """DoD: 'a session that stops room_wait shows not listening within 10
+    min' — and the issue's own red rule for it."""
+    _no_registry_at_all(monkeypatch)
+    _, room = server.post("/api/rooms", {"title": "hb", "name": "Hemi"})
+    live = server.app.hub.get(room["id"])
+    live.join("CTO")
+    live.participants["CTO"].last_seen = (
+        time.time() - heartbeat.LISTENING_STALE_AFTER - 1)
+
+    _, hb = server.get("/api/heartbeat")
+    row = next(r for r in hb["rows"] if r["name"] == "CTO")
+    assert row["listening"] is False
+    assert row["red"] is True
+    assert "listening" in row["red_reasons"][0]

@@ -28,6 +28,7 @@ from urllib.parse import parse_qs, urlparse
 from . import __version__
 from .discovery import (GHOST_AFTER, availability, claude_sessions,
                         invite_text, roster)
+from . import heartbeat as heartbeat_mod
 from .mcp import ANY_ROOM, McpHandler
 from .room import (HUMAN, LOBBY, MESSAGE, NOTE, ONLINE_WINDOW, SUMMARY, Hub,
                    Muted, NotSeated, RoomClosed, mention_note)
@@ -319,6 +320,9 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/state":
             return self._json(self._state())
 
+        if path == "/api/heartbeat":
+            return self._json(self._heartbeat())
+
         if path == "/api/summons":
             # The async half of a session's SessionStart hook parks here.
             who = (query.get("session") or [""])[0]
@@ -423,6 +427,32 @@ class Handler(BaseHTTPRequestHandler):
             "discovery": availability(),
         }
 
+    def _heartbeat(self) -> dict[str, Any]:
+        """Issue #26: one honest row per session — alive, listening, timers,
+        loop, queue depth — reusing `_state()`'s roster so "alive" here can
+        never disagree with the roster pane's "alive". See `agora/heartbeat.py`
+        for what is real today and what is deliberately `not_reported` /
+        `no_data` and why.
+        """
+        state = self._state()
+        # The working tree this server itself runs from — the only repo it can
+        # honestly say anything about via a local `gh`/`git` call. `hub.root`
+        # is `<repo>/rooms`, so its parent is `<repo>`.
+        root = self.app.hub.root.parent
+        repo_data = heartbeat_mod.repo_snapshot(root)
+        registrations = self.app.summons.registered()
+        rows = [heartbeat_mod.build_row(r, self.app.hub, registrations, root,
+                                        repo_data)
+               for r in state["roster"]]
+        return {
+            "generated_at": time.time(),
+            "rows": rows,
+            # Repo-level facts shown once, independent of whether any row's
+            # cwd happens to match right now — the page can show "this Agora
+            # instance" even when nothing is currently hooked in.
+            "repo": {"root": str(root), **repo_data},
+        }
+
     def _state_stream(self) -> None:
         """Push state when it actually changes. Replaces a Refresh button.
 
@@ -523,13 +553,25 @@ class Handler(BaseHTTPRequestHandler):
             name = str(body.get("name") or "").strip()
             if not name:
                 return self._json({"error": "name required"}, 400)
-            self.app.summons.register(name, {
+            info: dict[str, Any] = {
                 "name": name,
                 "session_id": str(body.get("session_id") or ""),
                 "cwd": str(body.get("cwd") or ""),
                 "pid": int(body.get("pid") or 0),
                 "provider": str(body.get("provider") or "claude-code"),
-            })
+            }
+            # Additive and optional (issue #26): nothing sends these two today
+            # — `hooks/agora_hook.py` is a protected path and is deliberately
+            # NOT being extended here — so every existing caller, hook
+            # included, keeps working exactly as before. Only set the key when
+            # the caller actually sent it: `Summons.register` merges by key, so
+            # an absent key here leaves whatever an earlier call reported
+            # rather than clobbering it with a fabricated default.
+            if "timers" in body:
+                info["timers"] = body.get("timers")
+            if "loop" in body:
+                info["loop"] = body.get("loop")
+            self.app.summons.register(name, info)
             return self._json({"ok": True, "url": self.app.public_url,
                                "rooms": self.app.hub.listing()})
 

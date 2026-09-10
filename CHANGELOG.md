@@ -26,6 +26,20 @@ milestones in the history, not tagged releases.
 
 ### Added
 
+- `GET /api/heartbeat` and a Heartbeat view in the page: one row per known
+  session — alive, listening, timer armed, loop last-ran, queue depth — so
+  "anyone here?" has an answer nobody has to type. `alive`/`listening` are
+  real, built from the same roster and `Participant.last_seen` the left pane
+  already reads. `timers`/`loop` are real once a session's hook sends them
+  and `not_reported` until then, because nothing does yet — extending
+  `hooks/agora_hook.py` to send them is deliberately out of scope here, since
+  that file is a protected path (issue #26). `/api/register` now accepts
+  optional `timers`/`loop` fields, additively — every existing caller,
+  including the unedited hook, is unaffected. Queue depth and last-loop-PR
+  are real for this repo's own working tree via a short-timeout local `gh`
+  call, and `no_data` for any other repo this server cannot open. Three red
+  rules from the issue, each refusing to fire on data marked `not_reported`/
+  `no_data`. (`agora/heartbeat.py`, issue #26)
 - `room_wait` accepts `room="*"`: one parked call covers every room the session
   holds a seat in **plus the Lobby**, so a session in three meetings holds one
   parked call rather than three. The cursor becomes a per-room `cursors` map,
