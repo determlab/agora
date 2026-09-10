@@ -137,21 +137,33 @@ class IssueCache:
 # ---- markdown-lite -----------------------------------------------------
 
 def _inline(text: str) -> str:
-    """Bold, italic, inline code, and `[text](http(s)://…)` links.
+    """Inline code, bold, italic, and `[text](http(s)://…)` links.
 
     Escaped first, so every regex below runs over text that is already safe —
     none of `*` `` ` `` `[` `]` `(` `)` are HTML-special, so escaping does not
     disturb them, and nothing after this function adds another layer of raw
     text into the output.
+
+    Code spans are pulled out into placeholders before bold/italic/link run,
+    and restored last, so text inside a `` `code` `` span can never be turned
+    into a nested `<a>`/`<strong>`/`<em>` — a code span's content is verbatim,
+    the same as any other markdown renderer treats it.
     """
     out = esc(text)
-    out = re.sub(r"`([^`]+?)`", r"<code>\1</code>", out)
+    codes: list[str] = []
+
+    def _stash_code(m: "re.Match[str]") -> str:
+        codes.append(m.group(1))
+        return f"\x00{len(codes) - 1}\x00"
+
+    out = re.sub(r"`([^`]+?)`", _stash_code, out)
     out = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", out)
     out = re.sub(r"(?<!\*)\*([^*]+?)\*(?!\*)", r"<em>\1</em>", out)
     out = re.sub(
         r"\[([^\]]+)\]\((https?://[^\s)]+)\)",
         lambda m: f'<a href="{m.group(2)}" target="_blank" rel="noopener noreferrer">{m.group(1)}</a>',
         out)
+    out = re.sub(r"\x00(\d+)\x00", lambda m: f"<code>{codes[int(m.group(1))]}</code>", out)
     return out
 
 
