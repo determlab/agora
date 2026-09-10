@@ -45,6 +45,13 @@ input:focus,textarea:focus{outline:none;border-color:var(--acc)}
 
 /* ---------- shell ---------- */
 .app{display:grid;grid-template-columns:248px minmax(0,1fr) 284px;height:100vh}
+/* `.app{display:grid}` and `#heartbeatView{display:flex}` below both tie the
+   browser's own `[hidden]{display:none}` rule on specificity, and an author
+   rule wins a tie over the UA stylesheet regardless of order — so neither
+   view actually hides no matter what the `hidden` attribute says (found
+   live: clicking Heartbeat toggled the attribute correctly and changed
+   nothing on screen). This one rule outranks both. */
+#appView[hidden],#heartbeatView[hidden]{display:none}
 .pane{background:var(--panel);display:flex;flex-direction:column;min-height:0;min-width:0}
 .pane.left{border-right:1px solid var(--line)}
 .pane.right{border-left:1px solid var(--line)}
