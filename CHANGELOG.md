@@ -26,6 +26,15 @@ milestones in the history, not tagged releases.
 
 ### Added
 
+- `bot/setup_streams.py`: idempotent creation of the four Zulip streams
+  (`cto`, `cmo`, `coo`, `status`) and the three role bots (`COO`, `CTO`,
+  `CMO`), each bot subscribed to its own stream only — no bot subscribed to
+  `#status`. Supersedes the nine-per-repo-stream scheme in issue #40's
+  original body; a later comment quoting the founder ("i dont need per repo
+  i just need CMO CTO and you") is the scheme actually built. `--check`
+  verifies live state and exits non-zero on anything missing or wrong.
+  Admin credentials (`ZULIP_ADMIN_EMAIL`/`ZULIP_ADMIN_API_KEY`) are read from
+  the environment/`bot/.env`, never hardcoded. (D13, issue #40)
 - `bot/`: Zulip brought up in Docker (`bot/docker-compose.yml`, based on
   `zulip/docker-zulip`'s own published compose, 11.x branch — not
   hand-rolled) and a `coo-bot` listener proving the premise behind rebuilding

@@ -29,6 +29,44 @@ the status/roadmap tab, retiring the existing 8765 server.
 | `listener.py` | the actual bot: register once, long-poll `/json/events` forever, echo every non-bot message back with the event id it resumed from. |
 | `durability_test.py` | the proof: a real 3-minute gap with no polling, messages sent throughout by a second thread, then resume and check nothing was lost. |
 | `test_resume.py` | unit tests for `resume.py` (mocked data, no live server — `pytest bot/test_resume.py`). |
+| `setup_streams.py` | idempotent: creates the four streams and three role bots below, and subscribes each bot to its own stream only. `--check` verifies without creating and exits non-zero if anything is missing or wrong. |
+
+## Streams and topics (issue #40)
+
+**The issue body's nine-per-repo-stream scheme is superseded.** A later
+comment quotes the founder directly — "i dont need per repo i just need CMO
+CTO and you" — so the actual scheme is **four streams, not nine**:
+
+| stream | who posts | who is subscribed |
+|---|---|---|
+| `#cto` | the founder, the CTO bot | the CTO bot only |
+| `#cmo` | the founder, the CMO bot | the CMO bot only |
+| `#coo` | the founder, the COO bot | the COO bot only |
+| `#status` | the ops watchdog (one pinned message it rewrites) | no bot |
+
+The founder talks to a person, not a repository — `#shal`, `#bricks`, `#aos`,
+`#agora`, `#adk-lab`, `#pytest-shal`, `#ops` and `#founder` from the original
+issue text are dropped. This is the hard version of the old chair-mute: a bot
+that is not subscribed to a stream cannot read or post into it, so the
+founder's conversation with the CMO is not something the CTO bot can see.
+
+Pool workers get neither a bot user nor a stream subscription — they are
+processes with no session to wake (RFC-004); their state is the label on the
+issue, their voice is the PR.
+
+**topic = the issue number** inside a role stream, e.g. `#cto 141 record
+shape`. A decision that isn't tied to one issue uses the ledger id instead,
+e.g. `D12 event queue resume`. Unchanged from the original issue body.
+
+Run it (idempotent — a second run creates nothing):
+```
+.venv/Scripts/python.exe bot/setup_streams.py            # create what's missing
+.venv/Scripts/python.exe bot/setup_streams.py --check     # verify, exit 1 if incomplete
+```
+Needs `ZULIP_ADMIN_EMAIL` / `ZULIP_ADMIN_API_KEY` (an admin account — creating
+streams and subscribing other users are realm-admin actions, a bot cannot do
+either). Regenerate the admin key via `manage.py shell` the same way the bot
+user below is created — never hardcode it; it belongs in `bot/.env` only.
 
 ## Why no `zulip` pip dependency
 

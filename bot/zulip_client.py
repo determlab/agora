@@ -118,3 +118,56 @@ class ZulipClient:
         if type_ == "stream":
             params["topic"] = topic
         return self._request("POST", "messages", params)
+
+    # -- admin calls, added for bot/setup_streams.py (issue #40) ----------
+    #
+    # These need an *admin* account's credentials, not a bot's — creating
+    # streams and subscribing other users are realm-admin actions. Kept on
+    # the same client rather than a second class because they are the same
+    # three primitives (GET/POST/DELETE against /api/v1/*) with different
+    # endpoints, and setup_streams.py is the only caller.
+
+    def list_streams(self) -> list[dict[str, Any]]:
+        """All active streams in the realm (admin-only param), not just the
+        caller's own subscriptions — needed to check "does it exist" without
+        first subscribing to it."""
+        payload = self._request("GET", "streams", {"include_all_active": "true"})
+        return payload["streams"]
+
+    def create_stream(self, name: str) -> None:
+        """Zulip has no separate "create stream" call: subscribing to a name
+        that doesn't exist yet creates it (as a public stream, the default).
+        This subscribes the admin account too — harmless, and it is what
+        lets the admin see/manage the stream afterwards."""
+        self._request("POST", "users/me/subscriptions", {"subscriptions": [{"name": name}]})
+
+    def list_users(self) -> list[dict[str, Any]]:
+        """Every account in the realm, bots included (`is_bot`) — used to
+        check whether a bot already exists before creating it."""
+        payload = self._request("GET", "users")
+        return payload["members"]
+
+    def create_bot(self, full_name: str, short_name: str) -> dict[str, Any]:
+        """POST /bots. `short_name` becomes the email's local part
+        (`<short_name>-bot@<realm>`); `bot_type=1` is Zulip's "generic bot"
+        type — the only kind this repo needs, no incoming webhook."""
+        return self._request(
+            "POST", "bots", {"full_name": full_name, "short_name": short_name, "bot_type": 1}
+        )
+
+    def subscribe(self, stream: str, principals: list[str]) -> None:
+        """Subscribe other accounts (`principals`, a list of emails) to an
+        existing stream. Also admin-only; a bot cannot subscribe itself to a
+        stream it isn't in, by design (that's the point of this issue)."""
+        self._request(
+            "POST",
+            "users/me/subscriptions",
+            {"subscriptions": [{"name": stream}], "principals": principals},
+        )
+
+    def stream_subscribers(self, stream_id: int) -> list[int]:
+        """GET /streams/{id}/members — the user ids subscribed to a stream.
+        This is how --check confirms a bot is subscribed to its own stream
+        and nowhere else, without trusting a subscribe call's own report."""
+        payload = self._request("GET", f"streams/{stream_id}/members")
+        return payload["subscribers"]
