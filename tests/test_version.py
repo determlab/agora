@@ -166,9 +166,9 @@ def _advertised(argv: list[str], root: Path) -> str:
     seen: dict[str, str] = {}
     real = srv.Agora
 
-    def _record(app_root, url):
+    def _record(app_root, url, **kwargs):
         seen["url"] = url
-        return real(app_root, url)
+        return real(app_root, url, **kwargs)
 
     old = srv.ThreadingHTTPServer, srv.Agora
     srv.ThreadingHTTPServer, srv.Agora = _FakeServer, _record

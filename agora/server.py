@@ -30,6 +30,7 @@ from .discovery import (GHOST_AFTER, availability, claude_sessions,
                         invite_text, roster)
 from . import heartbeat as heartbeat_mod
 from .mcp import ANY_ROOM, McpHandler
+from .roadmap import IssueCache, load_and_render
 from .room import (HUMAN, LOBBY, MESSAGE, NOTE, ONLINE_WINDOW, SUMMARY, Hub,
                    Muted, NotSeated, RoomClosed, mention_note)
 
@@ -233,12 +234,19 @@ class Summons:
 class Agora:
     """Everything the request handler needs, in one place."""
 
-    def __init__(self, root: Path, public_url: str) -> None:
+    def __init__(self, root: Path, public_url: str,
+                 roadmap_path: Path | None = None) -> None:
         self.hub = Hub(root / "rooms")
         self.summons = Summons()
         self.mcp = McpHandler(self.hub, self.summons)
         self.public_url = public_url
         self.chair_name = CHAIR
+        # `ops/` is a sibling of this repo on the machine this actually runs on
+        # (issue #31), so the default is relative to `root` rather than to the
+        # process's cwd — configurable because the issue says so is one valid
+        # choice, not the only machine this could ever run on.
+        self.roadmap_path = roadmap_path or (root / ".." / "ops" / "roadmap.md")
+        self.roadmap_cache = IssueCache()
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -322,6 +330,14 @@ class Handler(BaseHTTPRequestHandler):
 
         if path == "/api/heartbeat":
             return self._json(self._heartbeat())
+
+        if path == "/api/roadmap":
+            # A local file read plus a markdown render, done fresh every call —
+            # cheap, and it is what makes a changed roadmap.md show up on the
+            # very next refresh. What IS cached is inside `load_and_render`: the
+            # `gh` lookups behind each milestone's issue-state chip (10 min).
+            return self._json(load_and_render(self.app.roadmap_path,
+                                              self.app.roadmap_cache))
 
         if path == "/api/summons":
             # The async half of a session's SessionStart hook parks here.
@@ -809,6 +825,15 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--public-url", default=os.environ.get("AGORA_PUBLIC_URL", ""),
                         help="the URL clients dial, if it differs from the bind "
                              "(a published container port); env AGORA_PUBLIC_URL")
+    # roadmap.md (issue #31) is a local file, a sibling repo on this machine
+    # (`ops/`), not a network fetch — no token, no rate limit. Configurable
+    # because the issue leaves the choice to the chair; env first, then a flag,
+    # then the default this machine's actual layout.
+    parser.add_argument("--roadmap-path", type=Path,
+                        default=Path(os.environ["AGORA_ROADMAP_PATH"])
+                                if os.environ.get("AGORA_ROADMAP_PATH") else None,
+                        help="path to determlab/ops roadmap.md; env "
+                             "AGORA_ROADMAP_PATH; default ../ops/roadmap.md")
     args = parser.parse_args(argv)
 
     bound = f"http://{args.host}:{args.port}"
@@ -817,7 +842,7 @@ def main(argv: list[str] | None = None) -> int:
     url = args.public_url.rstrip("/") or (
         f"http://127.0.0.1:{args.port}" if args.host in ("0.0.0.0", "::", "")
         else bound)
-    app = Agora(args.root, url)
+    app = Agora(args.root, url, roadmap_path=args.roadmap_path)
 
     handler = type("BoundHandler", (Handler,), {"app": app})
     httpd = ThreadingHTTPServer((args.host, args.port), handler)

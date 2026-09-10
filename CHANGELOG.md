@@ -2,7 +2,7 @@
 type: changelog
 owner: repo-agent
 scope: repo/agora
-reviewed: 2026-08-31
+reviewed: 2026-09-10
 ---
 
 # Changelog
@@ -40,6 +40,17 @@ milestones in the history, not tagged releases.
   call, and `no_data` for any other repo this server cannot open. Three red
   rules from the issue, each refusing to fire on data marked `not_reported`/
   `no_data`. (`agora/heartbeat.py`, issue #26)
+- A Roadmap tab (`GET /api/roadmap`), reading `determlab/ops` `roadmap.md` from
+  a local path (`--roadmap-path` / `AGORA_ROADMAP_PATH`, default
+  `../ops/roadmap.md`) and rendering it with a hand-rolled markdown-lite
+  renderer — no pip dependency (D2). Every `<repo> #<N>` reference in a
+  milestone's tracked-as column gets a live state chip
+  (open/working/needs-human/done/unknown) from `gh issue view`, cached 10
+  minutes as one batch; a `gh` failure of any kind renders "unknown", never a
+  guess (D3). The file itself is re-read and re-rendered on every request, so
+  an edit to `roadmap.md` shows on the next refresh regardless of the issue
+  cache. Tab labels are Hebrew; the roadmap text renders as written. (D11,
+  issue #31)
 - `room_wait` accepts `room="*"`: one parked call covers every room the session
   holds a seat in **plus the Lobby**, so a session in three meetings holds one
   parked call rather than three. The cursor becomes a per-room `cursors` map,
