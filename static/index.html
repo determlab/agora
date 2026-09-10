@@ -24,7 +24,7 @@
 html,body{height:100%}
 body{margin:0;background:var(--bg);color:var(--ink);overflow:hidden;
   font:14px/1.55 -apple-system,"Segoe UI",system-ui,sans-serif;
-  -webkit-font-smoothing:antialiased}
+  -webkit-font-smoothing:antialiased;display:flex;flex-direction:column}
 button,input,textarea{font:inherit;color:inherit}
 button{background:var(--panel2);border:1px solid var(--line);border-radius:var(--r);
   padding:5px 10px;cursor:pointer;transition:border-color .12s,background .12s}
@@ -45,13 +45,14 @@ input:focus,textarea:focus{outline:none;border-color:var(--acc)}
 
 /* ---------- shell ---------- */
 .app{display:grid;grid-template-columns:248px minmax(0,1fr) 284px;height:100vh}
-/* `.app{display:grid}` and `#heartbeatView{display:flex}` below both tie the
-   browser's own `[hidden]{display:none}` rule on specificity, and an author
-   rule wins a tie over the UA stylesheet regardless of order — so neither
-   view actually hides no matter what the `hidden` attribute says (found
-   live: clicking Heartbeat toggled the attribute correctly and changed
-   nothing on screen). This one rule outranks both. */
-#appView[hidden],#heartbeatView[hidden]{display:none}
+/* `.app{display:grid}` and `#heartbeatView{display:flex}` (and now
+   `#roadmapView`) all tie the browser's own `[hidden]{display:none}` rule on
+   specificity, and an author rule wins a tie over the UA stylesheet
+   regardless of order — so no view actually hides no matter what the
+   `hidden` attribute says (found live: clicking Heartbeat toggled the
+   attribute correctly and changed nothing on screen). This one rule
+   outranks all three. */
+#appView[hidden],#heartbeatView[hidden],#roadmapView[hidden]{display:none}
 .pane{background:var(--panel);display:flex;flex-direction:column;min-height:0;min-width:0}
 .pane.left{border-right:1px solid var(--line)}
 .pane.right{border-left:1px solid var(--line)}
@@ -243,6 +244,46 @@ pre{background:var(--bg);border:1px solid var(--line);border-radius:var(--r);
 .toast b{display:block;margin-bottom:2px}
 @keyframes rise{from{opacity:0;transform:translateY(8px)}}
 
+/* ---------- roadmap tab ---------- */
+/* Same full-screen-view pattern as #heartbeatView: mutually exclusive with
+   #appView and #heartbeatView (one always [hidden]), so it reuses the 100vh
+   the 3-pane layout already claims. */
+#roadmapView{height:100vh;overflow-y:auto;background:var(--panel);
+  display:flex;flex-direction:column}
+.rm-head{flex:none;padding:12px 18px 8px;border-bottom:1px solid var(--line);
+  background:var(--panel);display:flex;align-items:center;gap:12px}
+.rm-head h2{padding:0;flex:1;text-transform:none;font-size:15.5px;
+  letter-spacing:normal;font-family:inherit;color:var(--ink);font-weight:700}
+.rm-meta{color:var(--mut);font-family:var(--mono);font-size:11px}
+.rm-body{flex:1;min-height:0;padding:18px 22px 40px}
+/* `text-align:start` rather than `left`, and `dir="auto"` per element — #25
+   measured that isolating Latin runs (bdi / unicode-bidi:isolate) REVERSES
+   adjacent Latin tokens inside RTL prose. Neither appears anywhere here. */
+.roadmap-doc{max-width:900px;text-align:start}
+.roadmap-doc h1,.roadmap-doc h2,.roadmap-doc h3,
+.roadmap-doc h4,.roadmap-doc h5,.roadmap-doc h6{
+  text-align:start;margin:22px 0 8px;line-height:1.3}
+.roadmap-doc h1{font-size:21px} .roadmap-doc h2{font-size:17px;color:var(--acc)}
+.roadmap-doc h3{font-size:14.5px}
+.roadmap-doc p{text-align:start;margin:8px 0}
+.roadmap-doc ul,.roadmap-doc ol{text-align:start;margin:8px 0;padding-inline-start:22px}
+.roadmap-doc li{margin:3px 0}
+.roadmap-doc code{background:var(--panel2);border:1px solid var(--line);
+  border-radius:4px;padding:0 4px;font-family:var(--mono);font-size:12px}
+.roadmap-doc a{color:var(--acc)}
+.roadmap-doc table{border-collapse:collapse;width:100%;margin:10px 0 18px;font-size:12.5px}
+.roadmap-doc th,.roadmap-doc td{border:1px solid var(--line);padding:6px 9px;
+  text-align:start;vertical-align:top}
+.roadmap-doc th{background:var(--panel2);font-weight:700}
+.rm-chips{display:inline-flex;gap:4px;flex-wrap:wrap;margin-inline-start:6px}
+.rm-chip{display:inline-block;font-family:var(--mono);font-size:10px;
+  border-radius:9px;padding:1px 7px;border:1px solid var(--line2);white-space:nowrap}
+.rm-chip-open{color:var(--ink2)}
+.rm-chip-working{color:var(--warn);border-color:var(--warn)}
+.rm-chip-needs-human{color:var(--stop);border-color:var(--stop)}
+.rm-chip-done{color:var(--go);border-color:var(--go)}
+.rm-chip-unknown{color:var(--mut)}
+
 /* ---------- connection ---------- */
 #conn{flex:none;font-family:var(--mono);font-size:11px;padding:6px 14px;
   background:var(--stop);color:#fff;text-align:center;display:none}
@@ -306,6 +347,8 @@ pre{background:var(--bg);border:1px solid var(--line);border-radius:var(--r);
       <button class="ghost sm" onclick="exportRoom()" id="btnExport" disabled>Export</button>
       <button class="ghost sm" onclick="showHeartbeat()" id="btnHeartbeat"
               title="One row per session: alive, listening, timers, loop, queue">Heartbeat</button>
+      <button class="ghost sm" onclick="showRoadmap()" id="btnRoadmap"
+              title="ops/roadmap.md, rendered live">מפת דרכים</button>
     </header>
 
     <div id="log" class="scroll" aria-live="polite"></div>
@@ -360,6 +403,17 @@ pre{background:var(--bg);border:1px solid var(--line);border-radius:var(--r);
   <div class="hbBody" id="hbRows"></div>
 </div>
 
+<!-- ================= roadmap (issue #31) ================= -->
+<div id="roadmapView" hidden>
+  <div class="rm-head">
+    <button class="ghost sm" onclick="hideRoadmap()">← Meetings</button>
+    <h2 dir="auto">מפת דרכים</h2>
+    <span class="rm-meta" id="roadmapMeta"></span>
+    <button class="ghost sm" onclick="loadRoadmap()">רענון</button>
+  </div>
+  <div id="roadmapBody" class="scroll rm-body"></div>
+</div>
+
 <div id="toasts" aria-live="assertive"></div>
 
 <script>
@@ -369,6 +423,7 @@ let S = {rooms:[], roster:[], chair:"chair", url:"", version:"",
          discovery:{available:true, path:"", reason:"", note:""}};
 let cur = null, snap = null, roomES = null, stateES = null;
 let ME = "", seen = {}, unread = {};   // seen: messages already read per room
+let curView = "meeting";               // "meeting" | "roadmap" — see showRoadmap()
 
 const $ = id => document.getElementById(id);
 const esc = s => String(s ?? "").replace(/[&<>"]/g,
@@ -951,6 +1006,43 @@ function openNewRoom(){
     if(e.key === "Enter" && e.target.tagName === "INPUT"){ e.preventDefault(); go(); }
   });
 }
+
+/* ============================ roadmap tab ============================ */
+/* A third full-screen view alongside #appView and #heartbeatView (#26) —
+   same mutually-exclusive-hidden pattern, not a separate tab framework. */
+function showRoadmap(){
+  curView = "roadmap";
+  $("appView").hidden = true;
+  $("heartbeatView").hidden = true;
+  $("roadmapView").hidden = false;
+  loadRoadmap();
+}
+function hideRoadmap(){
+  curView = "meeting";
+  $("roadmapView").hidden = true;
+  $("appView").hidden = false;
+}
+
+const loadRoadmap = guard(async () => {
+  const body = $("roadmapBody");
+  const r = await api("/api/roadmap");
+  if(!r.available){
+    body.innerHTML = `<div class="empty"><b>Roadmap not found.</b><br>${esc(r.error || "")}</div>`;
+    $("roadmapMeta").textContent = "";
+    return;
+  }
+  // r.html is built server-side by agora/roadmap.py, which escapes every text
+  // node out of the source file itself before wrapping it in markup this
+  // module composed — the same trust boundary as this static page, not the
+  // "someone else's raw text" boundary esc() exists for elsewhere on this page.
+  body.innerHTML = r.html;
+  $("roadmapMeta").textContent = new Date().toLocaleTimeString();
+});
+
+// Refresh on open (showRoadmap, above) and every 10 minutes while the tab is the
+// one showing — matches the issue's DoD, and skips the `gh` batch entirely
+// when nobody is looking at it.
+setInterval(() => { if(curView === "roadmap") loadRoadmap(); }, 10 * 60 * 1000);
 
 /* ============================ misc ============================ */
 function togglePane(which){
