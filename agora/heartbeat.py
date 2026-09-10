@@ -197,6 +197,14 @@ def _is_this_repo(cwd: str, root: Path) -> bool:
     "SHAL" tells this server nothing about which repo that session is in, but
     a `cwd` it reported does. Rows with no `cwd` (most `room`-sourced rows,
     and any registration that never sent one) get no_data rather than a guess.
+
+    `cwd` is client-supplied, so `/api/register` is unauthenticated by design
+    (D4) — a crafted registration can claim this repo's root and pick up this
+    server's own queue depth and last loop PR under whatever name it likes.
+    That only discloses this server's own already-public repo state under the
+    wrong label; it does not reach a shell (see `_repo_snapshot`, which runs a
+    fixed argument list, never a string built from a session's fields) and it
+    does not cost another row its real data. Cosmetic, not a hole.
     """
     if not cwd:
         return False
