@@ -8,6 +8,7 @@ Usage:
   python bot/zulip.py send --stream coo --topic "#141 record shape" --text "..."
   python bot/zulip.py read --stream coo --topic "#141 record shape" [--since ID]
   python bot/zulip.py read --mentions [--since ID]
+  python bot/zulip.py wait [--session KEY] [--seconds N]
 
 Posts and reads as the bot named by ``ZULIP_BOT_EMAIL`` / ``ZULIP_BOT_API_KEY``,
 or with ``--as COO`` as the bot in ``ZULIP_COO_EMAIL`` / ``ZULIP_COO_API_KEY``.
@@ -23,6 +24,7 @@ Stdlib only, through ``zulip_client`` (D2).
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import os
 import re
 import sys
@@ -66,6 +68,7 @@ def load_client(as_name: str | None) -> ZulipClient:
     site = get("ZULIP_SITE", "http://zulip.localhost:8090")
     client = ZulipClient(site, email, api_key, timeout=30.0)
     client.email = email
+    client.api_key = api_key
     return client
 
 
@@ -149,6 +152,26 @@ def cmd_read(client: ZulipClient, stream: str | None, topic: str | None,
     return 0
 
 
+def _hook():
+    """hooks/agora_hook.py, loaded by path: ``wait`` runs the hook's own code
+    (issue #47), never a copy of it."""
+    path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                        "hooks", "agora_hook.py")
+    spec = importlib.util.spec_from_file_location("agora_hook", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def cmd_wait(client: ZulipClient, as_name: str | None, session: str | None,
+             seconds: float | None) -> int:
+    """Exit 2 with the message on a mention or DM, 0 when --seconds runs out
+    or another wait already serves this session."""
+    name = as_name or client.email.split("@")[0]
+    creds = (client.site, client.email, client.api_key)
+    return _hook().wait_for(creds, name, session or f"cli-{name}", seconds)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="zulip.py", description=__doc__.split("\n")[0])
     parser.add_argument("--as", dest="as_name",
@@ -165,12 +188,17 @@ def main(argv: list[str] | None = None) -> int:
                        help="everything that mentioned this bot, across streams")
     read.add_argument("--topic")
     read.add_argument("--since", type=int, help="only messages after this id")
+    wait = sub.add_parser("wait", help="park until this bot is mentioned or DMed")
+    wait.add_argument("--session", help="lock and queue key (default: cli-<bot>)")
+    wait.add_argument("--seconds", type=float, help="give up after this long")
     args = parser.parse_args(argv)
 
     client = load_client(args.as_name)
     try:
         if args.cmd == "send":
             return cmd_send(client, args.stream, args.topic, args.text)
+        if args.cmd == "wait":
+            return cmd_wait(client, args.as_name, args.session, args.seconds)
         return cmd_read(client, args.stream, args.topic, args.mentions, args.since)
     except ZulipError as exc:
         print(f"refused by Zulip: {exc}", file=sys.stderr)

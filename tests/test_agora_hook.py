@@ -13,6 +13,7 @@ import socket
 import subprocess
 import sys
 import threading
+import time
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -33,9 +34,16 @@ def _load():
 class FakeZulip:
     """Serves a scripted sequence of /events answers and records every call."""
 
-    def __init__(self, events_script: list, register_script: list = ()) -> None:
+    def __init__(self, events_script: list, register_script: list = (),
+                 history: list = (), dead_queues: tuple = (),
+                 max_message_id: int = -1, idle: float = 0.0) -> None:
         self.script = list(events_script)
         self.register_script = list(register_script)
+        self.history = list(history)          # what GET /messages can backfill
+        self.dead_queues = set(dead_queues)   # answer BAD_EVENT_QUEUE_ID
+        self.max_message_id = max_message_id
+        self.idle = idle                      # how long an empty poll parks
+        self.page_size = 100                  # GET /messages page size
         self.calls: list[tuple[str, str, dict]] = []
         self.queues = 0
         fake = self
@@ -61,12 +69,29 @@ class FakeZulip:
                 fake.queues += 1
                 self._answer(200, {"result": "success",
                                    "queue_id": f"q{fake.queues}",
-                                   "last_event_id": -1})
+                                   "last_event_id": -1,
+                                   "max_message_id": fake.max_message_id})
 
             def do_GET(self):
                 url = urllib.parse.urlparse(self.path)
                 q = dict(urllib.parse.parse_qsl(url.query))
                 fake.calls.append(("GET", url.path, q))
+                if url.path == "/api/v1/messages":
+                    narrow = json.loads(q["narrow"])[0]["operand"]
+                    after = int(q["anchor"])
+                    found = [m for m in fake.history if m["id"] > after and (
+                        (narrow == "mentioned" and m.get("mentioned"))
+                        or (narrow == "dm" and m.get("type") == "private"))]
+                    page = found[:fake.page_size]
+                    for m in page:
+                        m.setdefault("flags", ["mentioned"] if m.get("mentioned") else [])
+                    return self._answer(200, {"result": "success", "messages": page,
+                                              "found_newest": len(found) <= fake.page_size})
+                if q.get("queue_id") in fake.dead_queues:
+                    return self._answer(400, {"result": "error",
+                                              "code": "BAD_EVENT_QUEUE_ID"})
+                if not fake.script:
+                    time.sleep(fake.idle)
                 status, body = fake.script.pop(0) if fake.script else (
                     200, {"result": "success", "events": []})
                 if status == "truncated":
@@ -101,7 +126,7 @@ def heartbeat(i: int) -> dict:
 
 def mention(i: int, content: str = "please look at the record shape") -> dict:
     return {"type": "message", "id": i, "flags": ["mentioned"], "message": {
-        "type": "stream", "display_recipient": "coo",
+        "id": 1000 + i, "type": "stream", "display_recipient": "coo",
         "subject": "#141 record shape", "content": content,
         "sender_email": "founder@zulip.localhost", "sender_full_name": "Founder"}}
 
@@ -117,6 +142,7 @@ def hook(monkeypatch, tmp_path):
     monkeypatch.setenv("ZULIP_COO_EMAIL", BOT)
     monkeypatch.setenv("ZULIP_COO_API_KEY", "test-key")
     monkeypatch.setattr(mod, "WAIT_SECONDS", 5)
+    monkeypatch.setattr(mod, "STATE_DIR", tmp_path)
     return mod
 
 
@@ -141,7 +167,7 @@ def test_mention_prints_message_stream_topic_and_exits_2(hook, monkeypatch, caps
     assert json.loads(form["event_types"]) == ["message"]
     assert form["apply_markdown"] == "false"
     # last_event_id advanced past the heartbeat before the next poll
-    polls = [c[2] for c in fake.calls if c[0] == "GET"]
+    polls = [c[2] for c in fake.calls if c[1] == "/api/v1/events"]
     assert [p["last_event_id"] for p in polls] == ["-1", "0"]
 
 
@@ -151,7 +177,7 @@ def test_direct_message_wakes_but_own_and_unmentioned_posts_do_not(
     own["message"]["sender_email"] = BOT
     chatter = {**mention(2), "flags": []}
     dm = {"type": "message", "id": 3, "flags": [], "message": {
-        "type": "private", "content": "are you there?",
+        "id": 1003, "type": "private", "content": "are you there?",
         "sender_email": "founder@zulip.localhost", "sender_full_name": "Founder"}}
     fake = _serve(monkeypatch, [ok(own, chatter), ok(dm)])
     try:
@@ -173,7 +199,7 @@ def test_bad_event_queue_id_registers_again_and_continues(hook, monkeypatch):
     finally:
         fake.close()
     registers = [c for c in fake.calls if c[0] == "POST"]
-    polls = [c[2] for c in fake.calls if c[0] == "GET"]
+    polls = [c[2] for c in fake.calls if c[1] == "/api/v1/events"]
     assert len(registers) == 2
     assert [p["queue_id"] for p in polls] == ["q1", "q2"]
 
@@ -195,7 +221,7 @@ def test_malformed_answers_do_not_end_the_wait(hook, monkeypatch, capsys):
     finally:
         fake.close()
     assert "please look at the record shape" in capsys.readouterr().out
-    polls = [c[2] for c in fake.calls if c[0] == "GET"]
+    polls = [c[2] for c in fake.calls if c[1] == "/api/v1/events"]
     assert [p["last_event_id"] for p in polls] == ["-1", "-1", "3"]
 
 
@@ -254,7 +280,8 @@ def test_run_as_a_script_with_zulip_down_exits_0_silently(tmp_path):
         {"sessionId": "s1", "name": "COO", "pid": 1, "cwd": str(tmp_path)}),
         encoding="utf-8")
     env = {"PATH": "", "SYSTEMROOT": __import__("os").environ.get("SYSTEMROOT", ""),
-           "HOME": str(home), "USERPROFILE": str(home),
+           "HOME": str(home), "USERPROFILE": str(home), "TEMP": str(tmp_path),
+           "TMP": str(tmp_path),
            "ZULIP_SITE": f"http://127.0.0.1:{_dead_port()}",
            "ZULIP_COO_EMAIL": BOT, "ZULIP_COO_API_KEY": "k",
            "AGORA_URL": f"http://127.0.0.1:{_dead_port()}"}
@@ -269,7 +296,255 @@ def test_run_as_a_script_with_zulip_down_exits_0_silently(tmp_path):
     for mode_args in ([str(HOOK), "register"], [str(runner)]):
         done = subprocess.run([sys.executable, *mode_args],
                               input=json.dumps({"session_id": "s1"}),
-                              capture_output=True, text=True, env=env, timeout=60)
+                              capture_output=True, text=True, encoding="utf-8", env=env,
+                              timeout=60)
         assert done.returncode == 0, done.stderr
         assert done.stdout == ""
         assert done.stderr == ""
+
+
+# -- issue #47: one poller per session, and nothing lost between turns ------
+#
+# These run `wait` as a subprocess, the way Claude Code runs it on SessionStart
+# and on Stop: a JSON payload on stdin, the registry found through the home
+# directory, state and lock in %TEMP%.
+
+def _session_env(tmp_path: Path, site: str, name: str = "COO") -> dict:
+    import os
+    home = tmp_path / "home"
+    sessions = home / ".claude" / "sessions"
+    sessions.mkdir(parents=True, exist_ok=True)
+    (sessions / "1.json").write_text(json.dumps(
+        {"sessionId": "s47", "name": name, "pid": 1, "cwd": str(tmp_path)}),
+        encoding="utf-8")
+    temp = tmp_path / "temp"
+    temp.mkdir(exist_ok=True)
+    return {"PATH": os.environ.get("PATH", ""),
+            "SYSTEMROOT": os.environ.get("SYSTEMROOT", ""),
+            "HOME": str(home), "USERPROFILE": str(home),
+            "TEMP": str(temp), "TMP": str(temp), "TMPDIR": str(temp),
+            "ZULIP_SITE": site, "ZULIP_COO_EMAIL": BOT, "ZULIP_COO_API_KEY": "k"}
+
+
+def _wait_proc(tmp_path: Path, env: dict, seconds: float = 8.0) -> subprocess.Popen:
+    """The hook's `wait`, as a process, with the 11h deadline shortened."""
+    runner = tmp_path / "run_wait.py"
+    runner.write_text(
+        "import runpy, sys\n"
+        f"sys.argv = [{str(HOOK)!r}, 'wait']\n"
+        f"g = runpy.run_path({str(HOOK)!r}, run_name='hook')\n"
+        f"g['main'].__globals__['WAIT_SECONDS'] = {seconds}\n"
+        "raise SystemExit(g['main']())\n", encoding="utf-8")
+    proc = subprocess.Popen([sys.executable, str(runner)], stdin=subprocess.PIPE,
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                            text=True, encoding="utf-8", env=env)
+    proc.stdin.write(json.dumps({"session_id": "s47"}))
+    proc.stdin.close()
+    return proc
+
+
+def _finish(proc: subprocess.Popen) -> tuple[int, str, str]:
+    out = proc.stdout.read()
+    err = proc.stderr.read()
+    return proc.wait(timeout=60), out, err
+
+
+def _state(tmp_path: Path) -> dict:
+    return json.loads((tmp_path / "temp" / "agora-wait-s47.json").read_text("utf-8"))
+
+
+def dm(i: int, content: str, sender: str = "founder@zulip.localhost") -> dict:
+    return {"type": "message", "id": 100 + i, "flags": [], "message": {
+        "id": i, "type": "private", "content": content,
+        "sender_email": sender, "sender_full_name": "Founder"}}
+
+
+def test_two_messages_a_turn_apart_both_wake_and_the_queue_is_resumed(tmp_path):
+    """The next run resumes the saved queue from the saved event id; it does
+    not register a new one, so what arrived in between is in it."""
+    fake = FakeZulip([ok(dm(11, "message one"))], max_message_id=10)
+    try:
+        env = _session_env(tmp_path, fake.url)
+        code, out, err = _finish(_wait_proc(tmp_path, env))
+        assert (code, err) == (2, "")
+        assert "message one" in out
+        assert _state(tmp_path)["queue_id"] == "q1"
+        assert _state(tmp_path)["last_message_id"] == 11
+
+        fake.script = [ok(dm(12, "message two, sent while answering"))]
+        code, out, err = _finish(_wait_proc(tmp_path, env))
+        assert (code, err) == (2, "")
+        assert "message two, sent while answering" in out
+        assert "message one" not in out
+    finally:
+        fake.close()
+    registers = [c for c in fake.calls if c[1] == "/api/v1/register"]
+    polls = [c[2] for c in fake.calls if c[1] == "/api/v1/events"]
+    assert len(registers) == 1
+    assert (polls[-1]["queue_id"], polls[-1]["last_event_id"]) == ("q1", "111")
+
+
+def test_a_lost_queue_is_backfilled_from_history(tmp_path):
+    """The saved queue expired while the agent was answering. The message
+    sent in that gap is only in the history, and it wakes the session just
+    like a live one; the bot's own post and older messages do not."""
+    temp = tmp_path / "temp"
+    temp.mkdir()
+    (temp / "agora-wait-s47.json").write_text(json.dumps(
+        {"queue_id": "q-old", "last_event_id": 5, "last_message_id": 20,
+         "backfill": False}), encoding="utf-8")
+    history = [
+        {"id": 19, "type": "stream", "mentioned": True, "content": "too early",
+         "sender_email": "founder@zulip.localhost", "display_recipient": "coo",
+         "subject": "t"},
+        {"id": 21, "type": "stream", "mentioned": True,
+         "content": "sent in the gap", "display_recipient": "coo",
+         "subject": "#47 reach", "sender_email": "founder@zulip.localhost",
+         "sender_full_name": "Founder"},
+        {"id": 22, "type": "private", "content": "my own reply",
+         "sender_email": BOT, "sender_full_name": "COO"},
+    ]
+    fake = FakeZulip([], history=history, dead_queues=("q-old",))
+    try:
+        code, out, err = _finish(_wait_proc(tmp_path, _session_env(tmp_path, fake.url)))
+    finally:
+        fake.close()
+    assert (code, err) == (2, "")
+    assert "@COO in #coo › #47 reach — from Founder" in out
+    assert "sent in the gap" in out
+    assert "too early" not in out
+    assert "my own reply" not in out
+    assert _state(tmp_path)["last_message_id"] == 22
+
+
+def test_a_message_already_backfilled_does_not_wake_twice(tmp_path):
+    temp = tmp_path / "temp"
+    temp.mkdir()
+    (temp / "agora-wait-s47.json").write_text(json.dumps(
+        {"queue_id": "q1", "last_event_id": 5, "last_message_id": 30,
+         "backfill": False}), encoding="utf-8")
+    # The queue still carries message 30, already delivered by a backfill.
+    fake = FakeZulip([ok(dm(30, "delivered before")), ok(dm(31, "brand new"))])
+    try:
+        code, out, _ = _finish(_wait_proc(tmp_path, _session_env(tmp_path, fake.url)))
+    finally:
+        fake.close()
+    assert code == 2
+    assert "brand new" in out and "delivered before" not in out
+
+
+def test_second_wait_exits_0_at_once_while_the_first_is_parked(tmp_path):
+    """Stop fires after every turn. Without the lock each turn would stack a
+    second poller, and one mention would wake the session twice."""
+    fake = FakeZulip([], idle=0.5)
+    lock = tmp_path / "temp" / "agora-wait-s47.lock"
+    try:
+        env = _session_env(tmp_path, fake.url)
+        first = _wait_proc(tmp_path, env, seconds=6)
+        for _ in range(100):
+            if lock.exists() and lock.read_text("utf-8").strip():
+                break
+            time.sleep(0.1)
+        assert lock.read_text("utf-8").strip() == str(first.pid)
+        started = time.time()
+        code, out, err = _finish(_wait_proc(tmp_path, env, seconds=6))
+        assert (code, out, err) == (0, "", "")
+        assert time.time() - started < 5
+        assert first.poll() is None  # the first is still parked
+        code, out, _ = _finish(first)
+        assert (code, out) == (0, "")
+    finally:
+        fake.close()
+    assert len([c for c in fake.calls if c[1] == "/api/v1/register"]) == 1
+    assert not lock.exists()  # released on the way out
+
+
+def test_a_stale_lock_from_a_dead_poller_is_replaced(tmp_path):
+    temp = tmp_path / "temp"
+    temp.mkdir()
+    dead = subprocess.run([sys.executable, "-c", "import os; print(os.getpid())"],
+                          capture_output=True, text=True).stdout.strip()
+    (temp / "agora-wait-s47.lock").write_text(dead, encoding="utf-8")
+    fake = FakeZulip([ok(dm(1, "still reachable"))])
+    try:
+        code, out, _ = _finish(_wait_proc(tmp_path, _session_env(tmp_path, fake.url)))
+    finally:
+        fake.close()
+    assert code == 2 and "still reachable" in out
+
+
+def test_bot_zulip_wait_runs_the_hooks_own_code(tmp_path):
+    """`python bot/zulip.py wait` is the same code path, not a copy."""
+    fake = FakeZulip([ok(dm(5, "by hand"))])
+    try:
+        env = _session_env(tmp_path, fake.url)
+        done = subprocess.run(
+            [sys.executable, str(HOOK.parent.parent / "bot" / "zulip.py"),
+             "--as", "COO", "wait", "--session", "s47", "--seconds", "8"],
+            capture_output=True, text=True, encoding="utf-8", env=env,
+            timeout=60)
+    finally:
+        fake.close()
+    assert done.returncode == 2, done.stderr
+    assert "Direct message to @COO from Founder" in done.stdout
+    assert "by hand" in done.stdout
+    assert _state(tmp_path)["last_message_id"] == 5
+
+
+def test_backfill_pages_through_a_long_gap(tmp_path):
+    temp = tmp_path / "temp"
+    temp.mkdir()
+    (temp / "agora-wait-s47.json").write_text(json.dumps(
+        {"queue_id": "q-old", "last_event_id": 5, "last_message_id": 0,
+         "backfill": False}), encoding="utf-8")
+    history = [{"id": i, "type": "stream", "mentioned": True, "content": f"m{i}",
+                "display_recipient": "coo", "subject": "t",
+                "sender_email": "founder@zulip.localhost"} for i in range(1, 8)]
+    fake = FakeZulip([], history=history, dead_queues=("q-old",))
+    fake.page_size = 3
+    try:
+        code, out, _ = _finish(_wait_proc(tmp_path, _session_env(tmp_path, fake.url)))
+    finally:
+        fake.close()
+    assert code == 2
+    assert all(f"m{i}\n" in out for i in range(1, 8))
+    assert _state(tmp_path)["last_message_id"] == 7
+
+
+def test_a_lock_left_by_a_reused_pid_goes_stale(tmp_path):
+    """A live pid in an old lock (the dead poller's pid, reused by some other
+    process) must not keep the session unreachable forever."""
+    import os
+    temp = tmp_path / "temp"
+    temp.mkdir()
+    lock = temp / "agora-wait-s47.lock"
+    lock.write_text(str(os.getpid()), encoding="utf-8")  # alive, but not a poller
+    old = time.time() - 3600
+    os.utime(lock, (old, old))
+    fake = FakeZulip([ok(dm(1, "reachable again"))])
+    try:
+        code, out, _ = _finish(_wait_proc(tmp_path, _session_env(tmp_path, fake.url)))
+    finally:
+        fake.close()
+    assert code == 2 and "reachable again" in out
+
+
+def test_a_poller_whose_lock_was_taken_over_stops(hook, monkeypatch, tmp_path):
+    """Two pollers that replaced the same stale lock: the one no longer named
+    in it stops at its next poll, so the session is never woken twice."""
+    fake = _serve(monkeypatch, [])
+    lock = tmp_path / "agora-wait-s1.lock"
+    calls = {"n": 0}
+    real = hook._poll_once
+
+    def poll(*a, **k):
+        calls["n"] += 1
+        lock.write_text("999999", encoding="utf-8")  # someone else took it
+        return real(*a, **k)
+
+    monkeypatch.setattr(hook, "_poll_once", poll)
+    try:
+        assert hook.do_wait() == 0
+    finally:
+        fake.close()
+    assert calls["n"] == 1

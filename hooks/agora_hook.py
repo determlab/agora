@@ -16,6 +16,11 @@ Two roles, one script, selected by argv:
               one. Agora was never the wake — Claude Code is; Zulip only
               supplies the URL (issue #41).
 
+              The same ``wait`` is registered on ``Stop`` too, so a session is
+              reachable again after every turn, not once (issue #47). A lock
+              keeps it to one poller per session, and the queue state is saved
+              so a message sent mid-answer wakes the session on the next run.
+
 The session's own name comes from Claude Code's registry rather than from
 anybody typing it. A hook payload carries ``session_id``; the registry maps that
 to the display name, so a session states its name by looking it up.
@@ -31,6 +36,7 @@ import json
 import os
 import re
 import sys
+import tempfile
 import time
 import urllib.error
 import urllib.parse
@@ -53,6 +59,13 @@ POLL_SECONDS = 90.0
 WAIT_SECONDS = 60 * 60 * 11  # under a 12h hook timeout
 # Bot credentials live beside the bot code, never in this file: gitignored.
 DOTENV = Path(__file__).resolve().parent.parent / "bot" / ".env"
+# One lock and one saved queue per session, so the poller that runs after each
+# turn neither doubles up nor loses what arrived in between.
+STATE_DIR = Path(tempfile.gettempdir())
+# The holder touches its lock on every poll. One untouched this long belongs to
+# a poller that died without cleaning up, whatever its pid now points at: a
+# reused pid must not leave a session silently unreachable.
+LOCK_STALE_SECONDS = 5 * (POLL_SECONDS + 15)
 
 
 def _payload() -> dict:
@@ -242,67 +255,262 @@ def do_register() -> int:
 
 
 def do_wait() -> int:
-    """Park until this session's bot is mentioned or DMed. Exit 2 to wake it."""
+    """Park until this session's bot is mentioned or DMed. Exit 2 to wake it.
+
+    Registered on ``SessionStart`` and again on ``Stop`` (issue #47), so it runs
+    after every turn. The lock keeps that to one poller per session; the saved
+    queue state means a message sent while the agent was answering is still
+    delivered by the next run.
+    """
     data = _payload()
     # This half is about to park for hours, so it can afford to wait for the
     # registry entry to appear. Giving up here is what left a restarted session
     # permanently uncallable.
-    ident = _identity(str(data.get("session_id") or ""), patience=60.0)
+    session_id = str(data.get("session_id") or "")
+    ident = _identity(session_id, patience=60.0)
     name = ident["name"]
     if not name:
         return 0
     creds = _zulip_creds(name)
     if creds is None:
         return 0  # no bot for this session: nobody can wake it
-    deadline = time.time() + WAIT_SECONDS
-    queue = {"id": None, "last_event_id": -1}
-    while time.time() < deadline:
+    return wait_for(creds, name, session_id or name)
+
+
+def wait_for(creds: tuple[str, str, str], name: str, session: str,
+             seconds: float | None = None) -> int:
+    """The poller itself. Prints the rewake text and returns 2 on a hit, 0 at
+    the deadline or when another poller already serves this session.
+
+    ``bot/zulip.py wait`` calls this too, so a person can run the same code by
+    hand.
+    """
+    key = re.sub(r"[^A-Za-z0-9_.-]+", "_", session)[:100] or "unknown"
+    lock = STATE_DIR / f"agora-wait-{key}.lock"
+    state_path = STATE_DIR / f"agora-wait-{key}.json"
+    if not _take_lock(lock):
+        return 0  # a live poller already parks for this session
+    try:
+        state = _load_state(state_path)
+        deadline = time.time() + (WAIT_SECONDS if seconds is None else seconds)
+        while time.time() < deadline:
+            if not _hold_lock(lock):
+                return 0  # another poller took over; it serves this session now
+            try:
+                text = _poll_once(creds, name, state, state_path)
+            except Exception:
+                # A malformed answer is a misbehaving server. It must not end
+                # the wait for the rest of the session: back off, keep waiting.
+                text = None
+                time.sleep(2.0)
+            if text:
+                print(text)
+                return 2  # asyncRewake: exit 2 wakes the session with the text
+        return 0
+    finally:
+        _drop_lock(lock)
+
+
+def _pid_alive(pid: int) -> bool:
+    if pid <= 0:
+        return False
+    if os.name == "nt":
+        # os.kill(pid, 0) on Windows terminates the process. Ask instead.
+        import ctypes
+        from ctypes import wintypes
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+        kernel32.OpenProcess.restype = wintypes.HANDLE
+        kernel32.GetExitCodeProcess.argtypes = [wintypes.HANDLE,
+                                                ctypes.POINTER(wintypes.DWORD)]
+        kernel32.GetExitCodeProcess.restype = wintypes.BOOL
+        kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+        handle = kernel32.OpenProcess(0x1000, False, pid)  # QUERY_LIMITED_INFORMATION
+        if not handle:
+            return ctypes.get_last_error() == 5  # access denied: it exists
         try:
-            text = _poll_once(creds, name, queue)
-        except Exception:
-            # A malformed answer is a misbehaving server. It must not end the
-            # wake for the rest of the session: back off and keep waiting.
-            text = None
-            time.sleep(2.0)
-        if text:
-            print(text)
-            return 2  # asyncRewake: exit 2 wakes the session with the text above
-    return 0
+            code = wintypes.DWORD()
+            if not kernel32.GetExitCodeProcess(handle, ctypes.byref(code)):
+                return True  # cannot tell: treat as alive, the mtime rule decides
+            return code.value == 259  # STILL_ACTIVE
+        finally:
+            kernel32.CloseHandle(handle)
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except OSError:
+        return False
+    return True
 
 
-def _poll_once(creds: tuple[str, str, str], name: str, queue: dict) -> str | None:
-    """One register-if-needed plus one long poll. The rewake text on a hit."""
-    if queue["id"] is None:
+def _take_lock(lock: Path) -> bool:
+    """Create the lock with this pid in it. A lock whose pid is dead is stale
+    and is replaced; one just created by a racing poller (no pid written yet)
+    is respected."""
+    for _ in range(2):
+        try:
+            fd = os.open(str(lock), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        except FileExistsError:
+            try:
+                pid = int(lock.read_text(encoding="utf-8").strip() or "0")
+                age = time.time() - lock.stat().st_mtime
+            except (OSError, ValueError):
+                return False
+            if age < LOCK_STALE_SECONDS and (_pid_alive(pid) or pid == 0):
+                return False
+            try:
+                lock.unlink()
+            except OSError:
+                return False
+            continue
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(str(os.getpid()))
+        # Two pollers replacing the same stale lock can both get here; only
+        # the one whose pid is in the file holds it.
+        return _hold_lock(lock)
+    return False
+
+
+def _hold_lock(lock: Path) -> bool:
+    """True while the lock still names this process, touching it so it stays
+    fresh. False once another poller has replaced it."""
+    try:
+        if lock.read_text(encoding="utf-8").strip() != str(os.getpid()):
+            return False
+        os.utime(lock)
+        return True
+    except OSError:
+        return False
+
+
+def _drop_lock(lock: Path) -> None:
+    try:
+        if lock.read_text(encoding="utf-8").strip() == str(os.getpid()):
+            lock.unlink()
+    except (OSError, ValueError):
+        pass
+
+
+def _load_state(path: Path) -> dict:
+    try:
+        saved = json.loads(path.read_text(encoding="utf-8"))
+        if saved.get("last_message_id") is None:
+            raise ValueError("no message floor: start over")
+        return {"queue_id": saved.get("queue_id"),
+                "last_event_id": int(saved.get("last_event_id", -1)),
+                "last_message_id": int(saved["last_message_id"]),
+                "backfill": bool(saved.get("backfill"))}
+    except (OSError, ValueError, TypeError, AttributeError):
+        return {"queue_id": None, "last_event_id": -1,
+                "last_message_id": None, "backfill": False}
+
+
+def _save_state(path: Path, state: dict) -> None:
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(state), encoding="utf-8")
+    os.replace(tmp, path)
+
+
+def _backfill(creds: tuple[str, str, str], after: int) -> list | None:
+    """Every message after id ``after`` that the live path would have woken
+    on, oldest first, or None if Zulip could not answer. Two narrows, because
+    narrow terms are ANDed; each is paged to the end so a long gap loses
+    nothing."""
+    found: dict = {}
+    for narrow in ([{"operator": "is", "operand": "mentioned"}],
+                   [{"operator": "is", "operand": "dm"}]):
+        anchor = after
+        for _page in range(50):
+            got = _zulip(creds, "GET", "messages", {
+                "narrow": json.dumps(narrow), "anchor": anchor,
+                "include_anchor": "false", "num_before": 0, "num_after": 100,
+                "apply_markdown": "false"}, 30.0)
+            if not got or got.get("result") != "success":
+                return None
+            msgs = [m for m in got.get("messages") or [] if isinstance(m, dict)]
+            for msg in msgs:
+                i = int(msg.get("id", -1))
+                anchor = max(anchor, i)
+                # The same test as the live queue's: the mention flag or a DM.
+                if i > after and ("mentioned" in (msg.get("flags") or [])
+                                  or msg.get("type") == "private"):
+                    found[i] = msg
+            if got.get("found_newest", True) or not msgs:
+                break
+    return [found[i] for i in sorted(found)]
+
+
+def _poll_once(creds: tuple[str, str, str], name: str, state: dict,
+               state_path: Path) -> str | None:
+    """One step: register if needed, backfill if a queue was lost, else one
+    long poll. Returns the rewake text on a hit. State is saved before a hit
+    is returned, so the next run never delivers the same message twice."""
+    bot_email = creds[1]
+    if state["queue_id"] is None:
         reg = _zulip(creds, "POST", "register", {
             "event_types": json.dumps(["message"]),
             "apply_markdown": "false"}, 15.0)
         if not reg or reg.get("result") != "success":
             time.sleep(2.0)  # Zulip down or refusing; keep waiting
             return None
-        queue["id"], queue["last_event_id"] = (
-            str(reg["queue_id"]), int(reg["last_event_id"]))
-    got = _zulip(creds, "GET", "events", {
-        "queue_id": queue["id"], "last_event_id": queue["last_event_id"]},
-        POLL_SECONDS + 15)
-    if got and got.get("code") == "BAD_EVENT_QUEUE_ID":
-        # The queue expired while nobody polled. The normal path after a long
-        # gap, not an error: take a new one.
-        queue["id"] = None
-        time.sleep(2.0)
-        return None
-    if not got or got.get("result") != "success":
-        time.sleep(2.0)  # Zulip down; back off a little and keep waiting
-        return None
-    events = [e for e in got.get("events") or [] if isinstance(e, dict)]
-    # Resume past every event, heartbeats included, or the next poll fetches
-    # them again. A bad id is skipped, not fatal: a raise here would re-fetch
-    # the same batch forever.
-    for event in events:
-        try:
-            queue["last_event_id"] = max(queue["last_event_id"], int(event["id"]))
-        except (KeyError, TypeError, ValueError):
-            continue
-    hits = [e["message"] for e in events if _wakes(e, creds[1])]
+        queue_id, last_event_id = str(reg["queue_id"]), int(reg["last_event_id"])
+        state["queue_id"], state["last_event_id"] = queue_id, last_event_id
+        if state["last_message_id"] is None:
+            # First run for this session: start from now, not from history.
+            state["last_message_id"] = int(reg.get("max_message_id", -1))
+        else:
+            # A queue was lost between runs: what arrived in the gap is only
+            # in the message history.
+            state["backfill"] = True
+        _save_state(state_path, state)
+    candidates: list = []
+    if state["backfill"]:
+        msgs = _backfill(creds, state["last_message_id"])
+        if msgs is None:
+            time.sleep(2.0)
+            return None
+        state["backfill"] = False
+        candidates = [m for m in msgs if m.get("sender_email") != bot_email]
+        seen = [int(m["id"]) for m in msgs]
+    else:
+        got = _zulip(creds, "GET", "events", {
+            "queue_id": state["queue_id"], "last_event_id": state["last_event_id"]},
+            POLL_SECONDS + 15)
+        if got and got.get("code") == "BAD_EVENT_QUEUE_ID":
+            # The queue expired while nobody polled. The normal path after a
+            # long gap, not an error: take a new one and backfill.
+            state["queue_id"] = None
+            time.sleep(2.0)
+            return None
+        if not got or got.get("result") != "success":
+            time.sleep(2.0)  # Zulip down; back off a little and keep waiting
+            return None
+        events = [e for e in got.get("events") or [] if isinstance(e, dict)]
+        # Resume past every event, heartbeats included, or the next poll
+        # fetches them again. A bad id is skipped, not fatal.
+        seen = []
+        for event in events:
+            try:
+                state["last_event_id"] = max(state["last_event_id"], int(event["id"]))
+            except (KeyError, TypeError, ValueError):
+                pass
+            msg = event.get("message")
+            if event.get("type") == "message" and isinstance(msg, dict):
+                try:
+                    seen.append(int(msg["id"]))
+                except (KeyError, TypeError, ValueError):
+                    pass
+        candidates = [e["message"] for e in events if _wakes(e, bot_email)]
+    # A message already delivered — by the queue or by a backfill — is never
+    # delivered again.
+    floor = state["last_message_id"]
+    hits = [m for m in candidates if int(m.get("id", -1)) > floor]
+    if seen:
+        state["last_message_id"] = max([floor, *seen])
+    _save_state(state_path, state)
     if not hits:
         return None
     return "\n\n---\n\n".join(_rewake_text(name, m) for m in hits)

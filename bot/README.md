@@ -207,6 +207,10 @@ python bot/zulip.py --as COO read --stream coo --topic "#141 record shape" --sin
 python bot/zulip.py --as COO read --mentions --since 42
 ```
 
+`python bot/zulip.py --as COO wait` parks until the bot is mentioned or
+DMed, prints the message and exits 2 — the same code the session hook runs
+(issue #47), so it can be tried by hand. `--seconds N` gives up after N.
+
 `read` prints oldest first as `[id] time UTC #stream › topic Sender <email>:`
 and the text. Pass the last id back as `--since` to get only newer ones.
 A stream the bot is not subscribed to, or one that does not exist, is named
