@@ -67,6 +67,8 @@ STATE_DIR = Path(tempfile.gettempdir())
 # a poller that died without cleaning up, whatever its pid now points at: a
 # reused pid must not leave a session silently unreachable.
 LOCK_STALE_SECONDS = 5 * (POLL_SECONDS + 15)
+# Pages of 100 per backfill narrow, per step. A longer gap is read in steps.
+BACKFILL_PAGES = 50
 
 
 def _payload() -> dict:
@@ -431,9 +433,11 @@ def _save_state(path: Path, state: dict) -> None:
     os.replace(tmp, path)
 
 
-def _backfill(creds: tuple[str, str, str], after: int, name: str = "") -> list | None:
+def _backfill(creds: tuple[str, str, str], after: int,
+              name: str = "") -> tuple[list, bool] | None:
     """Every message after id ``after`` that the live path could wake on,
-    oldest first and each once, or None if Zulip could not answer.
+    oldest first and each once, and whether the whole gap was read; None if
+    Zulip could not answer.
 
     Three narrows, because narrow terms are ANDed: mentions, direct messages,
     and this session's own role stream (issue #52), so an untagged post in
@@ -442,21 +446,34 @@ def _backfill(creds: tuple[str, str, str], after: int, name: str = "") -> list |
     in the own stream, is kept once. The caller decides which of these wake,
     with ``_wakes()``: the same rule as the live queue, not a copy of it.
     ``channel`` is Zulip 11's name for the operator; ``stream`` is its legacy
-    alias, and ``bot/zulip.py`` uses ``channel`` too."""
-    narrows = [[{"operator": "is", "operand": "mentioned"}],
-               [{"operator": "is", "operand": "dm"}]]
+    alias, and ``bot/zulip.py`` uses ``channel`` too.
+
+    Only mentions and DMs decide success. A session whose bot has no own
+    stream, or is not subscribed to it, gets an error on that narrow; failing
+    the whole backfill for it would leave the backfill pending forever and the
+    live queue never polled, so mentions and DMs would stop too. That narrow
+    is skipped instead.
+
+    A narrow that runs out of pages before the newest message caps the result
+    at the last id it read, and the gap is reported as not fully read, so the
+    next step goes on from there instead of jumping the floor past it."""
+    narrows = [([{"operator": "is", "operand": "mentioned"}], True),
+               ([{"operator": "is", "operand": "dm"}], True)]
     if name:
-        narrows.append([{"operator": "channel", "operand": name.lower()}])
+        narrows.append(([{"operator": "channel", "operand": name.lower()}], False))
     found: dict = {}
-    for narrow in narrows:
+    cap = None
+    for narrow, required in narrows:
         anchor = after
-        for _page in range(50):
+        for _page in range(BACKFILL_PAGES):
             got = _zulip(creds, "GET", "messages", {
                 "narrow": json.dumps(narrow), "anchor": anchor,
                 "include_anchor": "false", "num_before": 0, "num_after": 100,
                 "apply_markdown": "false"}, 30.0)
             if not got or got.get("result") != "success":
-                return None
+                if required:
+                    return None
+                break  # the own stream is optional: skip it, keep the rest
             msgs = [m for m in got.get("messages") or [] if isinstance(m, dict)]
             for msg in msgs:
                 i = int(msg.get("id", -1))
@@ -465,7 +482,10 @@ def _backfill(creds: tuple[str, str, str], after: int, name: str = "") -> list |
                     found[i] = msg
             if got.get("found_newest", True) or not msgs:
                 break
-    return [found[i] for i in sorted(found)]
+        else:  # out of pages before the newest message
+            cap = anchor if cap is None else min(cap, anchor)
+    ids = sorted(i for i in found if cap is None or i <= cap)
+    return [found[i] for i in ids], cap is None
 
 
 def _poll_once(creds: tuple[str, str, str], name: str, state: dict,
@@ -493,11 +513,13 @@ def _poll_once(creds: tuple[str, str, str], name: str, state: dict,
         _save_state(state_path, state)
     candidates: list = []
     if state["backfill"]:
-        msgs = _backfill(creds, state["last_message_id"], name)
-        if msgs is None:
+        got_back = _backfill(creds, state["last_message_id"], name)
+        if got_back is None:
             time.sleep(2.0)
             return None
-        state["backfill"] = False
+        msgs, complete = got_back
+        # A gap longer than the page limit is read in steps, one per call.
+        state["backfill"] = not complete
         # Each fetched message goes through the live rule, as the event the
         # queue would have carried: one definition of what wakes a session.
         candidates = [m for m in msgs if _wakes(

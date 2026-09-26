@@ -44,6 +44,7 @@ class FakeZulip:
         self.max_message_id = max_message_id
         self.idle = idle                      # how long an empty poll parks
         self.page_size = 100                  # GET /messages page size
+        self.channel_error = None             # (status, body) for a channel narrow
         self.calls: list[tuple[str, str, dict]] = []
         self.queues = 0
         fake = self
@@ -79,6 +80,8 @@ class FakeZulip:
                 if url.path == "/api/v1/messages":
                     term = json.loads(q["narrow"])[0]
                     op, narrow = term["operator"], term["operand"]
+                    if op in ("channel", "stream") and fake.channel_error:
+                        return self._answer(*fake.channel_error)
                     after = int(q["anchor"])
                     found = [m for m in fake.history if m["id"] > after and (
                         (narrow == "mentioned" and m.get("mentioned"))
@@ -330,7 +333,8 @@ def _session_env(tmp_path: Path, site: str, name: str = "COO") -> dict:
             "ZULIP_SITE": site, "ZULIP_COO_EMAIL": BOT, "ZULIP_COO_API_KEY": "k"}
 
 
-def _wait_proc(tmp_path: Path, env: dict, seconds: float = 8.0) -> subprocess.Popen:
+def _wait_proc(tmp_path: Path, env: dict, seconds: float = 8.0,
+               pages: int = 50) -> subprocess.Popen:
     """The hook's `wait`, as a process, with the 11h deadline shortened."""
     runner = tmp_path / "run_wait.py"
     runner.write_text(
@@ -338,6 +342,7 @@ def _wait_proc(tmp_path: Path, env: dict, seconds: float = 8.0) -> subprocess.Po
         f"sys.argv = [{str(HOOK)!r}, 'wait']\n"
         f"g = runpy.run_path({str(HOOK)!r}, run_name='hook')\n"
         f"g['main'].__globals__['WAIT_SECONDS'] = {seconds}\n"
+        f"g['main'].__globals__['BACKFILL_PAGES'] = {pages}\n"
         "raise SystemExit(g['main']())\n", encoding="utf-8")
     proc = subprocess.Popen([sys.executable, str(runner)], stdin=subprocess.PIPE,
                             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
@@ -627,13 +632,15 @@ def test_mentions_and_dms_still_wake_from_any_stream(tmp_path):
 # The saved queue has expired (the fake answers BAD_EVENT_QUEUE_ID for it), so
 # what arrived while no poller ran is only in the message history.
 
-def _backfill_run(tmp_path: Path, history: list, seconds: float = 8.0):
+def _backfill_run(tmp_path: Path, history: list, seconds: float = 8.0,
+                  channel_error: tuple | None = None):
     temp = tmp_path / "temp"
     temp.mkdir()
     (temp / "agora-wait-s47.json").write_text(json.dumps(
         {"queue_id": "q-old", "last_event_id": 5, "last_message_id": 40,
          "backfill": False}), encoding="utf-8")
     fake = FakeZulip([], history=history, dead_queues=("q-old",), idle=0.3)
+    fake.channel_error = channel_error
     try:
         return (*_finish(_wait_proc(tmp_path, _session_env(tmp_path, fake.url),
                                     seconds=seconds)), fake)
@@ -685,3 +692,55 @@ def test_an_untagged_message_in_another_roles_stream_is_not_backfilled(tmp_path)
     narrows = [json.loads(c[2]["narrow"]) for c in fake.calls
                if c[1] == "/api/v1/messages"]
     assert [{"operator": "channel", "operand": "cto"}] not in narrows
+
+
+
+def test_an_own_stream_narrow_error_does_not_stop_dms_waking(tmp_path):
+    """A bot with no own stream, or not subscribed to it, gets an error on
+    that narrow. It must be skipped, not retried forever: a failed backfill
+    stays pending and the live queue is never polled again."""
+    code, out, err, fake = _backfill_run(tmp_path, [
+        {"id": 41, "type": "private", "content": "a DM in the gap",
+         "sender_email": "founder@zulip.localhost", "sender_full_name": "Founder"}],
+        channel_error=(400, {"result": "error", "code": "BAD_REQUEST",
+                             "msg": "Invalid channel name"}))
+    assert (code, err) == (2, "")
+    assert "Direct message to @COO from Founder" in out
+    assert "a DM in the gap" in out
+    assert _state(tmp_path)["last_message_id"] == 41
+    assert _state(tmp_path)["backfill"] is False
+    narrows = [json.loads(c[2]["narrow"]) for c in fake.calls
+               if c[1] == "/api/v1/messages"]
+    assert [{"operator": "channel", "operand": "coo"}] in narrows
+
+
+def test_a_gap_longer_than_the_page_limit_is_read_in_steps(tmp_path):
+    """A narrow that runs out of pages caps the floor at what it read; the
+    next step goes on from there, so nothing past the cap is skipped."""
+    temp = tmp_path / "temp"
+    temp.mkdir()
+    (temp / "agora-wait-s47.json").write_text(json.dumps(
+        {"queue_id": "q-old", "last_event_id": 5, "last_message_id": 0,
+         "backfill": False}), encoding="utf-8")
+    history = [{"id": i, "type": "stream", "mentioned": i % 2 == 0,
+                "content": f"m{i}", "display_recipient": "coo", "subject": "t",
+                "sender_email": "founder@zulip.localhost"} for i in range(1, 8)]
+    fake = FakeZulip([], history=history, dead_queues=("q-old",), idle=0.3)
+    fake.page_size = 2
+    outs = []
+    try:
+        env = _session_env(tmp_path, fake.url)
+        for _ in range(6):
+            code, out, err = _finish(_wait_proc(tmp_path, env, seconds=3, pages=1))
+            assert err == ""
+            outs.append(out)
+            if _state(tmp_path)["last_message_id"] == 7:
+                break
+    finally:
+        fake.close()
+    every = "".join(outs)
+    assert [every.count(f"m{i}\n") for i in range(1, 8)] == [1] * 7
+    # One page each: mentions 2 and 4, the stream's 1 and 2. Capped at 2.
+    assert "m2\n" in outs[0] and "m3\n" not in outs[0]
+    assert "m4\n" not in outs[0]
+    assert _state(tmp_path)["last_message_id"] == 7
