@@ -26,6 +26,7 @@ does nothing, so every path exits 0 on error except the deliberate exit 2.
 from __future__ import annotations
 
 import base64
+import http.client
 import json
 import os
 import re
@@ -190,9 +191,10 @@ def _zulip(creds: tuple[str, str, str], method: str, path: str, params: dict,
     except urllib.error.HTTPError as exc:
         try:
             return json.loads(exc.read().decode("utf-8") or "{}")
-        except (OSError, ValueError):
+        except (OSError, ValueError, http.client.HTTPException):
             return None
-    except (urllib.error.URLError, OSError, ValueError, TimeoutError):
+    except (urllib.error.URLError, OSError, ValueError, TimeoutError,
+            http.client.HTTPException):
         return None
 
 
@@ -204,8 +206,8 @@ def _wakes(event: dict, bot_email: str) -> bool:
     """
     if event.get("type") != "message":
         return False
-    msg = event.get("message") or {}
-    if msg.get("sender_email") == bot_email:
+    msg = event.get("message")
+    if not isinstance(msg, dict) or msg.get("sender_email") == bot_email:
         return False
     return "mentioned" in (event.get("flags") or []) or msg.get("type") == "private"
 
@@ -216,7 +218,7 @@ def _rewake_text(name: str, msg: dict) -> str:
         where = f"Direct message to @{name} from {sender}"
         reply = "Reply to them in the same direct message."
     else:
-        stream = msg.get("display_recipient")
+        stream = msg.get("display_recipient") or "?"
         topic = msg.get("subject") or ""
         where = f"@{name} in #{stream} › {topic} — from {sender}"
         reply = f"Reply in #{stream}, topic {topic!r}."
@@ -252,39 +254,58 @@ def do_wait() -> int:
     creds = _zulip_creds(name)
     if creds is None:
         return 0  # no bot for this session: nobody can wake it
-    bot_email = creds[1]
     deadline = time.time() + WAIT_SECONDS
-    queue_id, last_event_id = None, -1
+    queue = {"id": None, "last_event_id": -1}
     while time.time() < deadline:
-        if queue_id is None:
-            reg = _zulip(creds, "POST", "register", {
-                "event_types": json.dumps(["message"]),
-                "apply_markdown": "false"}, 15.0)
-            if not reg or reg.get("result") != "success":
-                time.sleep(2.0)  # Zulip down or refusing; keep waiting
-                continue
-            queue_id, last_event_id = reg["queue_id"], int(reg["last_event_id"])
-        got = _zulip(creds, "GET", "events", {
-            "queue_id": queue_id, "last_event_id": last_event_id},
-            POLL_SECONDS + 15)
-        if got and got.get("code") == "BAD_EVENT_QUEUE_ID":
-            # The queue expired while nobody polled. The normal path after a
-            # long gap, not an error: take a new one.
-            queue_id = None
-            continue
-        if not got or got.get("result") != "success":
-            time.sleep(2.0)  # Zulip down; back off a little and keep waiting
-            continue
-        events = got.get("events") or []
-        # Resume past every event, heartbeats included, or the next poll
-        # fetches them again.
-        for event in events:
-            last_event_id = max(last_event_id, int(event.get("id", -1)))
-        hits = [e["message"] for e in events if _wakes(e, bot_email)]
-        if hits:
-            print("\n\n---\n\n".join(_rewake_text(name, m) for m in hits))
+        try:
+            text = _poll_once(creds, name, queue)
+        except Exception:
+            # A malformed answer is a misbehaving server. It must not end the
+            # wake for the rest of the session: back off and keep waiting.
+            text = None
+            time.sleep(2.0)
+        if text:
+            print(text)
             return 2  # asyncRewake: exit 2 wakes the session with the text above
     return 0
+
+
+def _poll_once(creds: tuple[str, str, str], name: str, queue: dict) -> str | None:
+    """One register-if-needed plus one long poll. The rewake text on a hit."""
+    if queue["id"] is None:
+        reg = _zulip(creds, "POST", "register", {
+            "event_types": json.dumps(["message"]),
+            "apply_markdown": "false"}, 15.0)
+        if not reg or reg.get("result") != "success":
+            time.sleep(2.0)  # Zulip down or refusing; keep waiting
+            return None
+        queue["id"], queue["last_event_id"] = (
+            str(reg["queue_id"]), int(reg["last_event_id"]))
+    got = _zulip(creds, "GET", "events", {
+        "queue_id": queue["id"], "last_event_id": queue["last_event_id"]},
+        POLL_SECONDS + 15)
+    if got and got.get("code") == "BAD_EVENT_QUEUE_ID":
+        # The queue expired while nobody polled. The normal path after a long
+        # gap, not an error: take a new one.
+        queue["id"] = None
+        time.sleep(2.0)
+        return None
+    if not got or got.get("result") != "success":
+        time.sleep(2.0)  # Zulip down; back off a little and keep waiting
+        return None
+    events = [e for e in got.get("events") or [] if isinstance(e, dict)]
+    # Resume past every event, heartbeats included, or the next poll fetches
+    # them again. A bad id is skipped, not fatal: a raise here would re-fetch
+    # the same batch forever.
+    for event in events:
+        try:
+            queue["last_event_id"] = max(queue["last_event_id"], int(event["id"]))
+        except (KeyError, TypeError, ValueError):
+            continue
+    hits = [e["message"] for e in events if _wakes(e, creds[1])]
+    if not hits:
+        return None
+    return "\n\n---\n\n".join(_rewake_text(name, m) for m in hits)
 
 
 def main() -> int:

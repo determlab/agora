@@ -33,8 +33,9 @@ def _load():
 class FakeZulip:
     """Serves a scripted sequence of /events answers and records every call."""
 
-    def __init__(self, events_script: list) -> None:
+    def __init__(self, events_script: list, register_script: list = ()) -> None:
         self.script = list(events_script)
+        self.register_script = list(register_script)
         self.calls: list[tuple[str, str, dict]] = []
         self.queues = 0
         fake = self
@@ -55,6 +56,8 @@ class FakeZulip:
                 n = int(self.headers.get("Content-Length") or 0)
                 form = dict(urllib.parse.parse_qsl(self.rfile.read(n).decode()))
                 fake.calls.append(("POST", self.path, form))
+                if fake.register_script:
+                    return self._answer(*fake.register_script.pop(0))
                 fake.queues += 1
                 self._answer(200, {"result": "success",
                                    "queue_id": f"q{fake.queues}",
@@ -66,6 +69,15 @@ class FakeZulip:
                 fake.calls.append(("GET", url.path, q))
                 status, body = fake.script.pop(0) if fake.script else (
                     200, {"result": "success", "events": []})
+                if status == "truncated":
+                    # Promise more bytes than are sent, then hang up: what a
+                    # Zulip restart mid-poll looks like to urllib.
+                    self.send_response(200)
+                    self.send_header("Content-Length", "1000")
+                    self.end_headers()
+                    self.wfile.write(b'{"result": "succ')
+                    self.close_connection = True
+                    return
                 self._answer(status, body)
 
         self.httpd = ThreadingHTTPServer(("127.0.0.1", 0), H)
@@ -108,8 +120,8 @@ def hook(monkeypatch, tmp_path):
     return mod
 
 
-def _serve(monkeypatch, script):
-    fake = FakeZulip(script)
+def _serve(monkeypatch, script, register_script=()):
+    fake = FakeZulip(script, register_script)
     monkeypatch.setenv("ZULIP_SITE", fake.url)
     return fake
 
@@ -164,6 +176,27 @@ def test_bad_event_queue_id_registers_again_and_continues(hook, monkeypatch):
     polls = [c[2] for c in fake.calls if c[0] == "GET"]
     assert len(registers) == 2
     assert [p["queue_id"] for p in polls] == ["q1", "q2"]
+
+
+def test_malformed_answers_do_not_end_the_wait(hook, monkeypatch, capsys):
+    """A server that misbehaves is a server to wait out, not a reason to stop
+    listening for the rest of the session."""
+    fake = _serve(
+        monkeypatch,
+        [("truncated", None),
+         ok({"type": "heartbeat", "id": "x"},  # bad id: skipped
+            {"type": "message", "id": 3, "flags": ["mentioned"]}),  # no message
+         ok(mention(4))],
+        register_script=[(200, {"result": "success"}),  # no queue_id
+                         (200, "not an object"),
+                         (500, {"result": "error", "msg": "down"})])
+    try:
+        assert hook.do_wait() == 2
+    finally:
+        fake.close()
+    assert "please look at the record shape" in capsys.readouterr().out
+    polls = [c[2] for c in fake.calls if c[0] == "GET"]
+    assert [p["last_event_id"] for p in polls] == ["-1", "-1", "3"]
 
 
 def test_deadline_exits_0_and_prints_nothing(hook, monkeypatch, capsys):
