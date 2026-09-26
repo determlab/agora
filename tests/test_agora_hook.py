@@ -43,6 +43,7 @@ class FakeZulip:
         self.dead_queues = set(dead_queues)   # answer BAD_EVENT_QUEUE_ID
         self.max_message_id = max_message_id
         self.idle = idle                      # how long an empty poll parks
+        self.page_size = 100                  # GET /messages page size
         self.calls: list[tuple[str, str, dict]] = []
         self.queues = 0
         fake = self
@@ -81,7 +82,11 @@ class FakeZulip:
                     found = [m for m in fake.history if m["id"] > after and (
                         (narrow == "mentioned" and m.get("mentioned"))
                         or (narrow == "dm" and m.get("type") == "private"))]
-                    return self._answer(200, {"result": "success", "messages": found})
+                    page = found[:fake.page_size]
+                    for m in page:
+                        m.setdefault("flags", ["mentioned"] if m.get("mentioned") else [])
+                    return self._answer(200, {"result": "success", "messages": page,
+                                              "found_newest": len(found) <= fake.page_size})
                 if q.get("queue_id") in fake.dead_queues:
                     return self._answer(400, {"result": "error",
                                               "code": "BAD_EVENT_QUEUE_ID"})
@@ -484,3 +489,62 @@ def test_bot_zulip_wait_runs_the_hooks_own_code(tmp_path):
     assert "Direct message to @COO from Founder" in done.stdout
     assert "by hand" in done.stdout
     assert _state(tmp_path)["last_message_id"] == 5
+
+
+def test_backfill_pages_through_a_long_gap(tmp_path):
+    temp = tmp_path / "temp"
+    temp.mkdir()
+    (temp / "agora-wait-s47.json").write_text(json.dumps(
+        {"queue_id": "q-old", "last_event_id": 5, "last_message_id": 0,
+         "backfill": False}), encoding="utf-8")
+    history = [{"id": i, "type": "stream", "mentioned": True, "content": f"m{i}",
+                "display_recipient": "coo", "subject": "t",
+                "sender_email": "founder@zulip.localhost"} for i in range(1, 8)]
+    fake = FakeZulip([], history=history, dead_queues=("q-old",))
+    fake.page_size = 3
+    try:
+        code, out, _ = _finish(_wait_proc(tmp_path, _session_env(tmp_path, fake.url)))
+    finally:
+        fake.close()
+    assert code == 2
+    assert all(f"m{i}\n" in out for i in range(1, 8))
+    assert _state(tmp_path)["last_message_id"] == 7
+
+
+def test_a_lock_left_by_a_reused_pid_goes_stale(tmp_path):
+    """A live pid in an old lock (the dead poller's pid, reused by some other
+    process) must not keep the session unreachable forever."""
+    import os
+    temp = tmp_path / "temp"
+    temp.mkdir()
+    lock = temp / "agora-wait-s47.lock"
+    lock.write_text(str(os.getpid()), encoding="utf-8")  # alive, but not a poller
+    old = time.time() - 3600
+    os.utime(lock, (old, old))
+    fake = FakeZulip([ok(dm(1, "reachable again"))])
+    try:
+        code, out, _ = _finish(_wait_proc(tmp_path, _session_env(tmp_path, fake.url)))
+    finally:
+        fake.close()
+    assert code == 2 and "reachable again" in out
+
+
+def test_a_poller_whose_lock_was_taken_over_stops(hook, monkeypatch, tmp_path):
+    """Two pollers that replaced the same stale lock: the one no longer named
+    in it stops at its next poll, so the session is never woken twice."""
+    fake = _serve(monkeypatch, [])
+    lock = tmp_path / "agora-wait-s1.lock"
+    calls = {"n": 0}
+    real = hook._poll_once
+
+    def poll(*a, **k):
+        calls["n"] += 1
+        lock.write_text("999999", encoding="utf-8")  # someone else took it
+        return real(*a, **k)
+
+    monkeypatch.setattr(hook, "_poll_once", poll)
+    try:
+        assert hook.do_wait() == 0
+    finally:
+        fake.close()
+    assert calls["n"] == 1

@@ -62,6 +62,10 @@ DOTENV = Path(__file__).resolve().parent.parent / "bot" / ".env"
 # One lock and one saved queue per session, so the poller that runs after each
 # turn neither doubles up nor loses what arrived in between.
 STATE_DIR = Path(tempfile.gettempdir())
+# The holder touches its lock on every poll. One untouched this long belongs to
+# a poller that died without cleaning up, whatever its pid now points at: a
+# reused pid must not leave a session silently unreachable.
+LOCK_STALE_SECONDS = 5 * (POLL_SECONDS + 15)
 
 
 def _payload() -> dict:
@@ -290,6 +294,8 @@ def wait_for(creds: tuple[str, str, str], name: str, session: str,
         state = _load_state(state_path)
         deadline = time.time() + (WAIT_SECONDS if seconds is None else seconds)
         while time.time() < deadline:
+            if not _hold_lock(lock):
+                return 0  # another poller took over; it serves this session now
             try:
                 text = _poll_once(creds, name, state, state_path)
             except Exception:
@@ -311,13 +317,21 @@ def _pid_alive(pid: int) -> bool:
     if os.name == "nt":
         # os.kill(pid, 0) on Windows terminates the process. Ask instead.
         import ctypes
-        kernel32 = ctypes.windll.kernel32
+        from ctypes import wintypes
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+        kernel32.OpenProcess.restype = wintypes.HANDLE
+        kernel32.GetExitCodeProcess.argtypes = [wintypes.HANDLE,
+                                                ctypes.POINTER(wintypes.DWORD)]
+        kernel32.GetExitCodeProcess.restype = wintypes.BOOL
+        kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
         handle = kernel32.OpenProcess(0x1000, False, pid)  # QUERY_LIMITED_INFORMATION
         if not handle:
-            return kernel32.GetLastError() == 5  # access denied: it exists
+            return ctypes.get_last_error() == 5  # access denied: it exists
         try:
-            code = ctypes.c_ulong()
-            kernel32.GetExitCodeProcess(handle, ctypes.byref(code))
+            code = wintypes.DWORD()
+            if not kernel32.GetExitCodeProcess(handle, ctypes.byref(code)):
+                return True  # cannot tell: treat as alive, the mtime rule decides
             return code.value == 259  # STILL_ACTIVE
         finally:
             kernel32.CloseHandle(handle)
@@ -345,7 +359,7 @@ def _take_lock(lock: Path) -> bool:
                 age = time.time() - lock.stat().st_mtime
             except (OSError, ValueError):
                 return False
-            if _pid_alive(pid) or (pid == 0 and age < 30):
+            if age < LOCK_STALE_SECONDS and (_pid_alive(pid) or pid == 0):
                 return False
             try:
                 lock.unlink()
@@ -354,8 +368,22 @@ def _take_lock(lock: Path) -> bool:
             continue
         with os.fdopen(fd, "w", encoding="utf-8") as f:
             f.write(str(os.getpid()))
-        return True
+        # Two pollers replacing the same stale lock can both get here; only
+        # the one whose pid is in the file holds it.
+        return _hold_lock(lock)
     return False
+
+
+def _hold_lock(lock: Path) -> bool:
+    """True while the lock still names this process, touching it so it stays
+    fresh. False once another poller has replaced it."""
+    try:
+        if lock.read_text(encoding="utf-8").strip() != str(os.getpid()):
+            return False
+        os.utime(lock)
+        return True
+    except OSError:
+        return False
 
 
 def _drop_lock(lock: Path) -> None:
@@ -387,20 +415,31 @@ def _save_state(path: Path, state: dict) -> None:
 
 
 def _backfill(creds: tuple[str, str, str], after: int) -> list | None:
-    """Mentions and DMs after message id ``after``, oldest first, or None if
-    Zulip could not answer. Two fetches, because narrow terms are ANDed."""
+    """Every message after id ``after`` that the live path would have woken
+    on, oldest first, or None if Zulip could not answer. Two narrows, because
+    narrow terms are ANDed; each is paged to the end so a long gap loses
+    nothing."""
     found: dict = {}
     for narrow in ([{"operator": "is", "operand": "mentioned"}],
                    [{"operator": "is", "operand": "dm"}]):
-        got = _zulip(creds, "GET", "messages", {
-            "narrow": json.dumps(narrow), "anchor": after,
-            "include_anchor": "false", "num_before": 0, "num_after": 100,
-            "apply_markdown": "false"}, 30.0)
-        if not got or got.get("result") != "success":
-            return None
-        for msg in got.get("messages") or []:
-            if isinstance(msg, dict) and int(msg.get("id", -1)) > after:
-                found[int(msg["id"])] = msg
+        anchor = after
+        for _page in range(50):
+            got = _zulip(creds, "GET", "messages", {
+                "narrow": json.dumps(narrow), "anchor": anchor,
+                "include_anchor": "false", "num_before": 0, "num_after": 100,
+                "apply_markdown": "false"}, 30.0)
+            if not got or got.get("result") != "success":
+                return None
+            msgs = [m for m in got.get("messages") or [] if isinstance(m, dict)]
+            for msg in msgs:
+                i = int(msg.get("id", -1))
+                anchor = max(anchor, i)
+                # The same test as the live queue's: the mention flag or a DM.
+                if i > after and ("mentioned" in (msg.get("flags") or [])
+                                  or msg.get("type") == "private"):
+                    found[i] = msg
+            if got.get("found_newest", True) or not msgs:
+                break
     return [found[i] for i in sorted(found)]
 
 
