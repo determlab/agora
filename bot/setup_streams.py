@@ -1,5 +1,5 @@
-"""Idempotent setup for the four Zulip streams and three role bots this repo's
-chat rebuild needs (issue #40).
+"""Idempotent setup for the four Zulip streams, three role bots and the
+Watchdog bot this repo's chat rebuild needs (issues #40, #49).
 
 **The issue body describes nine per-repo streams. That is superseded** — a
 later comment quoting the founder directly ("i dont need per repo i just need
@@ -10,10 +10,16 @@ CMO CTO and you") replaced it with four streams total:
   #status          one pinned message the ops watchdog rewrites; nobody
                    else posts there.
 
-Bot users are unchanged in name (COO, CTO, CMO) but each is subscribed to
-**its own stream only** — the CTO bot cannot read or write #cmo. No bot is
-subscribed to #status. Pool workers get no bot user and no subscription
-(RFC-004: their state is the label, their voice is the PR). See docs/DECISIONS.md D13.
+Role bot users are unchanged in name (COO, CTO, CMO) but each is subscribed
+to **its own stream only** — the CTO bot cannot read or write #cmo. A fourth
+bot, **Watchdog** (issue #49, COO amendment), is the one poster in #status. It
+is subscribed to #status and #coo and nothing else: it rewrites the status
+message, and it posts to #coo to wake the COO session — a bot's own posts
+never wake its own session (#50), so this cannot be the COO bot. No other bot
+may be subscribed to #status, and the only bot besides a role's own bot
+allowed in a role stream is Watchdog, in #coo. Pool workers get no bot user
+and no subscription (RFC-004: their state is the label, their voice is the
+PR). See docs/DECISIONS.md D13.
 
 The topic inside a stream is still the issue number, e.g. `#141 record
 shape`; a decision gets a ledger id, e.g. `D12 event queue resume`
@@ -51,6 +57,12 @@ STREAMS = ["cto", "cmo", "coo", "status"]
 ROLE_BOTS = [("CTO", "cto"), ("CMO", "cmo"), ("COO", "coo")]
 
 STATUS_STREAM = "status"
+
+# The ops watchdog's own bot (issue #49): the one poster in #status, and it
+# posts to #coo to wake the COO. Same (full_name, short_name) convention as
+# ROLE_BOTS, so its email is "watchdog-bot@<realm domain>".
+WATCHDOG_BOT = ("Watchdog", "watchdog")
+WATCHDOG_STREAMS = {STATUS_STREAM, "coo"}
 
 
 def _load_dotenv(path: str) -> None:
@@ -169,6 +181,25 @@ def run_setup(client: ZulipClient) -> None:
                     f"automatically; a human should look at this."
                 )
 
+    full_name, short_name = WATCHDOG_BOT
+    email, user_id, created = ensure_bot(client, full_name, short_name)
+    print(f"[setup] bot {full_name}: {'created' if created else 'already exists'} ({email})")
+    for name in sorted(WATCHDOG_STREAMS):
+        subscribed = ensure_subscribed(client, stream_ids[name], email, user_id)
+        print(
+            f"[setup]   subscribed {full_name} to #{name}: "
+            f"{'done now' if subscribed else 'already subscribed'}"
+        )
+    for other_name, other_id in stream_ids.items():
+        if other_name in WATCHDOG_STREAMS:
+            continue
+        if user_id in client.stream_subscribers(other_id):
+            print(
+                f"[setup]   WARNING {full_name} is also subscribed to "
+                f"#{other_name} — expected only {sorted(WATCHDOG_STREAMS)}. Not "
+                f"removing automatically; a human should look at this."
+            )
+
 
 # -- check --------------------------------------------------------------
 
@@ -211,18 +242,53 @@ def run_check(client: ZulipClient) -> bool:
             print(f"[check]   subscriptions: WRONG — expected {sorted(expected)}, got {sorted(subscribed_to)}")
             ok = False
 
-    # No bot may be subscribed to #status — checked across ALL role bots,
-    # not just the ones with an entry above, since a stray subscription is
-    # exactly the failure this issue exists to prevent.
-    if STATUS_STREAM in streams:
-        status_subs = set(client.stream_subscribers(streams[STATUS_STREAM]))
-        bot_ids_on_status = {u["user_id"] for u in users.values() if u["user_id"] in status_subs}
-        if bot_ids_on_status:
-            names = [full_name for full_name, u in users.items() if u["user_id"] in bot_ids_on_status]
-            print(f"[check] #status: FAIL — subscribed bots present: {names}")
-            ok = False
+    # The Watchdog bot (issue #49) must exist and be in exactly #status and
+    # #coo. Missing is a FAIL, not a pass: without it nothing can post the
+    # status message or wake the COO, and an empty #status would look fine.
+    wd_name, _ = WATCHDOG_BOT
+    watchdog = users.get(wd_name)
+    if watchdog is None:
+        print(f"[check] bot {wd_name}: MISSING — run bot/setup_streams.py to create it")
+        ok = False
+    else:
+        print(f"[check] bot {wd_name}: OK ({watchdog['email']})")
+        subscribed_to = [
+            name for name, sid in streams.items() if watchdog["user_id"] in client.stream_subscribers(sid)
+        ]
+        if set(subscribed_to) == WATCHDOG_STREAMS:
+            print(f"[check]   subscriptions: OK ({sorted(subscribed_to)})")
         else:
-            print("[check] #status: OK (no bot subscribed)")
+            print(
+                f"[check]   subscriptions: WRONG — expected {sorted(WATCHDOG_STREAMS)}, "
+                f"got {sorted(subscribed_to)}"
+            )
+            ok = False
+
+    # Per stream, over ALL bots in the realm (not only the ones named above),
+    # since a stray bot is exactly the failure this check exists for:
+    # #status holds the Watchdog bot and no other bot; a role stream holds its
+    # own role bot, plus Watchdog in #coo only.
+    watchdog_id = watchdog["user_id"] if watchdog else None
+    role_bot_ids = {short: users[full]["user_id"] for full, short in ROLE_BOTS if full in users}
+    for name in STREAMS:
+        if name not in streams:
+            continue
+        subs = set(client.stream_subscribers(streams[name]))
+        allowed = set()
+        if name in role_bot_ids:
+            allowed.add(role_bot_ids[name])
+        if name in WATCHDOG_STREAMS and watchdog_id is not None:
+            allowed.add(watchdog_id)
+        stray = sorted(full for full, u in users.items() if u["user_id"] in subs and u["user_id"] not in allowed)
+        if stray:
+            print(f"[check] #{name}: FAIL — bots that must not be subscribed: {stray}")
+            ok = False
+        elif name == STATUS_STREAM:
+            if watchdog_id is not None and watchdog_id in subs:
+                print(f"[check] #{name}: OK (only {wd_name} subscribed)")
+            else:
+                print(f"[check] #{name}: FAIL — {wd_name} is not subscribed, so nothing can post here")
+                ok = False
 
     return ok
 

@@ -41,8 +41,17 @@ CTO and you" — so the actual scheme is **four streams, not nine**:
 |---|---|---|
 | `#cto` | the founder, the CTO bot | the CTO bot only |
 | `#cmo` | the founder, the CMO bot | the CMO bot only |
-| `#coo` | the founder, the COO bot | the COO bot only |
-| `#status` | the ops watchdog (one pinned message it rewrites) | no bot |
+| `#coo` | the founder, the COO bot, the Watchdog bot (to wake the COO) | the COO bot and the Watchdog bot |
+| `#status` | the Watchdog bot (one pinned message it rewrites) | the Watchdog bot only |
+
+The **Watchdog** bot (issue #49) is the ops watchdog's own bot user, not the
+COO bot: it also posts to `#coo` to wake the COO, and a bot's own posts never
+wake its own session (#50). It is subscribed to `#status` and `#coo` and
+nothing else; `--check` fails if it is missing, if it is in any other stream,
+or if any other bot is in `#status`. Its credentials go in the gitignored
+`bot/.env` as `ZULIP_WATCHDOG_EMAIL` / `ZULIP_WATCHDOG_API_KEY` (so
+`python bot/zulip.py --as Watchdog ...` posts as it); setup does not print the
+key — copy it from Settings > Bots.
 
 The founder talks to a person, not a repository — `#shal`, `#bricks`, `#aos`,
 `#agora`, `#adk-lab`, `#pytest-shal`, `#ops` and `#founder` from the original
