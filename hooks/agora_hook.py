@@ -10,8 +10,9 @@ Two roles, one script, selected by argv:
 ``wait``      runs as an **async** hook with ``asyncRewake``. It parks in a long
               poll against Zulip's event queue (``register`` once, then
               ``GET /api/v1/events``). When someone @-mentions or DMs this
-              session's bot, it prints the message and **exits 2**, which wakes
-              the session with that text. That is the whole mechanism by which a
+              session's bot, or anyone else writes in its own role stream (issue
+              #50), it prints the message and **exits 2**, which wakes the
+              session with that text. That is the whole mechanism by which a
               person reaches into a running agent: there is no other supported
               one. Agora was never the wake — Claude Code is; Zulip only
               supplies the URL (issue #41).
@@ -134,8 +135,9 @@ HOW_TO_SIT = (
     "name is {name!r} — use it exactly, and do not ask anyone to rename you.\n\n"
     "Each role has its own stream (#coo, #cto, #cmo); inside a stream the topic "
     "is the issue number, e.g. `#141 record shape`. When someone @-mentions "
-    "your bot or sends it a direct message, this session is woken mid-turn "
-    "with that message, its stream and its topic.\n\n"
+    "your bot, sends it a direct message, or anyone but you writes in "
+    "your own stream, this session is woken mid-turn with that message, its "
+    "stream and its topic.\n\n"
     "Post only when you are asked, or when something needs a person. Answer "
     "in the same stream and topic you were asked in."
 )
@@ -211,18 +213,29 @@ def _zulip(creds: tuple[str, str, str], method: str, path: str, params: dict,
         return None
 
 
-def _wakes(event: dict, bot_email: str) -> bool:
-    """A mention of this bot, or a direct message to it — never its own post.
+def _wakes(event: dict, bot_email: str, name: str = "") -> bool:
+    """The whole wake rule: a mention of this bot, a direct message to it, or
+    any message in its own role stream (``#coo`` for session ``COO``) —
+    never its own post (issue #50).
 
-    Zulip ANDs the terms of a register ``narrow``, so "mentioned OR private"
-    cannot be one narrow. The queue takes every message and this picks.
+    In its own stream any other sender wakes it, bots included: the founder
+    should not have to tag the role he is already talking to, and the hourly
+    watchdog posts to ``#coo`` as its own ``Watchdog`` bot precisely to wake
+    the COO. Only the session's own bot is excluded, so it cannot wake itself.
+
+    Zulip ANDs the terms of a register ``narrow``, so "mentioned OR private OR
+    own stream" cannot be one narrow. The queue takes every message and this
+    picks.
     """
     if event.get("type") != "message":
         return False
     msg = event.get("message")
     if not isinstance(msg, dict) or msg.get("sender_email") == bot_email:
         return False
-    return "mentioned" in (event.get("flags") or []) or msg.get("type") == "private"
+    if "mentioned" in (event.get("flags") or []) or msg.get("type") == "private":
+        return True
+    return (bool(name) and msg.get("type") == "stream"
+            and str(msg.get("display_recipient") or "").lower() == name.lower())
 
 
 def _rewake_text(name: str, msg: dict) -> str:
@@ -233,7 +246,10 @@ def _rewake_text(name: str, msg: dict) -> str:
     else:
         stream = msg.get("display_recipient") or "?"
         topic = msg.get("subject") or ""
-        where = f"@{name} in #{stream} › {topic} — from {sender}"
+        if "mentioned" in (msg.get("flags") or []):
+            where = f"@{name} in #{stream} › {topic} — from {sender}"
+        else:  # written in this role's own stream, no tag needed
+            where = f"#{stream} › {topic} — from {sender}"
         reply = f"Reply in #{stream}, topic {topic!r}."
     return f"{where}\n\n{msg.get('content', '')}\n\n{reply}"
 
@@ -255,7 +271,8 @@ def do_register() -> int:
 
 
 def do_wait() -> int:
-    """Park until this session's bot is mentioned or DMed. Exit 2 to wake it.
+    """Park until this session's bot is mentioned or DMed, or anyone else writes
+    in its own role stream. Exit 2 to wake it.
 
     Registered on ``SessionStart`` and again on ``Stop`` (issue #47), so it runs
     after every turn. The lock keeps that to one poller per session; the saved
@@ -503,7 +520,10 @@ def _poll_once(creds: tuple[str, str, str], name: str, state: dict,
                     seen.append(int(msg["id"]))
                 except (KeyError, TypeError, ValueError):
                     pass
-        candidates = [e["message"] for e in events if _wakes(e, bot_email)]
+        # The event's flags ride on a copy of its message, so the rewake text
+        # can tell a mention from a message in the session's own stream.
+        candidates = [{**e["message"], "flags": e.get("flags") or []}
+                      for e in events if _wakes(e, bot_email, name)]
     # A message already delivered — by the queue or by a backfill — is never
     # delivered again.
     floor = state["last_message_id"]
