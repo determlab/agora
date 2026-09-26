@@ -448,15 +448,17 @@ def _backfill(creds: tuple[str, str, str], after: int,
     ``channel`` is Zulip 11's name for the operator; ``stream`` is its legacy
     alias, and ``bot/zulip.py`` uses ``channel`` too.
 
-    Only mentions and DMs decide success. A session whose bot has no own
-    stream, or is not subscribed to it, gets an error on that narrow; failing
-    the whole backfill for it would leave the backfill pending forever and the
-    live queue never polled, so mentions and DMs would stop too. That narrow
-    is skipped instead.
+    Zulip not answering at all fails the whole backfill, to be retried. An
+    error answer fails it only for mentions and DMs. A session whose bot has
+    no own stream, or is not subscribed to it, gets an error on that narrow;
+    failing the whole backfill for it would leave the backfill pending forever
+    and the live queue never polled, so mentions and DMs would stop too. That
+    narrow is skipped instead.
 
-    A narrow that runs out of pages before the newest message caps the result
-    at the last id it read, and the gap is reported as not fully read, so the
-    next step goes on from there instead of jumping the floor past it."""
+    A narrow that runs out of pages before the newest message, or that errs
+    after reading some pages, caps the result at the last id it read, and the
+    gap is reported as not fully read, so the next step goes on from there
+    instead of jumping the floor past it."""
     narrows = [([{"operator": "is", "operand": "mentioned"}], True),
                ([{"operator": "is", "operand": "dm"}], True)]
     if name:
@@ -465,14 +467,18 @@ def _backfill(creds: tuple[str, str, str], after: int,
     cap = None
     for narrow, required in narrows:
         anchor = after
-        for _page in range(BACKFILL_PAGES):
+        for page in range(BACKFILL_PAGES):
             got = _zulip(creds, "GET", "messages", {
                 "narrow": json.dumps(narrow), "anchor": anchor,
                 "include_anchor": "false", "num_before": 0, "num_after": 100,
                 "apply_markdown": "false"}, 30.0)
-            if not got or got.get("result") != "success":
+            if got is None:
+                return None  # no answer at all: retry, never skip silently
+            if got.get("result") != "success":
                 if required:
                     return None
+                if page:  # stop where it stopped reading, and go on later
+                    cap = anchor if cap is None else min(cap, anchor)
                 break  # the own stream is optional: skip it, keep the rest
             msgs = [m for m in got.get("messages") or [] if isinstance(m, dict)]
             for msg in msgs:

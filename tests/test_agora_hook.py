@@ -45,6 +45,9 @@ class FakeZulip:
         self.idle = idle                      # how long an empty poll parks
         self.page_size = 100                  # GET /messages page size
         self.channel_error = None             # (status, body) for a channel narrow
+        # One step per channel-narrow request, then normal answers: "ok",
+        # "drop" (hang up with no answer), or a (status, body) to send.
+        self.channel_script: list = []
         self.calls: list[tuple[str, str, dict]] = []
         self.queues = 0
         fake = self
@@ -80,7 +83,14 @@ class FakeZulip:
                 if url.path == "/api/v1/messages":
                     term = json.loads(q["narrow"])[0]
                     op, narrow = term["operator"], term["operand"]
-                    if op in ("channel", "stream") and fake.channel_error:
+                    if op in ("channel", "stream") and fake.channel_script:
+                        step = fake.channel_script.pop(0)
+                        if step == "drop":
+                            self.close_connection = True
+                            return
+                        if step != "ok":
+                            return self._answer(*step)
+                    elif op in ("channel", "stream") and fake.channel_error:
                         return self._answer(*fake.channel_error)
                     after = int(q["anchor"])
                     found = [m for m in fake.history if m["id"] > after and (
@@ -744,3 +754,59 @@ def test_a_gap_longer_than_the_page_limit_is_read_in_steps(tmp_path):
     assert "m2\n" in outs[0] and "m3\n" not in outs[0]
     assert "m4\n" not in outs[0]
     assert _state(tmp_path)["last_message_id"] == 7
+
+
+
+def _steps(tmp_path: Path, history: list, channel_script: list,
+           page_size: int = 100, runs: int = 4) -> tuple[list, FakeZulip]:
+    """`wait` run again and again after a lost queue, until the backfill is
+    no longer pending. Returns every run's output."""
+    temp = tmp_path / "temp"
+    temp.mkdir()
+    (temp / "agora-wait-s47.json").write_text(json.dumps(
+        {"queue_id": "q-old", "last_event_id": 5, "last_message_id": 40,
+         "backfill": False}), encoding="utf-8")
+    fake = FakeZulip([], history=history, dead_queues=("q-old",), idle=0.3)
+    fake.page_size = page_size
+    fake.channel_script = list(channel_script)
+    outs = []
+    try:
+        env = _session_env(tmp_path, fake.url)
+        for _ in range(runs):
+            code, out, err = _finish(_wait_proc(tmp_path, env, seconds=4))
+            assert err == ""
+            outs.append(out)
+            if not _state(tmp_path)["backfill"] and code == 0:
+                break
+    finally:
+        fake.close()
+    return outs, fake
+
+
+def test_no_answer_on_the_own_stream_narrow_retries_instead_of_skipping(tmp_path):
+    """Zulip not answering is not the same as Zulip saying no: the untagged
+    #coo message must not be skipped because one request timed out."""
+    outs, fake = _steps(tmp_path, [posted(41, "untagged, in the gap")], ["drop"])
+    assert "".join(outs).count("untagged, in the gap") == 1
+    assert "#coo › #52 backfill — from Founder" in "".join(outs)
+    channel = [c for c in fake.calls if c[1] == "/api/v1/messages"
+               and json.loads(c[2]["narrow"])[0]["operator"] == "channel"]
+    assert len(channel) >= 2  # the dropped one, then the retry
+    assert _state(tmp_path)["last_message_id"] == 41
+
+
+def test_an_own_stream_error_after_one_page_caps_the_floor(tmp_path):
+    """Page 1 of #coo read, page 2 an error: the floor stops at what was
+    read, so the rest of #coo is delivered later, not jumped over."""
+    history = [posted(41, "coo one"), posted(42, "coo two"), posted(43, "coo three"),
+               {"id": 44, "type": "private", "content": "a DM after them",
+                "sender_email": "founder@zulip.localhost",
+                "sender_full_name": "Founder"}]
+    error = (400, {"result": "error", "code": "BAD_REQUEST", "msg": "try later"})
+    outs, _ = _steps(tmp_path, history, ["ok", error], page_size=1)
+    assert "coo one" in outs[0]
+    assert "coo two" not in outs[0] and "a DM after them" not in outs[0]
+    every = "".join(outs)
+    assert [every.count(t) for t in
+            ("coo one", "coo two", "coo three", "a DM after them")] == [1, 1, 1, 1]
+    assert _state(tmp_path)["last_message_id"] == 44
