@@ -175,7 +175,8 @@ def test_direct_message_wakes_but_own_and_unmentioned_posts_do_not(
         hook, monkeypatch, capsys):
     own = mention(1)
     own["message"]["sender_email"] = BOT
-    chatter = {**mention(2), "flags": []}
+    chatter = {**mention(2), "flags": []}  # untagged, and not in #coo
+    chatter["message"] = {**chatter["message"], "display_recipient": "cto"}
     dm = {"type": "message", "id": 3, "flags": [], "message": {
         "id": 1003, "type": "private", "content": "are you there?",
         "sender_email": "founder@zulip.localhost", "sender_full_name": "Founder"}}
@@ -548,3 +549,71 @@ def test_a_poller_whose_lock_was_taken_over_stops(hook, monkeypatch, tmp_path):
     finally:
         fake.close()
     assert calls["n"] == 1
+
+
+# -- issue #50: any message in a role's own stream wakes it, but its own ------
+#
+# Stream name = session name lowercased. Any sender but the session's own bot
+# wakes it there, bots included: the hourly watchdog posts to #coo as its own
+# `Watchdog` bot to wake the COO.
+
+WATCHDOG = "watchdog-bot@zulip.localhost"
+
+
+def said(i: int, content: str, stream: str = "coo",
+         email: str = "founder@zulip.localhost", who: str = "Founder",
+         flags: tuple = ()) -> dict:
+    return {"type": "message", "id": 100 + i, "flags": list(flags), "message": {
+        "id": i, "type": "stream", "display_recipient": stream,
+        "subject": "#50 own stream", "content": content,
+        "sender_email": email, "sender_full_name": who}}
+
+
+def _run(tmp_path: Path, script: list, seconds: float = 8.0):
+    fake = FakeZulip(script, idle=0.3)
+    try:
+        return _finish(_wait_proc(tmp_path, _session_env(tmp_path, fake.url),
+                                  seconds=seconds))
+    finally:
+        fake.close()
+
+
+def test_a_watchdog_bot_post_in_the_own_stream_wakes_it(tmp_path):
+    code, out, err = _run(tmp_path, [ok(said(
+        1, "hourly: 2 issues ready", email=WATCHDOG, who="Watchdog"))])
+    assert (code, err) == (2, "")
+    assert "#coo › #50 own stream — from Watchdog" in out
+    assert "hourly: 2 issues ready" in out
+
+
+def test_the_founder_without_a_tag_in_the_own_stream_wakes_it(tmp_path):
+    code, out, err = _run(tmp_path, [ok(said(1, "no tag needed"))])
+    assert (code, err) == (2, "")
+    assert "#coo › #50 own stream — from Founder" in out
+    assert "@COO" not in out  # not a mention, and the text does not claim one
+    assert "no tag needed" in out
+    assert "Reply in #coo, topic '#50 own stream'." in out
+
+
+def test_its_own_bot_post_in_the_own_stream_wakes_nobody(tmp_path):
+    code, out, err = _run(tmp_path, [ok(said(
+        1, "my own status line", email=BOT, who="COO"))], seconds=3)
+    assert (code, out, err) == (0, "", "")
+
+
+def test_the_same_message_in_another_roles_stream_does_not_wake(tmp_path):
+    code, out, err = _run(tmp_path, [ok(
+        said(1, "for the CTO", stream="cto"),
+        said(2, "the CTO's watchdog line", stream="cto", email=WATCHDOG,
+             who="Watchdog"))], seconds=3)
+    assert (code, out, err) == (0, "", "")
+
+
+def test_mentions_and_dms_still_wake_from_any_stream(tmp_path):
+    code, out, err = _run(tmp_path, [ok(
+        said(1, "tagged from #cto", stream="cto", flags=("mentioned",)),
+        dm(2, "a direct line"))])
+    assert (code, err) == (2, "")
+    assert "@COO in #cto › #50 own stream — from Founder" in out
+    assert "tagged from #cto" in out
+    assert "Direct message to @COO from Founder" in out and "a direct line" in out
