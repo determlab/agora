@@ -39,7 +39,7 @@ from __future__ import annotations
 import os
 import sys
 
-from zulip_client import ZulipClient
+from zulip_client import ZulipClient, ZulipError
 
 # stream name -> is it a role stream (a bot belongs here) or the watchdog-only one
 STREAMS = ["cto", "cmo", "coo", "status"]
@@ -75,8 +75,9 @@ def load_admin_client() -> ZulipClient:
     if not email or not api_key:
         sys.exit(
             "ZULIP_ADMIN_EMAIL and ZULIP_ADMIN_API_KEY must be set (bot/.env). "
-            "See bot/README.md — regenerate via manage.py shell against the "
-            "live Zulip admin user; never hardcode a key."
+            "The admin is the founder's own account: he copies his key from "
+            "Zulip Settings > Account & privacy > API key. See bot/README.md; "
+            "never hardcode a key."
         )
     return ZulipClient(site, email, api_key)
 
@@ -84,14 +85,21 @@ def load_admin_client() -> ZulipClient:
 # -- idempotent primitives -------------------------------------------------
 
 
-def ensure_stream(client: ZulipClient, name: str) -> tuple[int, bool]:
-    """Returns (stream_id, created). Reads state first — never creates blind."""
-    streams = {s["name"]: s["stream_id"] for s in client.list_streams()}
+def ensure_stream(client: ZulipClient, name: str) -> tuple[int, str]:
+    """Returns (stream_id, action) where action is "created", "made private"
+    or "already exists". Reads state first — never creates blind. A stream
+    that exists but is public (the first build of #40 created them public) is
+    converted in place: the issue asks for "all private"."""
+    streams = {s["name"]: s for s in client.list_streams()}
     if name in streams:
-        return streams[name], False
+        stream = streams[name]
+        if not stream.get("invite_only"):
+            client.make_private(stream["stream_id"])
+            return stream["stream_id"], "made private"
+        return stream["stream_id"], "already exists"
     client.create_stream(name)
     streams = {s["name"]: s["stream_id"] for s in client.list_streams()}
-    return streams[name], True
+    return streams[name], "created"
 
 
 def ensure_bot(client: ZulipClient, full_name: str, short_name: str) -> tuple[str, int, bool]:
@@ -131,9 +139,9 @@ def stream_id_to_name(client: ZulipClient, stream_id: int) -> str:
 def run_setup(client: ZulipClient) -> None:
     stream_ids: dict[str, int] = {}
     for name in STREAMS:
-        stream_id, created = ensure_stream(client, name)
+        stream_id, action = ensure_stream(client, name)
         stream_ids[name] = stream_id
-        print(f"[setup] stream #{name}: {'created' if created else 'already exists'} (id={stream_id})")
+        print(f"[setup] stream #{name}: {action} (id={stream_id})")
 
     for full_name, short_name in ROLE_BOTS:
         email, user_id, created = ensure_bot(client, full_name, short_name)
@@ -167,15 +175,23 @@ def run_setup(client: ZulipClient) -> None:
 
 def run_check(client: ZulipClient) -> bool:
     ok = True
-    streams = {s["name"]: s["stream_id"] for s in client.list_streams()}
+    all_streams = client.list_streams()
+    streams = {s["name"]: s["stream_id"] for s in all_streams}
+    private = {s["name"]: bool(s.get("invite_only")) for s in all_streams}
     users = {u["full_name"]: u for u in client.list_users() if u.get("is_bot")}
 
     for name in STREAMS:
-        if name in streams:
-            print(f"[check] stream #{name}: OK (id={streams[name]})")
-        else:
-            print(f"[check] stream #{name}: MISSING")
+        if name not in streams:
+            print(f"[check] stream #{name}: MISSING — run bot/setup_streams.py to create it")
             ok = False
+        elif not private[name]:
+            print(
+                f"[check] stream #{name}: PUBLIC — must be private (any member could read "
+                f"and join it); run bot/setup_streams.py to convert it"
+            )
+            ok = False
+        else:
+            print(f"[check] stream #{name}: OK, private (id={streams[name]})")
 
     for full_name, short_name in ROLE_BOTS:
         bot = users.get(full_name)
@@ -213,10 +229,17 @@ def run_check(client: ZulipClient) -> bool:
 
 def main() -> None:
     client = load_admin_client()
-    if "--check" in sys.argv:
-        ok = run_check(client)
-        sys.exit(0 if ok else 1)
-    run_setup(client)
+    try:
+        if "--check" in sys.argv:
+            ok = run_check(client)
+            sys.exit(0 if ok else 1)
+        run_setup(client)
+    except ZulipError as e:
+        sys.exit(
+            f"setup_streams: {e}\n"
+            "If this is a permission error, ZULIP_ADMIN_* must belong to a realm "
+            "administrator, not a bot."
+        )
 
 
 if __name__ == "__main__":

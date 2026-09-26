@@ -65,8 +65,17 @@ Run it (idempotent — a second run creates nothing):
 ```
 Needs `ZULIP_ADMIN_EMAIL` / `ZULIP_ADMIN_API_KEY` (an admin account — creating
 streams and subscribing other users are realm-admin actions, a bot cannot do
-either). Regenerate the admin key via `manage.py shell` the same way the bot
-user below is created — never hardcode it; it belongs in `bot/.env` only.
+either). The admin is the founder's own human account, so an agent never
+regenerates that key: he copies it from Zulip Settings > Account & privacy >
+API key into `bot/.env` — never hardcode it; it belongs in `bot/.env` only.
+
+All four streams are **private** (`invite_only`). On a public stream any
+member, bots included, can read the history and subscribe itself, so the
+one-bot-per-stream rule would be decorative. A stream that already exists
+public is converted in place on the next run, and `--check` fails on any
+public stream. The role bots' own API keys are not printed by setup; get one
+from Settings > Bots (or `manage.py shell`) into `bot/.env` when a bot first
+needs to talk.
 
 ## Why no `zulip` pip dependency
 

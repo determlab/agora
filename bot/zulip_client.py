@@ -69,6 +69,11 @@ class ZulipClient:
                 payload = json.loads(resp.read().decode())
         except urllib.error.HTTPError as e:
             payload = json.loads(e.read().decode())
+        except urllib.error.URLError as e:
+            raise ZulipError(
+                f"{method} {path}: cannot reach Zulip at {self.site} ({e.reason}). "
+                "Start it with `docker compose up -d` in bot/, or set ZULIP_SITE."
+            ) from e
 
         if payload.get("result") != "success":
             raise ZulipError(f"{method} {path} failed: {payload}")
@@ -136,10 +141,22 @@ class ZulipClient:
 
     def create_stream(self, name: str) -> None:
         """Zulip has no separate "create stream" call: subscribing to a name
-        that doesn't exist yet creates it (as a public stream, the default).
-        This subscribes the admin account too — harmless, and it is what
-        lets the admin see/manage the stream afterwards."""
-        self._request("POST", "users/me/subscriptions", {"subscriptions": [{"name": name}]})
+        that doesn't exist yet creates it. `invite_only` makes it private —
+        issue #40 asks for "all private": on a public stream any member, bots
+        included, can read the history and subscribe itself, which would make
+        the one-bot-per-stream rule decorative. This subscribes the admin
+        account too — harmless, and it is what lets the admin see/manage the
+        stream afterwards."""
+        self._request(
+            "POST",
+            "users/me/subscriptions",
+            {"subscriptions": [{"name": name}], "invite_only": "true"},
+        )
+
+    def make_private(self, stream_id: int) -> None:
+        """PATCH /streams/{id} is_private=true — converts a stream created
+        public (the first build of #40 did this) to private in place."""
+        self._request("PATCH", f"streams/{stream_id}", {"is_private": "true"})
 
     def list_users(self) -> list[dict[str, Any]]:
         """Every account in the realm, bots included (`is_bot`) — used to
