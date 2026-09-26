@@ -431,14 +431,24 @@ def _save_state(path: Path, state: dict) -> None:
     os.replace(tmp, path)
 
 
-def _backfill(creds: tuple[str, str, str], after: int) -> list | None:
-    """Every message after id ``after`` that the live path would have woken
-    on, oldest first, or None if Zulip could not answer. Two narrows, because
-    narrow terms are ANDed; each is paged to the end so a long gap loses
-    nothing."""
+def _backfill(creds: tuple[str, str, str], after: int, name: str = "") -> list | None:
+    """Every message after id ``after`` that the live path could wake on,
+    oldest first and each once, or None if Zulip could not answer.
+
+    Three narrows, because narrow terms are ANDed: mentions, direct messages,
+    and this session's own role stream (issue #52), so an untagged post in
+    ``#coo`` sent while the queue was lost is not missed. Each is paged to the
+    end so a long gap loses nothing. A message found by two narrows, a mention
+    in the own stream, is kept once. The caller decides which of these wake,
+    with ``_wakes()``: the same rule as the live queue, not a copy of it.
+    ``channel`` is Zulip 11's name for the operator; ``stream`` is its legacy
+    alias, and ``bot/zulip.py`` uses ``channel`` too."""
+    narrows = [[{"operator": "is", "operand": "mentioned"}],
+               [{"operator": "is", "operand": "dm"}]]
+    if name:
+        narrows.append([{"operator": "channel", "operand": name.lower()}])
     found: dict = {}
-    for narrow in ([{"operator": "is", "operand": "mentioned"}],
-                   [{"operator": "is", "operand": "dm"}]):
+    for narrow in narrows:
         anchor = after
         for _page in range(50):
             got = _zulip(creds, "GET", "messages", {
@@ -451,9 +461,7 @@ def _backfill(creds: tuple[str, str, str], after: int) -> list | None:
             for msg in msgs:
                 i = int(msg.get("id", -1))
                 anchor = max(anchor, i)
-                # The same test as the live queue's: the mention flag or a DM.
-                if i > after and ("mentioned" in (msg.get("flags") or [])
-                                  or msg.get("type") == "private"):
+                if i > after:
                     found[i] = msg
             if got.get("found_newest", True) or not msgs:
                 break
@@ -485,12 +493,16 @@ def _poll_once(creds: tuple[str, str, str], name: str, state: dict,
         _save_state(state_path, state)
     candidates: list = []
     if state["backfill"]:
-        msgs = _backfill(creds, state["last_message_id"])
+        msgs = _backfill(creds, state["last_message_id"], name)
         if msgs is None:
             time.sleep(2.0)
             return None
         state["backfill"] = False
-        candidates = [m for m in msgs if m.get("sender_email") != bot_email]
+        # Each fetched message goes through the live rule, as the event the
+        # queue would have carried: one definition of what wakes a session.
+        candidates = [m for m in msgs if _wakes(
+            {"type": "message", "message": m, "flags": m.get("flags") or []},
+            bot_email, name)]
         seen = [int(m["id"]) for m in msgs]
     else:
         got = _zulip(creds, "GET", "events", {
