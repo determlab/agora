@@ -147,6 +147,24 @@ Both read `ZULIP_SITE` / `ZULIP_BOT_EMAIL` / `ZULIP_BOT_API_KEY` /
 `ZULIP_CHANNEL` from the environment — either export them from `bot/.env`
 first, or run with `env $(cat bot/.env | grep -v '^#' | xargs)` prefixed.
 
+## Talking from a session: `bot/zulip.py` (issue #42)
+
+A role session posts and reads through Bash, not an MCP tool (a new MCP tool
+is invisible to sessions already connected — D1). The bot is
+`ZULIP_BOT_EMAIL` / `ZULIP_BOT_API_KEY`, or `--as COO` for
+`ZULIP_COO_EMAIL` / `ZULIP_COO_API_KEY`; environment first, then `bot/.env`.
+
+```
+python bot/zulip.py --as COO send --stream coo --topic "#141 record shape" --text "Done, PR #45."
+python bot/zulip.py --as COO read --stream coo --topic "#141 record shape" --since 42
+python bot/zulip.py --as COO read --mentions --since 42
+```
+
+`read` prints oldest first as `[id] time UTC #stream › topic Sender <email>:`
+and the text. Pass the last id back as `--since` to get only newer ones.
+A stream the bot is not subscribed to, or one that does not exist, is named
+on stderr and exits 2; nothing is sent.
+
 ## Stopping it
 
 ```
