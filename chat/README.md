@@ -7,16 +7,44 @@ work against it with only `ZULIP_SITE` changed. One SQLite file
 (`chat/data/chat.sqlite3`, gitignored), bound to 127.0.0.1 only. Event queues
 live in the database: they survive a restart and expire after 7 days unpolled.
 
-## Start
+## Quickstart (issue #72)
 
-    chat\run.cmd                                   # 127.0.0.1:8095
-    python chat/server.py serve --port 8095 --seed-ids 600
+    python chat/server.py up
 
-`--seed-ids N` makes message and event ids continue above N — use Zulip's last
-message id, so the hook's saved floor and `zulip.py read --since` still see new
-messages. `--db PATH` picks another database.
+That is the whole setup, and running it again changes nothing. It continues
+the message ids above Zulip's newest (asking Zulip once, if it still answers;
+the stored floor otherwise, never lower), creates each bot in `bot/.env` with
+its existing email and key, creates the streams `bot/setup_streams.py` creates
+and puts each bot in its own, puts every human in every stream, and serves on
+http://127.0.0.1:8095. It never creates a human: the first time, it prints the
+one command the founder runs, once:
 
-## Accounts
+    python chat/server.py add-human --email <you> --name "<your name>" --write-env
+
+That makes his account, puts it in every stream and appends
+`ZULIP_FOUNDER_EMAIL` / `ZULIP_FOUNDER_API_KEY` to `bot/.env` (never over an
+existing pair: then it exits non-zero and changes nothing). Open
+http://127.0.0.1:8095/ and log in with those two values.
+
+Optional, start it at every Windows login (one `.cmd` in your Startup folder,
+running `up` minimised and logging to `chat/data/server.log`; no admin, no
+scheduled task):
+
+    python chat/server.py autostart install
+    python chat/server.py autostart status --json   # installed? answering?
+    python chat/server.py autostart remove
+
+`chat\run.cmd` is `up` with its flags passed through. While it serves, `up`
+runs `git pull --ff-only` every 10 minutes when the clone is on `main` (a
+failed pull is logged, never forced) and restarts itself when
+`chat/server.py` changed; the page needs no restart. `--no-update` turns that
+off. For agents: `up --no-serve --json` (set up, one JSON line, exit 0) and
+`up --json` (the same line, then serve). `--port N`, `--db PATH` and
+`--env FILE` pick another port, database and env file.
+
+`serve --port 8095 --seed-ids 600` still serves without any setup.
+
+## Accounts, by hand
 
     python chat/server.py bootstrap --json                      # an admin bot
     python chat/server.py bootstrap --json --from-env bot/.env  # + every ZULIP_<ROLE>_EMAIL/_API_KEY pair
@@ -27,9 +55,10 @@ the founder's own account, and only he makes it:
 
     python chat/server.py add-human --email <you> --name "<your name>" --json
 
-It prints an admin `api_key` (no password). The founder pastes it into
-`bot/.env` as `ZULIP_ADMIN_EMAIL` / `ZULIP_ADMIN_API_KEY`; then
-`python bot/setup_streams.py` builds the streams and `--check` verifies them.
+It prints an admin `api_key` (no password). For `bot/setup_streams.py` the
+founder pastes it into `bot/.env` as `ZULIP_ADMIN_EMAIL` /
+`ZULIP_ADMIN_API_KEY`; after `up`, `python bot/setup_streams.py --check`
+passes.
 
 ## Point a tool at it
 
