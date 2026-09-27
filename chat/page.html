@@ -335,6 +335,33 @@ function setPrivate(streamId, isPrivate) {
   return api("PATCH", "streams/" + streamId, {is_private: isPrivate});
 }
 
+function privacy(s) { return s.invite_only ? "private" : "public"; }
+
+// What the create dialog says. `s` is the stream as the server lists it after
+// the call (undefined if the page could not read it back). The server applies
+// invite_only only when it creates the stream, so an existing one keeps its own.
+function createReport(name, wantPrivate, r, s) {
+  const added = Object.keys(r.subscribed || {});
+  const already = Object.keys(r.already_subscribed || {});
+  let msg = "#" + name + (s ? " (" + privacy(s) + ")" : "") + ": " + added.length + " added"
+      + (already.length ? ", " + already.length + " already members (the stream existed)" : "");
+  if (!s) msg += "; the page could not read its privacy back";
+  else if (!!s.invite_only !== !!wantPrivate) {
+    msg += "; it already existed as " + privacy(s) + ", so " + (wantPrivate ? "Private" : "Public")
+        + " was not applied";
+  }
+  return msg;
+}
+
+// What the private toggle says: the state read back from the server, or, when
+// the page cannot read it (no longer a member, or the reload failed), only
+// what the server accepted.
+function privateReport(name, want, now) {
+  if (now) return "#" + name + " is now " + privacy(now);
+  return "#" + name + " set to " + (want ? "private" : "public")
+      + " (the server accepted it; the page cannot read it back: you are not a member, or the reload failed)";
+}
+
 // The old queue is deleted before a new one is registered, so a reconnect
 // does not leave a queue on the server filling up for nobody. It may already
 // be gone (expired, or the network ate the reply): that is not an error.
@@ -766,12 +793,16 @@ $("create-form").addEventListener("submit", async (e) => {
   $("create-ok").disabled = true;
   say("create-status", "creating…");
   try {
-    const r = await createStream(name, $("create-private").checked, emails);
-    const added = Object.keys(r.subscribed);
-    const already = Object.keys(r.already_subscribed);
-    say("create-status", "#" + name + ": " + added.length + " added"
-        + (already.length ? ", " + already.length + " already members (the stream existed)" : ""));
-    await loadStreams();
+    const wantPrivate = $("create-private").checked;
+    const r = await createStream(name, wantPrivate, emails);
+    // Report the privacy the server holds, not the box: a reload failure
+    // must not turn a created stream into "not created".
+    let s;
+    try {
+      await loadStreams();
+      s = S.streams.find((x) => x.name === name);
+    } catch (err) { s = undefined; }
+    say("create-status", createReport(name, wantPrivate, r, s));
   } catch (err) {
     say("create-status", "not created: " + err.message, true);
   } finally {
@@ -844,17 +875,23 @@ $("members-add").addEventListener("submit", async (e) => {
 
 $("members-private").addEventListener("change", async () => {
   const want = $("members-private").checked;
+  if (!S.panel) return;
   try {
     await setPrivate(S.panel.stream_id, want);
-    await loadStreams();
-    // Show what the server now has, not what the box was set to.
-    const now = S.streams.find((x) => x.stream_id === S.panel.stream_id);
-    if (now) { S.panel = now; $("members-private").checked = !!now.invite_only; }
-    say("members-status", "#" + S.panel.name + " is now " + (now && now.invite_only ? "private" : "public"));
   } catch (err) {
     $("members-private").checked = !want;
     say("members-status", "not changed: " + err.message, true);
+    return;
   }
+  // Show what the server now has, not what the box was set to. After you
+  // remove yourself the stream is no longer listed: say only what was accepted.
+  let now;
+  try {
+    await loadStreams();
+    now = S.streams.find((x) => x.stream_id === S.panel.stream_id);
+  } catch (err) { now = undefined; }
+  if (now) { S.panel = now; $("members-private").checked = !!now.invite_only; }
+  say("members-status", privateReport(S.panel.name, want, now));
 });
 
 $("members-close").addEventListener("click", () => $("members-dlg").close());

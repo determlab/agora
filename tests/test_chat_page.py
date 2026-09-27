@@ -514,6 +514,53 @@ def test_create_add_remove_and_private_reach_the_server_as_the_page_sends_them(w
     assert [s["invite_only"] for s in subs["subscriptions"] if s["name"] == "tmp"] == [False]
 
 
+def test_the_private_toggle_never_reports_a_state_it_did_not_read_back():
+    script = _markup().script
+    assert 'say("members-status", privateReport(S.panel.name, want, now))' in script
+    got = _js(("privacy", "privateReport"), """
+      out.read = privateReport("x", false, {stream_id: 1, name: "x", invite_only: true});
+      out.gone = privateReport("x", true, undefined);
+      out.goneOff = privateReport("x", false, undefined);
+    """)
+    # The read-back wins over what was asked for.
+    assert got["read"] == "#x is now private"
+    # Not listed any more (you removed yourself): no "is now", only what was accepted.
+    assert "is now" not in got["gone"] and "is now" not in got["goneOff"]
+    assert got["gone"].startswith("#x set to private (the server accepted it; the page cannot read it back")
+    assert got["goneOff"].startswith("#x set to public (")
+
+
+def test_create_reports_the_privacy_the_server_holds_not_the_checkbox(world):
+    run, human, bots = world["run"], world["human"], world["bots"]
+    cto = bots["CTO"]["email"]
+    script = _markup().script
+    assert 'say("create-status", createReport(name, wantPrivate, r, s))' in script
+    # The stream already exists as public and the human is not a member.
+    status, body = page_api(run, human, "POST", "users/me/subscriptions",
+                            subscriptions=json.dumps([{"name": "old"}]), principals=json.dumps([cto]))
+    assert status == 200 and list(body["subscribed"]) == [cto], body
+    status, r = page_api(run, human, "POST", "users/me/subscriptions",
+                         subscriptions=json.dumps([{"name": "old"}]), invite_only="true",
+                         principals=json.dumps([human["email"], cto]))
+    assert status == 200, r
+    status, subs = page_api(run, human, "GET", "users/me/subscriptions")
+    [old] = [s for s in subs["subscriptions"] if s["name"] == "old"]
+    assert old["invite_only"] is False
+    got = _js(("privacy", "createReport"), f"""
+      const r = {json.dumps(r)}, s = {json.dumps(old)};
+      out.existed = createReport("old", true, r, s);
+      out.asked = createReport("old", false, r, s);
+      out.fresh = createReport("new", true, {{subscribed: {{"a@x": ["new"]}}, already_subscribed: {{}}}},
+                               {{name: "new", invite_only: true}});
+      out.unread = createReport("new", true, {{subscribed: {{"a@x": ["new"]}}, already_subscribed: {{}}}});
+    """)
+    assert got["existed"].startswith("#old (public): 1 added, 1 already members")
+    assert got["existed"].endswith("it already existed as public, so Private was not applied")
+    assert got["asked"] == "#old (public): 1 added, 1 already members (the stream existed)"
+    assert got["fresh"] == "#new (private): 1 added"
+    assert got["unread"] == "#new: 1 added; the page could not read its privacy back"
+
+
 def test_dialogs_are_in_the_page_and_there_is_no_stream_delete_or_unread_count():
     text = PAGE.read_text(encoding="utf-8")
     assert not re.search(r"\b(confirm|prompt|alert)\(", _markup().script)
