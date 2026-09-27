@@ -237,6 +237,31 @@ and the text. Pass the last id back as `--since` to get only newer ones.
 A stream the bot is not subscribed to, or one that does not exist, is named
 on stderr and exits 2; nothing is sent.
 
+## Memory limits (issue #57)
+
+Each container has a `mem_limit` in `docker-compose.yml`, about 2 GB in
+total: zulip 1200m, database 400m, rabbitmq 200m, redis 100m, memcached
+100m. Only the Zulip containers are capped, not WSL, so the other Docker
+projects on the machine keep what they need.
+
+To change one, edit its `mem_limit:` and recreate the container — a new
+limit does nothing to a container that is already running:
+```
+cd bot
+docker compose up -d        # recreates only the services whose config changed; data is kept
+docker stats --no-stream    # MEM USAGE / LIMIT shows each cap
+```
+If Zulip itself restarts under load, or `docker inspect agora-zulip-zulip-1`
+shows `"OOMKilled": true`, its 1200m is the number to raise.
+`tests/test_zulip_compose.py` fails if a service has no limit or the total
+leaves roughly 1.5–2.5 GB.
+
+**What the limits do not cap:** WSL's own page cache. `vmmemWSL` in Task
+Manager counts the Linux file cache too, and it can stay large after the
+containers are done with it. `wsl --shutdown` (from Windows, with Docker
+Desktop quit or ready to restart) frees it; the stack comes back with
+`restart: unless-stopped` when Docker Desktop starts again.
+
 ## Stopping it
 
 ```

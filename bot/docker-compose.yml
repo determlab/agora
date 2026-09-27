@@ -19,6 +19,20 @@
 #
 # Start:  cd bot && docker compose up -d
 # Stop:   cd bot && docker compose down          (add -v to also drop the data)
+#
+# MEMORY (issue #57): every service carries a `mem_limit`, about 2 GB in total
+# (zulip 1200m, database 400m, rabbitmq 200m, redis 100m, memcached 100m).
+# The founder needs the rest of the machine for other projects, and the fix
+# is to cap these containers, not WSL itself — a `.wslconfig` cap would squeeze
+# every other Docker project too. `mem_limit` is the plain Compose-spec key,
+# which `docker compose` (v2, Docker Desktop) applies without swarm. A changed
+# limit takes effect only when the container is recreated: edit the number,
+# then `cd bot && docker compose up -d` (compose recreates just the services
+# whose config changed; the data lives in the named volumes and survives).
+# `docker stats --no-stream` shows each container's limit in MEM USAGE / LIMIT.
+# What this does NOT cap: WSL's own page cache, which `vmmemWSL` also counts.
+# `wsl --shutdown` frees that — see bot/README.md, "Memory limits".
+# tests/test_zulip_compose.py holds every service to having a limit.
 
 name: agora-zulip
 
@@ -26,6 +40,7 @@ services:
   database:
     image: "zulip/zulip-postgresql:14"
     restart: unless-stopped
+    mem_limit: 400m
     environment:
       POSTGRES_DB: "zulip"
       POSTGRES_USER: "zulip"
@@ -36,6 +51,9 @@ services:
   memcached:
     image: "memcached:alpine"
     restart: unless-stopped
+    # memcached's own default cache is 64 MB (`-m 64`), so 100m holds it plus
+    # the process; raising the cache means raising this first.
+    mem_limit: 100m
     command:
       - "sh"
       - "-euc"
@@ -52,6 +70,7 @@ services:
   rabbitmq:
     image: "rabbitmq:4.1"
     restart: unless-stopped
+    mem_limit: 200m
     environment:
       RABBITMQ_DEFAULT_USER: "zulip"
       RABBITMQ_DEFAULT_PASS: "${ZULIP_RABBITMQ_PASSWORD}"
@@ -61,6 +80,7 @@ services:
   redis:
     image: "redis:alpine"
     restart: unless-stopped
+    mem_limit: 100m
     command:
       - "sh"
       - "-euc"
@@ -75,6 +95,11 @@ services:
   zulip:
     image: "zulip/docker-zulip:11.6-0"
     restart: unless-stopped
+    # The biggest share: nginx, the Django workers, Tornado and the queue
+    # processors all live in this one container. If Zulip gets OOM-killed
+    # (`docker inspect` shows OOMKilled=true, or it restarts under load),
+    # this is the number to raise.
+    mem_limit: 1200m
     ports:
       # Loopback-only (D4's spirit): 8090 chosen after checking `netstat`
       # for this machine's in-use ports (8765, 8804 were both taken
