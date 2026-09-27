@@ -22,14 +22,19 @@ The event queue (D12) lives in SQLite, like everything else: a queue and its
 events survive a restart and expire only after 7 days without a poll, where
 Zulip's expire after minutes of silence (where the first attempt broke).
 
+``GET /`` serves ``chat/page.html`` (M2, issue #65), a static file and no new
+way in: the page asks for the human's email and API key and sends them as the
+same HTTP Basic auth the bots use.
+
 Stdlib only (D2's shape), one SQLite file in WAL mode, bound to 127.0.0.1
-only (D4). Not here: the browser page, history import, search.
+only (D4). Not here: history import, search.
 """
 from __future__ import annotations
 
 import argparse
 import base64
 import contextlib
+import hashlib
 import json
 import os
 import re
@@ -44,6 +49,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 HOST = "127.0.0.1"
 DEFAULT_DB = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "chat.sqlite3")
+PAGE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "page.html")
 REALM = "chat.localhost"
 ROLE_OWNER, ROLE_ADMIN, ROLE_MEMBER = 100, 200, 400  # Zulip's role numbers
 NEWEST = 1 << 62
@@ -834,6 +840,26 @@ class Chat:
                        "BAD_REQUEST", 404)
 
 
+def load_page(path: str = PAGE) -> tuple[bytes, str]:
+    """The page and its Content-Security-Policy.
+
+    ``default-src 'self'`` alone would block the page's own inline script
+    and style, and ``'unsafe-inline'`` would let an injected one run too, so
+    each inline block is allowed by its sha256 and nothing else is. Newlines
+    are normalised first because a browser hashes the text after turning
+    CRLF into LF, and a Windows checkout may have CRLF on disk."""
+    with open(path, "rb") as f:
+        html = f.read().decode("utf-8").replace("\r\n", "\n").replace("\r", "\n")
+
+    def hashes(tag: str) -> str:
+        found = re.findall(rf"<{tag}>(.*?)</{tag}>", html, re.S)
+        return " ".join("'sha256-" + base64.b64encode(hashlib.sha256(
+            block.encode("utf-8")).digest()).decode("ascii") + "'" for block in found) or "'none'"
+    csp = (f"default-src 'self'; script-src {hashes('script')}; style-src {hashes('style')}; "
+           f"base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
+    return html.encode("utf-8"), csp
+
+
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     server_version = "AgoraChat/0.1"
@@ -843,16 +869,47 @@ class Handler(BaseHTTPRequestHandler):
         pass
 
     def _reply(self, status: int, body: dict) -> None:
-        data = json.dumps(body).encode()
+        self._send(status, json.dumps(body).encode(), "application/json")
+
+    def _send(self, status: int, data: bytes, content_type: str, **headers) -> None:
         self.send_response(status)
-        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(data)))
         if status == 401:
             self.send_header("WWW-Authenticate", 'Basic realm="zulip"')
+        for name, value in headers.items():
+            self.send_header(name.replace("_", "-"), value)
         if self.close_connection:
             self.send_header("Connection", "close")
         self.end_headers()
         self.wfile.write(data)
+
+    def _local(self) -> set[str]:
+        port = self.server.server_address[1]
+        return {f"127.0.0.1:{port}", f"localhost:{port}"}
+
+    def _check_origin(self) -> None:
+        """A browser names the page that sent a request in ``Origin``: one
+        from any other site is refused, so a page elsewhere cannot drive this
+        API through the founder's browser. No ``Origin`` at all is how the
+        bots, the hook and curl call, and stays allowed."""
+        origin = self.headers.get("Origin")
+        if origin is not None and origin.lower() not in {f"http://{h}" for h in self._local()}:
+            raise ApiError(f"Forbidden: a request from origin {origin!r}. This server "
+                           f"answers only its own page, http://127.0.0.1:"
+                           f"{self.server.server_address[1]}/", "FORBIDDEN", 403)
+
+    def _serve_page(self) -> None:
+        # The Host check keeps a DNS-rebound name (evil.example resolving to
+        # 127.0.0.1) from loading the page as its own origin.
+        host = (self.headers.get("Host") or "").lower()
+        if host not in self._local():
+            raise ApiError(f"Forbidden: Host {host!r}. Open http://127.0.0.1:"
+                           f"{self.server.server_address[1]}/ instead", "FORBIDDEN", 403)
+        data, csp = load_page()
+        self._send(200, data, "text/html; charset=utf-8", Content_Security_Policy=csp,
+                   X_Content_Type_Options="nosniff", Cache_Control="no-store",
+                   Referrer_Policy="no-referrer")
 
     def _body_length(self) -> int:
         raw = self.headers.get("Content-Length") or "0"
@@ -875,6 +932,10 @@ class Handler(BaseHTTPRequestHandler):
             if length:
                 body = self.rfile.read(length).decode("utf-8", "replace")
                 params.update(urllib.parse.parse_qsl(body, keep_blank_values=True))
+            self._check_origin()
+            if url.path == "/" and method == "GET":
+                self._serve_page()  # static, no auth: it holds no data
+                return
             if not url.path.startswith("/api/v1/"):
                 raise ApiError(f"Endpoint not found: {url.path} (the API is under /api/v1/)",
                                "BAD_REQUEST", 404)
@@ -1015,7 +1076,8 @@ def main(argv: list[str] | None = None) -> int:
                   f"ZULIP_ADMIN_API_KEY={user['api_key']}")
         return 0
     server = make_server(args.db, args.port, args.poll_seconds, args.seed_ids)
-    print(f"serving http://{HOST}:{server.server_address[1]}/api/v1/ db={args.db}", flush=True)
+    print(f"serving http://{HOST}:{server.server_address[1]}/ (page) and /api/v1/ "
+          f"db={args.db}", flush=True)
     try:
         server.serve_forever()
     except KeyboardInterrupt:
