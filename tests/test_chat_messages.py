@@ -1,4 +1,4 @@
-"""chat/server.py, the message half of Zulip's API, over a real socket.
+"""chat/server.py, the messages part of Zulip's API, over a real socket.
 
 Most tests run the server in a thread and speak HTTP to it. The last one runs
 it the way an agent does — ``serve`` and ``bootstrap --json`` as processes —
@@ -202,6 +202,85 @@ def test_private_messages_and_users(env):
     assert all("api_key" not in u for u in users["members"])
 
 
+def test_anchor_newest_returns_num_before_rows(env):
+    cto = env["cto"]
+    ids = [cto("POST", "messages", type="stream", to="feature", topic="t",
+               content=str(i))[1]["id"] for i in range(4)]
+    _, got = cto("GET", "messages", anchor="newest", num_before=2, num_after=0)
+    assert [m["id"] for m in got["messages"]] == ids[-2:]
+
+
+def test_all_is_a_mention_for_every_reader(env):
+    cto, coo = env["cto"], env["coo"]
+    env["store"].subscribe(env["coo_user"]["id"], env["feature"])
+    _, sent = cto("POST", "messages", type="stream", to="feature", topic="t",
+                  content="@**all** standup")
+    _, got = coo("GET", "messages", anchor="newest", num_before=10, num_after=0,
+                 narrow=[{"operator": "is", "operand": "mentioned"}])
+    assert [m["id"] for m in got["messages"]] == [sent["id"]]
+    assert "mentioned" in got["messages"][0]["flags"]
+
+
+def test_message_over_10000_characters_is_refused(env):
+    cto = env["cto"]
+    status, body = cto("POST", "messages", type="stream", to="feature", topic="t",
+                       content="x" * 10_001)
+    assert status == 400 and body["result"] == "error"
+    assert body["msg"].startswith("Message too long")
+    assert cto("POST", "messages", type="stream", to="feature", topic="t",
+               content="x" * 10_000)[0] == 200
+    _, sent = cto("POST", "messages", type="stream", to="feature", topic="t", content="ok")
+    status, body = cto("PATCH", f"messages/{sent['id']}", content="y" * 10_001)
+    assert status == 400 and body["msg"].startswith("Message too long")
+
+
+def test_malformed_content_length_answers_in_zulips_shape(env):
+    port = int(env["base"].rsplit(":", 1)[1])
+    with socket.create_connection(("127.0.0.1", port), timeout=10) as s:
+        s.sendall(b"POST /api/v1/messages HTTP/1.1\r\nHost: x\r\n"
+                  b"Content-Length: banana\r\n\r\n")
+        data = b""
+        while b"\r\n\r\n" not in data or not data.rstrip().endswith(b"}"):
+            chunk = s.recv(4096)
+            if not chunk:
+                break
+            data += chunk
+    head, _, body = data.partition(b"\r\n\r\n")
+    assert head.startswith(b"HTTP/1.1 400")
+    got = json.loads(body)
+    assert got["result"] == "error" and "Content-Length" in got["msg"] and got["code"]
+
+
+def test_a_write_is_one_transaction_with_its_events(env, monkeypatch):
+    """A failure after the message row is written leaves no message behind:
+    the message, a DM's recipients and the queue events commit together."""
+    cto, store = env["cto"], env["store"]
+    before = store.one("SELECT count(*) FROM messages")[0]
+
+    def boom(*a, **k):
+        raise RuntimeError("crash between message and events")
+    monkeypatch.setattr(chat.Chat, "_publish", boom)
+    status, body = cto("POST", "messages", type="private",
+                       to=["coo-bot@chat.localhost"], content="lost?")
+    assert status == 500 and body["result"] == "error"
+    assert store.one("SELECT count(*) FROM messages")[0] == before
+    assert store.one("SELECT count(*) FROM recipients")[0] == 0
+    assert not store.db.in_transaction
+
+
+def test_seed_ids_continue_above_zulips(tmp_path):
+    store = chat.Store(str(tmp_path / "c.sqlite3"))
+    store.seed_ids(600)
+    store.seed_ids(10)  # never lowers
+    cto = store.create_user("cto-bot@chat.localhost", "CTO", is_bot=True)
+    sid = store.create_stream("cto")
+    store.subscribe(cto["id"], sid)
+    out = chat.Chat(store).send(cto, {"type": "stream", "to": "cto", "topic": "t",
+                                      "content": "first"})
+    assert out["id"] == 601 and store.max_message_id() == 601
+    store.db.close()
+
+
 def test_every_import_is_standard_library():
     tree = ast.parse(SERVER.read_text(encoding="utf-8"))
     names = set()
@@ -215,7 +294,10 @@ def test_every_import_is_standard_library():
 
 def test_binds_loopback_only():
     assert chat.HOST == "127.0.0.1"
-    for path in (ROOT / "chat").rglob("*.py"):
+    files = [p for p in (ROOT / "chat").rglob("*") if p.is_file() and "data" not in p.parts
+             and p.suffix in (".py", ".md", ".cmd")]
+    assert ROOT / "chat" / "server.py" in files
+    for path in files:
         assert "0.0.0.0" not in path.read_text(encoding="utf-8"), path
 
 
