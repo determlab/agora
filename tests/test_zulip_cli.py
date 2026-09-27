@@ -141,6 +141,31 @@ def test_as_name_picks_that_bots_credentials(cli, monkeypatch):
     assert cli.load_client("COO").email == "coo@x"
 
 
+@pytest.mark.parametrize("role", ["CTO", "COO"])
+def test_as_cto_or_coo_sends_to_feature(cli, monkeypatch, capsys, role):
+    """#feature (issue #56) needs nothing special in the CLI: each bot's own
+    subscriptions decide, so both of its members can post there."""
+    monkeypatch.setenv(f"ZULIP_{role}_EMAIL", f"{role.lower()}-bot@x")
+    monkeypatch.setenv(f"ZULIP_{role}_API_KEY", "k")
+    fake = _stub(monkeypatch, cli, FakeZulip(
+        subscribed=(role.lower(), "feature"), exists=("coo", "cto", "feature")))
+    assert cli.main(["--as", role, "send", "--stream", "feature",
+                     "--topic", "ops#44 routes", "--text", "step one"]) == 0
+    assert "sent #feature › ops#44 routes id=99" in capsys.readouterr().out
+    assert fake.calls[-1][2] == {"type": "stream", "to": "feature",
+                                 "content": "step one", "topic": "ops#44 routes"}
+
+
+def test_cmo_is_refused_in_feature(cli, monkeypatch, capsys):
+    monkeypatch.setenv("ZULIP_CMO_EMAIL", "cmo-bot@x")
+    monkeypatch.setenv("ZULIP_CMO_API_KEY", "k")
+    fake = _stub(monkeypatch, cli, FakeZulip(subscribed=("cmo",), exists=()))
+    assert cli.main(["--as", "CMO", "send", "--stream", "feature",
+                     "--topic", "t", "--text", "x"]) == 2
+    assert "Nothing was sent" in capsys.readouterr().err
+    assert not [c for c in fake.calls if c[:2] == ("POST", "messages")]
+
+
 def _run(args, env_extra, tmp_path, prelude=""):
     env = {k: v for k, v in os.environ.items() if not k.startswith("ZULIP_")}
     env.update(env_extra)

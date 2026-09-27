@@ -26,6 +26,15 @@ milestones in the history, not tagged releases.
 
 ### Added
 
+- `#feature`, a private Zulip stream for the big-feature path with exactly
+  the founder, the `CTO` bot and the `COO` bot in it — the one exception to
+  "each bot in its own stream only". `bot/setup_streams.py` creates it
+  idempotently and `--check` fails on any other member (humans counted here
+  only), on the founder missing, or on it being public. A founder post there
+  wakes both the CTO and COO sessions without a tag; a bot's post there wakes
+  only by @-mention, so the two roles cannot wake each other in a loop. The
+  backfill reads `#feature` too, through the same `_wakes()` rule. (D13
+  amended, issue #56)
 - `bot/setup_streams.py`: idempotent creation of the four Zulip streams
   (`cto`, `cmo`, `coo`, `status`) and the three role bots (`COO`, `CTO`,
   `CMO`), each bot subscribed to its own stream only — no bot subscribed to

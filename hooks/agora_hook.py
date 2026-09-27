@@ -11,8 +11,9 @@ Two roles, one script, selected by argv:
               poll against Zulip's event queue (``register`` once, then
               ``GET /api/v1/events``). When someone @-mentions or DMs this
               session's bot, or anyone else writes in its own role stream (issue
-              #50), it prints the message and **exits 2**, which wakes the
-              session with that text. That is the whole mechanism by which a
+              #50), or the founder writes in #feature (issue #56), it prints
+              the message and **exits 2**, which wakes the session with that
+              text. That is the whole mechanism by which a
               person reaches into a running agent: there is no other supported
               one. Agora was never the wake — Claude Code is; Zulip only
               supplies the URL (issue #41).
@@ -69,6 +70,9 @@ STATE_DIR = Path(tempfile.gettempdir())
 LOCK_STALE_SECONDS = 5 * (POLL_SECONDS + 15)
 # Pages of 100 per backfill narrow, per step. A longer gap is read in steps.
 BACKFILL_PAGES = 50
+# The one stream two role sessions share (issue #56): the founder, the CTO bot
+# and the COO bot, for a big feature. bot/setup_streams.py owns who is in it.
+FEATURE_STREAM = "feature"
 
 
 def _payload() -> dict:
@@ -140,6 +144,11 @@ HOW_TO_SIT = (
     "your bot, sends it a direct message, or anyone but you writes in "
     "your own stream, this session is woken mid-turn with that message, its "
     "stream and its topic.\n\n"
+    "The CTO and COO also share #feature with the founder, for a big feature "
+    "(topic = the feature issue, e.g. `ops#44 routes`). A post there by the "
+    "founder wakes both; a bot's post wakes the other only by @-mention. The "
+    "CTO designs there; the COO watches and posts only process notes, and "
+    "answers when @-mentioned.\n\n"
     "Post only when you are asked, or when something needs a person. Answer "
     "in the same stream and topic you were asked in."
 )
@@ -218,12 +227,26 @@ def _zulip(creds: tuple[str, str, str], method: str, path: str, params: dict,
 def _wakes(event: dict, bot_email: str, name: str = "") -> bool:
     """The whole wake rule: a mention of this bot, a direct message to it, or
     any message in its own role stream (``#coo`` for session ``COO``) —
-    never its own post (issue #50).
+    never its own post (issue #50) — or a person's post in ``#feature``
+    (issue #56).
 
     In its own stream any other sender wakes it, bots included: the founder
     should not have to tag the role he is already talking to, and the hourly
     watchdog posts to ``#coo`` as its own ``Watchdog`` bot precisely to wake
     the COO. Only the session's own bot is excluded, so it cannot wake itself.
+
+    ``#feature`` (issue #56) is shared by the founder, the CTO and the COO, so
+    there a post wakes every session whose bot is in it — both — but only
+    when a person wrote it. A bot's post there, the other role's included,
+    wakes nobody unless it @-mentions them: the COO watches while the CTO
+    designs, and if each role's post woke the other, a design post would wake
+    the COO, its process note would wake the CTO, and so on with nobody
+    asking. Zulip names every bot it creates ``<short_name>-bot@<domain>``
+    (``bot/setup_streams.py`` relies on the same), and a message carries no
+    ``is_bot``, so the address is how a person is told from a bot. A human
+    whose address happened to look like that would fail safe: silent, still
+    able to @-mention. Membership, not this rule, keeps the CMO out: a bot
+    not subscribed to a private stream never receives its messages.
 
     Zulip ANDs the terms of a register ``narrow``, so "mentioned OR private OR
     own stream" cannot be one narrow. The queue takes every message and this
@@ -236,8 +259,13 @@ def _wakes(event: dict, bot_email: str, name: str = "") -> bool:
         return False
     if "mentioned" in (event.get("flags") or []) or msg.get("type") == "private":
         return True
-    return (bool(name) and msg.get("type") == "stream"
-            and str(msg.get("display_recipient") or "").lower() == name.lower())
+    if msg.get("type") != "stream":
+        return False
+    stream = str(msg.get("display_recipient") or "").lower()
+    if stream == FEATURE_STREAM:
+        sender = str(msg.get("sender_email") or "")
+        return bool(sender) and not sender.partition("@")[0].endswith("-bot")
+    return bool(name) and stream == name.lower()
 
 
 def _rewake_text(name: str, msg: dict) -> str:
@@ -439,9 +467,10 @@ def _backfill(creds: tuple[str, str, str], after: int,
     oldest first and each once, and whether the whole gap was read; None if
     Zulip could not answer.
 
-    Three narrows, because narrow terms are ANDed: mentions, direct messages,
-    and this session's own role stream (issue #52), so an untagged post in
-    ``#coo`` sent while the queue was lost is not missed. Each is paged to the
+    Four narrows, because narrow terms are ANDed: mentions, direct messages,
+    this session's own role stream (issue #52), so an untagged post in
+    ``#coo`` sent while the queue was lost is not missed, and ``#feature``
+    (issue #56), for the founder's untagged posts there. Each is paged to the
     end so a long gap loses nothing. A message found by two narrows, a mention
     in the own stream, is kept once. The caller decides which of these wake,
     with ``_wakes()``: the same rule as the live queue, not a copy of it.
@@ -463,6 +492,10 @@ def _backfill(creds: tuple[str, str, str], after: int,
                ([{"operator": "is", "operand": "dm"}], True)]
     if name:
         narrows.append(([{"operator": "channel", "operand": name.lower()}], False))
+    # #feature too (issue #56), optional for the same reason: only the CTO
+    # and COO bots are in it, so for any other session it errs and is skipped.
+    if name.lower() != FEATURE_STREAM:
+        narrows.append(([{"operator": "channel", "operand": FEATURE_STREAM}], False))
     found: dict = {}
     cap = None
     for narrow, required in narrows:

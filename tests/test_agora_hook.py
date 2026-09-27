@@ -810,3 +810,77 @@ def test_an_own_stream_error_after_one_page_caps_the_floor(tmp_path):
     assert [every.count(t) for t in
             ("coo one", "coo two", "coo three", "a DM after them")] == [1, 1, 1, 1]
     assert _state(tmp_path)["last_message_id"] == 44
+
+
+# -- issue #56: #feature, the founder + CTO + COO stream ---------------------
+#
+# A person's post there wakes both sessions without a tag. A bot's post — the
+# other role's included — wakes only by @-mention, so the CTO and COO cannot
+# wake each other back and forth with nobody asking.
+
+CTO_BOT = "cto-bot@zulip.localhost"
+
+
+def _run_as(tmp_path: Path, script: list, name: str, seconds: float = 8.0):
+    fake = FakeZulip(script, idle=0.3)
+    env = _session_env(tmp_path, fake.url, name=name)
+    env.update({"ZULIP_CTO_EMAIL": CTO_BOT, "ZULIP_CTO_API_KEY": "k"})
+    try:
+        return _finish(_wait_proc(tmp_path, env, seconds=seconds))
+    finally:
+        fake.close()
+
+
+@pytest.mark.parametrize("name", ["COO", "CTO"])
+def test_a_founder_post_in_feature_wakes_both_sessions(tmp_path, name):
+    code, out, err = _run_as(tmp_path, [ok(said(
+        1, "first process: routes", stream="feature"))], name)
+    assert (code, err) == (2, "")
+    assert "#feature › #50 own stream — from Founder" in out
+    assert f"@{name}" not in out  # untagged, and the text does not claim a tag
+    assert "first process: routes" in out
+    assert "Reply in #feature, topic '#50 own stream'." in out
+
+
+def test_a_cto_bot_post_in_feature_does_not_wake_the_coo(tmp_path):
+    code, out, err = _run_as(tmp_path, [ok(
+        said(1, "design v1", stream="feature", email=CTO_BOT, who="CTO"),
+        said(2, "hourly line", stream="feature", email=WATCHDOG, who="Watchdog"))],
+        "COO", seconds=3)
+    assert (code, out, err) == (0, "", "")
+
+
+def test_a_coo_process_note_in_feature_does_not_wake_the_cto(tmp_path):
+    code, out, err = _run_as(tmp_path, [ok(said(
+        1, "process note", stream="feature", email=BOT, who="COO"))],
+        "CTO", seconds=3)
+    assert (code, out, err) == (0, "", "")
+
+
+def test_its_own_post_in_feature_wakes_nobody(tmp_path):
+    code, out, err = _run_as(tmp_path, [ok(said(
+        1, "my own note", stream="feature", email=BOT, who="COO"))],
+        "COO", seconds=3)
+    assert (code, out, err) == (0, "", "")
+
+
+def test_a_bot_that_mentions_the_coo_in_feature_wakes_it(tmp_path):
+    code, out, err = _run_as(tmp_path, [ok(said(
+        1, "@**COO** is this step right?", stream="feature", email=CTO_BOT,
+        who="CTO", flags=("mentioned",)))], "COO")
+    assert (code, err) == (2, "")
+    assert "@COO in #feature › #50 own stream — from CTO" in out
+
+
+def test_a_founder_post_in_feature_is_backfilled_and_a_bot_post_is_not(tmp_path):
+    code, out, err, fake = _backfill_run(tmp_path, [
+        posted(41, "design v1", stream="feature", email=CTO_BOT, who="CTO"),
+        posted(42, "founder, in the gap", stream="feature")])
+    assert (code, err) == (2, "")
+    assert "#feature › #52 backfill — from Founder" in out
+    assert "founder, in the gap" in out
+    assert "design v1" not in out
+    assert _state(tmp_path)["last_message_id"] == 42
+    narrows = [json.loads(c[2]["narrow"]) for c in fake.calls
+               if c[1] == "/api/v1/messages"]
+    assert [{"operator": "channel", "operand": "feature"}] in narrows

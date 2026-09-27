@@ -1,5 +1,5 @@
-"""Idempotent setup for the four Zulip streams, three role bots and the
-Watchdog bot this repo's chat rebuild needs (issues #40, #49).
+"""Idempotent setup for the Zulip streams, three role bots and the Watchdog
+bot this repo's chat rebuild needs (issues #40, #49, #56).
 
 **The issue body describes nine per-repo streams. That is superseded** — a
 later comment quoting the founder directly ("i dont need per repo i just need
@@ -20,6 +20,15 @@ may be subscribed to #status, and the only bot besides a role's own bot
 allowed in a role stream is Watchdog, in #coo. Pool workers get no bot user
 and no subscription (RFC-004: their state is the label, their voice is the
 PR). See docs/DECISIONS.md D13.
+
+**#feature** (issue #56, the one exception to "own stream only") is the
+big-feature path, in the founder's words: "open a channel for me, you and the
+CTO, and we do the first process together while you watch and write notes to
+improve the process." Its members are exactly the founder (the admin account
+this script runs as), the CTO bot and the COO bot — no other bot and no other
+human. It is the only stream where --check counts human members too, because
+"no one else" is the whole of its definition. The topic is the feature issue,
+e.g. `ops#44 routes`.
 
 The topic inside a stream is still the issue number, e.g. `#141 record
 shape`; a decision gets a ledger id, e.g. `D12 event queue resume`
@@ -48,7 +57,7 @@ import sys
 from zulip_client import ZulipClient, ZulipError
 
 # stream name -> is it a role stream (a bot belongs here) or the watchdog-only one
-STREAMS = ["cto", "cmo", "coo", "status"]
+STREAMS = ["cto", "cmo", "coo", "status", "feature"]
 
 # (bot full_name, short_name). short_name is also the stream the bot owns —
 # short_name becomes the email's local part (Zulip's own convention:
@@ -63,6 +72,18 @@ STATUS_STREAM = "status"
 # ROLE_BOTS, so its email is "watchdog-bot@<realm domain>".
 WATCHDOG_BOT = ("Watchdog", "watchdog")
 WATCHDOG_STREAMS = {STATUS_STREAM, "coo"}
+
+# The big-feature stream (issue #56): the founder, the CTO bot and the COO bot.
+# The CTO designs; the COO watches and posts only process notes. The CMO and
+# Watchdog bots are not members, and --check fails if either is.
+FEATURE_STREAM = "feature"
+FEATURE_BOTS = {"CTO", "COO"}
+
+
+def bot_streams(full_name: str, short_name: str) -> set[str]:
+    """The streams a role bot must be in, and the only ones: its own, plus
+    #feature for the CTO and COO (issue #56)."""
+    return {short_name} | ({FEATURE_STREAM} if full_name in FEATURE_BOTS else set())
 
 
 def _load_dotenv(path: str) -> None:
@@ -159,27 +180,37 @@ def run_setup(client: ZulipClient) -> None:
         email, user_id, created = ensure_bot(client, full_name, short_name)
         print(f"[setup] bot {full_name}: {'created' if created else 'already exists'} ({email})")
 
-        own_stream_id = stream_ids[short_name]
-        subscribed = ensure_subscribed(client, own_stream_id, email, user_id)
-        print(
-            f"[setup]   subscribed {full_name} to #{short_name}: "
-            f"{'done now' if subscribed else 'already subscribed'}"
-        )
+        expected = bot_streams(full_name, short_name)
+        for name in sorted(expected):
+            subscribed = ensure_subscribed(client, stream_ids[name], email, user_id)
+            print(
+                f"[setup]   subscribed {full_name} to #{name}: "
+                f"{'done now' if subscribed else 'already subscribed'}"
+            )
 
         # The hard version of chair-mute (issue #40): confirm the bot is NOT
-        # in any of the other three streams, including #status. A bot that
-        # ends up subscribed elsewhere (by hand, or by a future bug) can read
-        # and post into a conversation it should not — this is the actual
-        # invariant, not just "the one subscribe call we made succeeded".
+        # in any other stream, including #status. A bot that ends up
+        # subscribed elsewhere (by hand, or by a future bug) can read and post
+        # into a conversation it should not — this is the actual invariant,
+        # not just "the one subscribe call we made succeeded".
         for other_name, other_id in stream_ids.items():
-            if other_name == short_name:
+            if other_name in expected:
                 continue
             if user_id in client.stream_subscribers(other_id):
                 print(
                     f"[setup]   WARNING {full_name} is also subscribed to "
-                    f"#{other_name} — expected only #{short_name}. Not removing "
-                    f"automatically; a human should look at this."
+                    f"#{other_name} — expected only {sorted(expected)}. Not "
+                    f"removing automatically; a human should look at this."
                 )
+
+    # The founder is #feature's third member (issue #56). Creating the stream
+    # subscribes the admin already; this covers a #feature made by hand.
+    me = client.own_user()
+    subscribed = ensure_subscribed(client, stream_ids[FEATURE_STREAM], me["email"], me["user_id"])
+    print(
+        f"[setup] founder ({me['email']}) in #{FEATURE_STREAM}: "
+        f"{'done now' if subscribed else 'already subscribed'}"
+    )
 
     full_name, short_name = WATCHDOG_BOT
     email, user_id, created = ensure_bot(client, full_name, short_name)
@@ -209,7 +240,8 @@ def run_check(client: ZulipClient) -> bool:
     all_streams = client.list_streams()
     streams = {s["name"]: s["stream_id"] for s in all_streams}
     private = {s["name"]: bool(s.get("invite_only")) for s in all_streams}
-    users = {u["full_name"]: u for u in client.list_users() if u.get("is_bot")}
+    everyone = client.list_users()
+    users = {u["full_name"]: u for u in everyone if u.get("is_bot")}
 
     for name in STREAMS:
         if name not in streams:
@@ -235,7 +267,7 @@ def run_check(client: ZulipClient) -> bool:
         subscribed_to = [
             name for name, sid in streams.items() if bot["user_id"] in client.stream_subscribers(sid)
         ]
-        expected = {short_name}
+        expected = bot_streams(full_name, short_name)
         if set(subscribed_to) == expected:
             print(f"[check]   subscriptions: OK ({subscribed_to})")
         else:
@@ -267,9 +299,13 @@ def run_check(client: ZulipClient) -> bool:
     # Per stream, over ALL bots in the realm (not only the ones named above),
     # since a stray bot is exactly the failure this check exists for:
     # #status holds the Watchdog bot and no other bot; a role stream holds its
-    # own role bot, plus Watchdog in #coo only.
+    # own role bot, plus Watchdog in #coo only. #feature holds the CTO and
+    # COO bots and the founder, and there every member counts, humans too
+    # (issue #56): the other streams leave humans unchecked, #feature is
+    # defined by who is in it.
     watchdog_id = watchdog["user_id"] if watchdog else None
     role_bot_ids = {short: users[full]["user_id"] for full, short in ROLE_BOTS if full in users}
+    founder_id = client.own_user()["user_id"]
     for name in STREAMS:
         if name not in streams:
             continue
@@ -279,10 +315,25 @@ def run_check(client: ZulipClient) -> bool:
             allowed.add(role_bot_ids[name])
         if name in WATCHDOG_STREAMS and watchdog_id is not None:
             allowed.add(watchdog_id)
-        stray = sorted(full for full, u in users.items() if u["user_id"] in subs and u["user_id"] not in allowed)
+        counted = users.values()
+        if name == FEATURE_STREAM:
+            allowed |= {users[full]["user_id"] for full in FEATURE_BOTS if full in users}
+            allowed.add(founder_id)
+            counted = everyone
+        stray = sorted(u["full_name"] for u in counted if u["user_id"] in subs and u["user_id"] not in allowed)
         if stray:
-            print(f"[check] #{name}: FAIL — bots that must not be subscribed: {stray}")
+            what = "members" if name == FEATURE_STREAM else "bots"
+            print(f"[check] #{name}: FAIL — {what} that must not be subscribed: {stray}")
             ok = False
+        elif name == FEATURE_STREAM:
+            # The bots' own rows above already fail a CTO or COO missing
+            # here; the founder has no row, and without him nothing in
+            # #feature wakes anyone.
+            if founder_id in subs:
+                print(f"[check] #{name}: OK (the founder, {sorted(FEATURE_BOTS)} only)")
+            else:
+                print(f"[check] #{name}: FAIL — the founder is not subscribed, so nobody posts here to wake the CTO and COO")
+                ok = False
         elif name == STATUS_STREAM:
             if watchdog_id is not None and watchdog_id in subs:
                 print(f"[check] #{name}: OK (only {wd_name} subscribed)")

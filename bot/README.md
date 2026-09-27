@@ -29,7 +29,7 @@ the status/roadmap tab, retiring the existing 8765 server.
 | `listener.py` | the actual bot: register once, long-poll `/json/events` forever, echo every non-bot message back with the event id it resumed from. |
 | `durability_test.py` | the proof: a real 3-minute gap with no polling, messages sent throughout by a second thread, then resume and check nothing was lost. |
 | `test_resume.py` | unit tests for `resume.py` (mocked data, no live server — `pytest bot/test_resume.py`). |
-| `setup_streams.py` | idempotent: creates the four streams and three role bots below, and subscribes each bot to its own stream only. `--check` verifies without creating and exits non-zero if anything is missing or wrong. |
+| `setup_streams.py` | idempotent: creates the streams and bots below, and subscribes each bot to its own stream only (plus `#feature` for the CTO and COO bots). `--check` verifies without creating and exits non-zero if anything is missing or wrong. |
 
 ## Streams and topics (issue #40)
 
@@ -43,6 +43,18 @@ CTO and you" — so the actual scheme is **four streams, not nine**:
 | `#cmo` | the founder, the CMO bot | the CMO bot only |
 | `#coo` | the founder, the COO bot, the Watchdog bot (to wake the COO) | the COO bot and the Watchdog bot |
 | `#status` | the Watchdog bot (one pinned message it rewrites) | the Watchdog bot only |
+| `#feature` | the founder, the CTO bot (designs), the COO bot (process notes only) | the founder, the CTO bot and the COO bot, no one else |
+
+**`#feature`** (issue #56) is the big-feature path and the one exception to
+"each bot in its own stream only" — the founder: "open a channel for me, you
+and the CTO, and we do the first process together while you watch and write
+notes to improve the process." The topic is the feature issue, e.g.
+`ops#44 routes`. A founder post there wakes both the CTO and COO sessions, no
+tag needed; a bot's post there wakes the other role only by @-mention, so the
+two cannot wake each other in a loop. `--check` counts every member of
+`#feature`, humans included, and fails on anyone but those three, on the
+founder missing, or on it being public. Both bots post there as usual:
+`python bot/zulip.py --as CTO send --stream feature --topic "ops#44 routes" --text "..."`.
 
 The **Watchdog** bot (issue #49) is the ops watchdog's own bot user, not the
 COO bot: it also posts to `#coo` to wake the COO, and a bot's own posts never
@@ -78,7 +90,7 @@ either). The admin is the founder's own human account, so an agent never
 regenerates that key: he copies it from Zulip Settings > Account & privacy >
 API key into `bot/.env` — never hardcode it; it belongs in `bot/.env` only.
 
-All four streams are **private** (`invite_only`). On a public stream any
+All the streams are **private** (`invite_only`). On a public stream any
 member, bots included, can read the history and subscribe itself, so the
 one-bot-per-stream rule would be decorative. A stream that already exists
 public is converted in place on the next run, and `--check` fails on any
