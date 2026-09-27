@@ -182,6 +182,14 @@ class ZulipClient:
             {"subscriptions": [{"name": stream}], "principals": principals},
         )
 
+    def own_user(self) -> dict[str, Any]:
+        """GET /users/me — the account these credentials belong to. For
+        setup_streams.py that is the admin, i.e. the founder, the one human
+        #feature must hold (issue #56). Read back from Zulip rather than
+        matched against ZULIP_ADMIN_EMAIL: with restricted email visibility
+        the API email is not the address the founder typed."""
+        return self._request("GET", "users/me")
+
     def stream_subscribers(self, stream_id: int) -> list[int]:
         """GET /streams/{id}/members — the user ids subscribed to a stream.
         This is how --check confirms a bot is subscribed to its own stream

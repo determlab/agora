@@ -7,6 +7,8 @@ from __future__ import annotations
 import os
 import sys
 
+import pytest
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "bot"))
 
 import setup_streams  # noqa: E402
@@ -58,6 +60,9 @@ class FakeZulip:
 
     def stream_subscribers(self, stream_id):
         return sorted(self.subs[stream_id])
+
+    def own_user(self):
+        return {"user_id": 1, "email": "a@x", "full_name": "Admin"}
 
 
 def test_setup_then_check_passes_and_streams_are_private():
@@ -116,9 +121,9 @@ def test_setup_creates_watchdog_on_status_and_coo_only(capsys):
     wd = _bot(z, "Watchdog")
     assert wd["is_bot"] and wd["email"] == "watchdog-bot@x"
     assert _bot_streams(z, "Watchdog") == {"status", "coo"}
-    # role bots unchanged: each in its own stream only
-    assert _bot_streams(z, "COO") == {"coo"}
-    assert _bot_streams(z, "CTO") == {"cto"}
+    # role bots: each in its own stream, plus #feature for CTO and COO (#56)
+    assert _bot_streams(z, "COO") == {"coo", "feature"}
+    assert _bot_streams(z, "CTO") == {"cto", "feature"}
     assert _bot_streams(z, "CMO") == {"cmo"}
     capsys.readouterr()
     assert setup_streams.run_check(z)
@@ -196,12 +201,13 @@ def test_check_fails_on_unknown_bot_in_role_stream():
     assert not setup_streams.run_check(z)
 
 
-def test_human_members_are_not_checked():
+def test_human_members_are_not_checked_outside_feature():
     z = FakeZulip()
     setup_streams.run_setup(z)
     z.users.append({"user_id": 2, "full_name": "Founder", "email": "f@x", "is_bot": False})
-    for s in z.streams.values():
-        z.subs[s["stream_id"]].add(2)
+    for name, s in z.streams.items():
+        if name != "feature":
+            z.subs[s["stream_id"]].add(2)
     assert setup_streams.run_check(z)
 
 
@@ -209,4 +215,99 @@ def test_check_fails_on_missing_stream():
     z = FakeZulip()
     setup_streams.run_setup(z)
     del z.streams["status"]
+    assert not setup_streams.run_check(z)
+
+
+# -- issue #56: #feature holds exactly the founder, the CTO bot and the COO bot
+#
+# The admin account ("Admin", user 1) is the founder. #feature is the one
+# stream where human members are checked too.
+
+
+def _members(z, stream):
+    by_id = {u["user_id"]: u["full_name"] for u in z.users}
+    return {by_id[i] for i in z.subs[z.streams[stream]["stream_id"]]}
+
+
+def test_setup_creates_private_feature_with_founder_cto_and_coo_only(capsys):
+    z = FakeZulip()
+    setup_streams.run_setup(z)
+    assert z.streams["feature"]["invite_only"]
+    assert _members(z, "feature") == {"Admin", "CTO", "COO"}
+    capsys.readouterr()
+    assert setup_streams.run_check(z)
+    assert "#feature: OK" in capsys.readouterr().out
+
+
+def test_setup_subscribes_the_founder_to_a_feature_made_by_hand():
+    z = FakeZulip()
+    setup_streams.run_setup(z)
+    z.subs[z.streams["feature"]["stream_id"]].discard(1)
+    assert not setup_streams.run_check(z)
+    setup_streams.run_setup(z)
+    assert _members(z, "feature") == {"Admin", "CTO", "COO"}
+    assert setup_streams.run_check(z)
+
+
+def test_check_fails_on_public_feature(capsys):
+    z = FakeZulip()
+    setup_streams.run_setup(z)
+    z.streams["feature"]["invite_only"] = False
+    capsys.readouterr()
+    assert not setup_streams.run_check(z)
+    assert "#feature: PUBLIC" in capsys.readouterr().out
+
+
+def test_check_fails_when_feature_is_missing():
+    z = FakeZulip()
+    setup_streams.run_setup(z)
+    del z.streams["feature"]
+    assert not setup_streams.run_check(z)
+
+
+@pytest.mark.parametrize("stray", ["CMO", "Watchdog"])
+def test_check_fails_on_cmo_or_watchdog_in_feature(capsys, stray):
+    z = FakeZulip()
+    setup_streams.run_setup(z)
+    z.subs[z.streams["feature"]["stream_id"]].add(_bot(z, stray)["user_id"])
+    capsys.readouterr()
+    assert not setup_streams.run_check(z)
+    out = capsys.readouterr().out
+    assert f"#feature: FAIL — members that must not be subscribed: ['{stray}']" in out
+
+
+def test_check_fails_on_another_human_in_feature(capsys):
+    z = FakeZulip()
+    setup_streams.run_setup(z)
+    z.users.append({"user_id": 2, "full_name": "Guest", "email": "g@x", "is_bot": False})
+    z.subs[z.streams["feature"]["stream_id"]].add(2)
+    capsys.readouterr()
+    assert not setup_streams.run_check(z)
+    assert "members that must not be subscribed: ['Guest']" in capsys.readouterr().out
+
+
+def test_check_fails_when_the_founder_is_not_in_feature(capsys):
+    z = FakeZulip()
+    setup_streams.run_setup(z)
+    z.subs[z.streams["feature"]["stream_id"]].discard(1)
+    capsys.readouterr()
+    assert not setup_streams.run_check(z)
+    assert "#feature: FAIL — the founder is not subscribed" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("bot", ["CTO", "COO"])
+def test_check_fails_when_cto_or_coo_is_not_in_feature(capsys, bot):
+    z = FakeZulip()
+    setup_streams.run_setup(z)
+    z.subs[z.streams["feature"]["stream_id"]].discard(_bot(z, bot)["user_id"])
+    capsys.readouterr()
+    assert not setup_streams.run_check(z)
+    assert "subscriptions: WRONG" in capsys.readouterr().out
+
+
+def test_feature_does_not_open_other_role_streams():
+    """The exception is #feature only: the CTO bot in #coo still fails."""
+    z = FakeZulip()
+    setup_streams.run_setup(z)
+    z.subs[z.streams["coo"]["stream_id"]].add(_bot(z, "CTO")["user_id"])
     assert not setup_streams.run_check(z)
