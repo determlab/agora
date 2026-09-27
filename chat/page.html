@@ -1,0 +1,393 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agora chat</title>
+<style>
+* { box-sizing: border-box; }
+body { margin: 0; font: 14px/1.4 system-ui, sans-serif; color: #222; background: #fafafa; }
+[hidden] { display: none !important; }
+button { font: inherit; cursor: pointer; }
+input, select, textarea { font: inherit; }
+#keys { max-width: 32rem; margin: 4rem auto; padding: 1.5rem; background: #fff; border: 1px solid #ddd; }
+#keys label { display: block; margin: .75rem 0 .25rem; }
+#keys input { width: 100%; padding: .4rem; }
+#keys code { background: #f0f0f0; padding: 0 .2rem; }
+.error { color: #b00020; white-space: pre-wrap; }
+#app { display: grid; grid-template-columns: 16rem 1fr; height: 100vh; }
+#side { border-right: 1px solid #ddd; overflow-y: auto; background: #fff; padding: .5rem; }
+#side ul { list-style: none; margin: 0; padding: 0; }
+#side .stream { font-weight: 600; margin-top: .75rem; }
+#side .topic { display: block; width: 100%; text-align: start; border: 0; background: none; padding: .15rem .5rem; }
+#side .topic.open { background: #e6f0ff; }
+#who { font-size: 12px; color: #666; }
+#main { display: flex; flex-direction: column; min-width: 0; height: 100vh; }
+#title { padding: .5rem 1rem; border-bottom: 1px solid #ddd; background: #fff; font-weight: 600; }
+#live { font-weight: normal; font-size: 12px; color: #666; margin-inline-start: .5rem; }
+#messages { flex: 1; overflow-y: auto; padding: .5rem 1rem; }
+.msg { margin: .5rem 0; }
+.msg .meta { font-size: 12px; color: #666; }
+.msg .sender { font-weight: 600; color: #222; margin-inline-end: .5rem; }
+.msg .body { white-space: pre-wrap; overflow-wrap: anywhere; }
+#write { border-top: 1px solid #ddd; background: #fff; padding: .5rem 1rem; }
+#compose { width: 100%; min-height: 4rem; padding: .4rem; }
+#mentions button { margin-inline-end: .25rem; }
+#newtopic { margin-top: .5rem; }
+#send-status { font-size: 12px; color: #666; }
+</style>
+</head>
+<body>
+
+<section id="keys" hidden>
+  <h1>Agora chat</h1>
+  <p>Paste your email and API key once. They stay in this browser
+  (<code>localStorage</code>) and go to the server as HTTP Basic auth,
+  exactly like the bots.</p>
+  <p>No account yet? Make it yourself:
+  <code>python chat/server.py add-human --email you@example.com --name "Your Name" --json</code>
+  prints your <code>api_key</code>.</p>
+  <form id="key-form">
+    <label for="key-email">Email</label>
+    <input id="key-email" type="email" autocomplete="username" required>
+    <label for="key-key">API key</label>
+    <input id="key-key" type="password" autocomplete="current-password" required>
+    <p id="key-error" class="error" hidden></p>
+    <p><button type="submit">Open chat</button></p>
+  </form>
+</section>
+
+<div id="app" hidden>
+  <nav id="side">
+    <div id="who"></div>
+    <button type="button" id="forget">Forget key</button>
+    <ul id="streams"></ul>
+  </nav>
+  <main id="main">
+    <div id="title"><span id="topic-title" dir="auto">Pick a topic</span><span id="live"></span></div>
+    <div id="messages"></div>
+    <div id="write">
+      <div id="mentions">
+        <button type="button" data-mention="COO">@COO</button>
+        <button type="button" data-mention="CTO">@CTO</button>
+        <button type="button" data-mention="CMO">@CMO</button>
+        <button type="button" data-mention="Watchdog">@Watchdog</button>
+        <button type="button" data-mention="all">@all</button>
+      </div>
+      <textarea id="compose" dir="auto" placeholder="Enter sends, Shift+Enter makes a new line"></textarea>
+      <div id="send-status"></div>
+      <p id="send-error" class="error" hidden></p>
+      <form id="newtopic">
+        New topic: <select id="new-stream"></select>
+        <input id="new-topic" dir="auto" placeholder="topic">
+        <button type="submit">Open</button>
+        then write it in the box above.
+      </form>
+    </div>
+  </main>
+</div>
+
+<template id="msg-tpl">
+  <div class="msg">
+    <div class="meta"><span class="sender" dir="auto"></span><time class="when"></time></div>
+    <div class="body" dir="auto"></div>
+  </div>
+</template>
+
+<script>
+"use strict";
+// Every piece of text from the server goes in through textContent, never as
+// markup: a message is untrusted input. The CSP the server sends allows this
+// one inline script by its hash and nothing else.
+const $ = (id) => document.getElementById(id);
+const STORE = "agora-chat-credentials";
+const S = {
+  creds: null, gen: 0, queue: null, lastEvent: -1,
+  streams: [],          // [{stream_id, name}]
+  topics: new Map(),    // stream name -> Map(topic -> newest message id)
+  open: null,           // {stream_id, stream, topic}
+  shown: new Set(),     // message ids in the open topic
+};
+
+class ApiFailure extends Error {
+  constructor(status, body) {
+    super((body && body.msg) || ("HTTP " + status));
+    this.status = status;
+    this.code = body && body.code;
+  }
+}
+
+function basic(email, key) {
+  const bytes = new TextEncoder().encode(email + ":" + key);
+  let bin = "";
+  for (const b of bytes) bin += String.fromCharCode(b);
+  return "Basic " + btoa(bin);
+}
+
+async function api(method, path, params) {
+  const enc = new URLSearchParams();
+  for (const [k, v] of Object.entries(params || {})) {
+    enc.set(k, typeof v === "string" ? v : JSON.stringify(v));
+  }
+  let url = "/api/v1/" + path, body;
+  if (method === "GET") url += "?" + enc.toString(); else body = enc;
+  let resp, data;
+  try {
+    // credentials "omit": no cookies and no browser-cached Basic auth, and no
+    // native login prompt on a 401: the key screen is the only way in.
+    resp = await fetch(url, {method, body, credentials: "omit", cache: "no-store",
+                             headers: {Authorization: basic(S.creds.email, S.creds.key)}});
+  } catch (e) {
+    throw new ApiFailure(0, {msg: "cannot reach the chat server: " + e.message});
+  }
+  try { data = await resp.json(); } catch (e) { data = {msg: "HTTP " + resp.status}; }
+  if (resp.status === 401) {
+    showKeys(data.msg || "unauthorized");
+    throw new ApiFailure(401, data);
+  }
+  if (!resp.ok || data.result !== "success") throw new ApiFailure(resp.status, data);
+  return data;
+}
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+function showKeys(msg) {
+  S.gen++;  // stops the poll loop of the old credentials
+  S.queue = null;
+  if (S.creds) {
+    // The key is wrong: keep the email to save typing, drop the key.
+    $("key-email").value = S.creds.email;
+    localStorage.removeItem(STORE);
+  }
+  $("key-key").value = "";
+  $("key-error").textContent = msg || "";
+  $("key-error").hidden = !msg;
+  $("app").hidden = true;
+  $("keys").hidden = false;
+}
+
+function setLive(text) { $("live").textContent = text; }
+
+async function start() {
+  $("keys").hidden = true;
+  $("app").hidden = false;
+  const gen = ++S.gen;
+  try {
+    const me = await api("GET", "users/me");
+    $("who").textContent = me.full_name + " <" + me.email + ">";
+    await connect(gen);
+  } catch (e) {
+    if (e.status !== 401) setLive("not connected: " + e.message);
+    return;
+  }
+  poll(gen);
+}
+
+// Register first, then load: a message sent in between arrives as an event
+// and the id set keeps it from showing twice.
+async function connect(gen) {
+  const reg = await api("POST", "register", {event_types: ["message"]});
+  if (gen !== S.gen) return;
+  S.queue = reg.queue_id;
+  S.lastEvent = reg.last_event_id;
+  const subs = (await api("GET", "users/me/subscriptions")).subscriptions;
+  S.streams = subs.map((s) => ({stream_id: s.stream_id, name: s.name}));
+  S.topics = new Map();
+  for (const s of S.streams) {
+    const got = await api("GET", "messages", {
+      narrow: [{operator: "channel", operand: s.name}],
+      anchor: "newest", num_before: 1000, num_after: 0});
+    const topics = new Map();
+    for (const m of got.messages) topics.set(m.subject, Math.max(topics.get(m.subject) || 0, m.id));
+    S.topics.set(s.name, topics);
+  }
+  renderStreams();
+  if (S.open) await openTopic(S.open.stream_id, S.open.stream, S.open.topic);
+  setLive("live");
+}
+
+async function poll(gen) {
+  while (gen === S.gen) {
+    let got;
+    try {
+      got = await api("GET", "events", {queue_id: S.queue, last_event_id: S.lastEvent});
+    } catch (e) {
+      if (gen !== S.gen || e.status === 401) return;
+      if (e.code === "BAD_EVENT_QUEUE_ID") {
+        setLive("queue expired, reconnecting");
+      } else {
+        setLive("not live: " + e.message + " (retrying)");
+        await sleep(3000);
+      }
+      try { await connect(gen); } catch (e2) { if (e2.status === 401) return; await sleep(3000); }
+      continue;
+    }
+    if (gen !== S.gen) return;
+    setLive("live");
+    for (const ev of got.events) {
+      S.lastEvent = Math.max(S.lastEvent, ev.id);
+      if (ev.type === "message") onMessage(ev.message);
+    }
+  }
+}
+
+function onMessage(m) {
+  if (m.type !== "stream") return;
+  const topics = S.topics.get(m.display_recipient);
+  if (!topics) return;
+  topics.set(m.subject, Math.max(topics.get(m.subject) || 0, m.id));
+  renderStreams();
+  if (S.open && S.open.stream_id === m.stream_id
+      && S.open.topic.toLowerCase() === m.subject.toLowerCase()) {
+    addMessage(m);
+  }
+}
+
+function renderStreams() {
+  const list = $("streams");
+  list.replaceChildren();
+  const select = $("new-stream");
+  const picked = select.value;
+  select.replaceChildren();
+  for (const s of S.streams) {
+    const li = document.createElement("li");
+    const head = document.createElement("div");
+    head.className = "stream";
+    head.textContent = "#" + s.name;
+    li.append(head);
+    const ul = document.createElement("ul");
+    const topics = [...(S.topics.get(s.name) || new Map()).entries()].sort((a, b) => b[1] - a[1]);
+    for (const [topic] of topics) {
+      const item = document.createElement("li");
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "topic";
+      btn.dir = "auto";
+      btn.textContent = topic;
+      if (S.open && S.open.stream_id === s.stream_id && S.open.topic === topic) btn.classList.add("open");
+      btn.addEventListener("click", () => openTopic(s.stream_id, s.name, topic));
+      item.append(btn);
+      ul.append(item);
+    }
+    li.append(ul);
+    list.append(li);
+    const opt = document.createElement("option");
+    opt.value = String(s.stream_id);
+    opt.textContent = "#" + s.name;
+    select.append(opt);
+  }
+  if (picked) select.value = picked;
+}
+
+async function openTopic(streamId, stream, topic) {
+  S.open = {stream_id: streamId, stream, topic};
+  S.shown = new Set();
+  $("messages").replaceChildren();
+  $("topic-title").textContent = "#" + stream + " › " + topic;
+  renderStreams();
+  let got;
+  try {
+    got = await api("GET", "messages", {
+      narrow: [{operator: "channel", operand: stream}, {operator: "topic", operand: topic}],
+      anchor: "newest", num_before: 1000, num_after: 0});
+  } catch (e) {
+    if (e.status !== 401) setLive("could not load the topic: " + e.message);
+    return;
+  }
+  if (!S.open || S.open.stream_id !== streamId || S.open.topic !== topic) return;
+  for (const m of got.messages) addMessage(m);
+  $("compose").focus();
+}
+
+function addMessage(m) {
+  if (S.shown.has(m.id)) return;
+  S.shown.add(m.id);
+  const node = $("msg-tpl").content.firstElementChild.cloneNode(true);
+  node.querySelector(".sender").textContent = m.sender_full_name;
+  const when = new Date(m.timestamp * 1000);
+  node.querySelector(".when").dateTime = when.toISOString();
+  node.querySelector(".when").textContent = when.toLocaleString();
+  node.querySelector(".body").textContent = m.content;
+  const box = $("messages");
+  // Oldest at the top: insert by id, so a live message never lands above an
+  // older one that a slower fetch returned later.
+  const after = [...box.children].find((c) => Number(c.dataset.id) > m.id);
+  node.dataset.id = String(m.id);
+  box.insertBefore(node, after || null);
+  box.scrollTop = box.scrollHeight;
+}
+
+function sendError(msg) {
+  $("send-error").textContent = msg || "";
+  $("send-error").hidden = !msg;
+}
+
+async function send() {
+  const box = $("compose");
+  const text = box.value;
+  if (!text.trim()) return;
+  if (!S.open) { sendError("Open a topic first, or start a new one below."); return; }
+  sendError("");
+  $("send-status").textContent = "sending…";
+  try {
+    const sent = await api("POST", "messages", {
+      type: "stream", to: S.open.stream_id, topic: S.open.topic, content: text});
+    // Cleared only once the server returned the new message's id.
+    if (box.value === text) box.value = "";
+    $("send-status").textContent = "sent, id " + sent.id;
+  } catch (e) {
+    // The text stays in the box; the server's own msg says why.
+    $("send-status").textContent = "not sent";
+    sendError(e.message);
+  }
+}
+
+$("compose").addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
+    e.preventDefault();
+    send();
+  }
+});
+
+for (const btn of document.querySelectorAll("[data-mention]")) {
+  btn.addEventListener("click", () => {
+    const box = $("compose");
+    const mark = "@**" + btn.dataset.mention + "** ";
+    const at = box.selectionStart ?? box.value.length;
+    box.setRangeText(mark, at, box.selectionEnd ?? at, "end");
+    box.focus();
+  });
+}
+
+$("newtopic").addEventListener("submit", (e) => {
+  e.preventDefault();
+  const topic = $("new-topic").value.trim();
+  const s = S.streams.find((x) => String(x.stream_id) === $("new-stream").value);
+  if (!s || !topic) { sendError("Pick a stream and type a topic."); return; }
+  sendError("");
+  $("new-topic").value = "";
+  openTopic(s.stream_id, s.name, topic);
+});
+
+$("key-form").addEventListener("submit", (e) => {
+  e.preventDefault();
+  S.creds = {email: $("key-email").value.trim(), key: $("key-key").value.trim()};
+  localStorage.setItem(STORE, JSON.stringify(S.creds));
+  start();
+});
+
+$("forget").addEventListener("click", () => {
+  const queue = S.queue;
+  if (queue && S.creds) api("DELETE", "events", {queue_id: queue}).catch(() => {});
+  localStorage.removeItem(STORE);
+  S.creds = null;
+  S.open = null;
+  $("key-email").value = "";
+  showKeys("");
+});
+
+try { S.creds = JSON.parse(localStorage.getItem(STORE) || "null"); } catch (e) { S.creds = null; }
+if (S.creds && S.creds.email && S.creds.key) start(); else { S.creds = null; showKeys(""); }
+</script>
+</body>
+</html>
