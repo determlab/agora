@@ -8,9 +8,16 @@ A stand-in for Zulip that speaks the same wire format under ``/api/v1/``, so
 tools read them.
 
 Usage:
+  python chat/server.py up [--json] [--no-serve] [--no-update] [--env bot/.env] [--port 8095]
+  python chat/server.py add-human --email E --name N [--write-env] [--json] [--db PATH]
+  python chat/server.py autostart install|remove|status [--json] [--startup-dir DIR]
   python chat/server.py serve --port 8095 [--db PATH] [--seed-ids N]
   python chat/server.py bootstrap --json [--from-env bot/.env] [--db PATH]
-  python chat/server.py add-human --email E --name N --json [--db PATH]
+
+``up`` (issue #72) is the one command: it seeds ids above Zulip's, makes
+the bots in bot/.env, the streams bot/setup_streams.py makes and their
+members, and serves. Run twice, the second run changes nothing. It never
+makes a human: without one it prints the ``add-human --write-env`` command.
 
 ``bootstrap`` creates one admin *bot* and prints its credentials; with
 ``--from-env`` it also creates each ``ZULIP_<ROLE>_EMAIL`` / ``_API_KEY`` pair
@@ -35,21 +42,33 @@ import argparse
 import base64
 import contextlib
 import hashlib
+import importlib.util
 import json
 import os
 import re
 import secrets
+import socket
 import sqlite3
 import string
+import subprocess
 import sys
 import threading
 import time
+import urllib.error
 import urllib.parse
+import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 HOST = "127.0.0.1"
-DEFAULT_DB = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "chat.sqlite3")
-PAGE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "page.html")
+HERE = os.path.dirname(os.path.abspath(__file__))
+ROOT = os.path.dirname(HERE)
+DEFAULT_DB = os.path.join(HERE, "data", "chat.sqlite3")
+LOG = os.path.join(HERE, "data", "server.log")
+BOT_ENV = os.path.join(ROOT, "bot", ".env")
+PAGE = os.path.join(HERE, "page.html")
+FOUNDER_KEYS = ("ZULIP_FOUNDER_EMAIL", "ZULIP_FOUNDER_API_KEY")
+STARTUP_FILE = "agora-chat.cmd"
+UPDATE_EVERY = 600.0  # seconds between `git pull --ff-only` runs under `up`
 REALM = "chat.localhost"
 ROLE_OWNER, ROLE_ADMIN, ROLE_MEMBER = 100, 200, 400  # Zulip's role numbers
 NEWEST = 1 << 62
@@ -1000,7 +1019,9 @@ def bots_from_env(store: Store, path: str) -> list[dict]:
     env, out = _read_env(path), []
     for key in sorted(env):
         m = re.fullmatch(r"ZULIP_([A-Z0-9_]+)_EMAIL", key)
-        if not m or m.group(1) == "ADMIN" or not env.get(f"ZULIP_{m.group(1)}_API_KEY"):
+        # ZULIP_FOUNDER_* is what `add-human --write-env` writes: his, too.
+        if not m or m.group(1) in ("ADMIN", "FOUNDER") \
+                or not env.get(f"ZULIP_{m.group(1)}_API_KEY"):
             continue
         role, email, api_key = m.group(1), env[key], env[f"ZULIP_{m.group(1)}_API_KEY"]
         # setup_streams.py finds bots by these full names: CTO, CMO, COO, Watchdog.
@@ -1019,12 +1040,366 @@ def bots_from_env(store: Store, path: str) -> list[dict]:
 
 
 def add_human(store: Store, email: str, name: str) -> dict:
-    """An admin human: setup_streams.py runs as him and --check counts him as
-    the founder in #feature. Refuses an email that is taken."""
+    """An admin human, subscribed to every stream there is (issue #72):
+    setup_streams.py runs as him and --check counts him as the founder in
+    #feature. Refuses an email that is taken."""
     if store.one("SELECT 1 FROM users WHERE email=? COLLATE NOCASE", (email,)):
         raise ApiError(f"{email} already has an account: nothing was created. Its key "
                        f"is in the database you pointed --db at", "BAD_REQUEST")
-    return store.create_user(email, name, is_bot=False, role=ROLE_ADMIN)
+    with store.tx():
+        user = store.create_user(email, name, is_bot=False, role=ROLE_ADMIN)
+        subscribe_everywhere(store, user["id"])
+    return user
+
+
+def subscribe_everywhere(store: Store, uid: int) -> list[str]:
+    with store.tx():
+        for row in store.q("SELECT stream_id FROM streams"):
+            store.subscribe(uid, row[0])
+    return [r[0] for r in store.q("SELECT s.name FROM streams s JOIN subscriptions x ON "
+                                  "x.stream_id=s.stream_id WHERE x.user_id=? ORDER BY s.name",
+                                  (uid,))]
+
+
+def append_founder(path: str, email: str, api_key: str) -> None:
+    """ZULIP_FOUNDER_EMAIL / _API_KEY at the end of ``path``. The caller has
+    checked neither is there: an existing pair is never overwritten."""
+    tail = ""
+    if os.path.exists(path):
+        with open(path, "rb") as f:
+            data = f.read()
+        tail = "" if not data or data.endswith(b"\n") else "\n"
+    with open(path, "a", encoding="utf-8", newline="\n") as f:
+        f.write(f"{tail}{FOUNDER_KEYS[0]}={email}\n{FOUNDER_KEYS[1]}={api_key}\n")
+
+
+# -- up (issue #72): one command from an empty database to a served chat
+
+
+def stream_plan():
+    """bot/setup_streams.py itself, loaded by path, so its STREAMS, ROLE_BOTS
+    and WATCHDOG_* stay the one list of streams and who belongs where, and
+    ``setup_streams.py --check`` agrees with what ``up`` built."""
+    bot_dir = os.path.join(ROOT, "bot")
+    sys.path.insert(0, bot_dir)  # its `from zulip_client import ...`
+    try:
+        spec = importlib.util.spec_from_file_location(
+            "setup_streams", os.path.join(bot_dir, "setup_streams.py"))
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+    finally:
+        sys.path.remove(bot_dir)
+    return mod
+
+
+def ensure_streams(store: Store) -> tuple[list[str], list[str]]:
+    """The streams setup_streams.py makes, private, and each bot in exactly
+    the ones it belongs in (never removed from others: that is --check's to
+    report). Returns (stream names, bots setup_streams.py wants that are
+    missing)."""
+    plan = stream_plan()
+    wanted = [(full, plan.bot_streams(full, short)) for full, short in plan.ROLE_BOTS]
+    wanted.append((plan.WATCHDOG_BOT[0], plan.WATCHDOG_STREAMS))
+    missing = []
+    with store.tx():
+        for name in plan.STREAMS:
+            row = store.stream_by_ref(name)
+            if row is None:
+                store.create_stream(name, invite_only=True)
+            elif not row["invite_only"]:
+                store.x("UPDATE streams SET invite_only=1 WHERE stream_id=?", (row["stream_id"],))
+        bots = {r["full_name"]: r["id"] for r in store.q("SELECT * FROM users WHERE is_bot=1")}
+        for full, names in wanted:
+            if full not in bots:
+                missing.append(full)
+                continue
+            for name in names:
+                store.subscribe(bots[full], store.stream_by_ref(name)["stream_id"])
+    return list(plan.STREAMS), missing
+
+
+def zulip_max_id(env: dict, own_url: str, timeout: float = 3.0) -> tuple[int | None, str]:
+    """Zulip's newest message id, asked once, as each account in bot/.env
+    until one answers. (None, why) when Zulip is not reachable: the stored
+    floor then stands."""
+    site = (env.get("ZULIP_SITE") or "").rstrip("/")
+    if not site:
+        return None, "no ZULIP_SITE in the env file"
+    if site.lower() in (own_url, own_url.replace("127.0.0.1", "localhost")):
+        return None, f"ZULIP_SITE is this server ({site})"
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    query = urllib.parse.urlencode({"anchor": "newest", "num_before": 1, "num_after": 0,
+                                    "narrow": "[]"})
+    best, why = None, "no account in the env file"
+    for key in sorted(env, key=lambda k: k != "ZULIP_ADMIN_EMAIL"):
+        m = re.fullmatch(r"ZULIP_([A-Z0-9_]+)_EMAIL", key)
+        api_key = m and env.get(f"ZULIP_{m.group(1)}_API_KEY")
+        if not api_key:
+            continue
+        req = urllib.request.Request(f"{site}/api/v1/messages?{query}")
+        req.add_header("Authorization", "Basic " + base64.b64encode(
+            f"{env[key]}:{api_key}".encode()).decode())
+        try:
+            with opener.open(req, timeout=timeout) as resp:
+                ids = [x["id"] for x in json.loads(resp.read()).get("messages", [])]
+        except urllib.error.HTTPError as e:
+            why = f"Zulip at {site} refused {env[key]}: HTTP {e.code}"
+            continue
+        except (urllib.error.URLError, OSError, ValueError) as e:
+            return None, f"Zulip at {site} not reachable: {e}"
+        best = max([best or 0, *ids])
+    return best, why if best is None else f"Zulip at {site} answered"
+
+
+def port_busy(port: int) -> bool:
+    """Something already accepts on the port. Asked before binding because
+    on Windows SO_REUSEADDR (which http.server sets) can bind on top of it."""
+    try:
+        socket.create_connection((HOST, port), timeout=1).close()
+        return True
+    except OSError:
+        return False
+
+
+def log(msg: str) -> None:
+    print(f"{time.strftime('%Y-%m-%d %H:%M:%S')} {msg}", file=sys.stderr, flush=True)
+
+
+class Updater:
+    """Under ``up``: keeps the clone on ``main`` current with ``git pull
+    --ff-only`` every ``every`` seconds, and asks for a restart when
+    chat/server.py changed (a pull or a hand edit) and still compiles. The
+    page needs neither: load_page() reads page.html per request. A failed
+    pull is logged as failed and the server keeps running."""
+
+    def __init__(self, restart, every: float = UPDATE_EVERY, root: str = ROOT,
+                 source: str = os.path.abspath(__file__)):
+        self.restart, self.every, self.root, self.source = restart, every, root, source
+        self.digest = self._digest()
+        self.bad = None
+        self.stop = threading.Event()
+
+    def _digest(self) -> str:
+        with open(self.source, "rb") as f:
+            return hashlib.sha256(f.read()).hexdigest()
+
+    def _git(self, *args) -> subprocess.CompletedProcess:
+        return subprocess.run(["git", "-C", self.root, *args], capture_output=True, text=True,
+                              timeout=120)
+
+    def pull(self) -> tuple[bool, str]:
+        try:
+            branch = self._git("rev-parse", "--abbrev-ref", "HEAD")
+            if branch.returncode != 0:
+                return False, f"not a git clone: {branch.stderr.strip()}"
+            if branch.stdout.strip() != "main":
+                return False, f"on branch {branch.stdout.strip()!r}, not main: not pulled"
+            done = self._git("pull", "--ff-only")
+        except (OSError, subprocess.TimeoutExpired) as e:
+            return False, f"git failed: {e}"
+        out = (done.stdout + done.stderr).strip()
+        return done.returncode == 0, out or f"git pull exited {done.returncode}"
+
+    def changed(self) -> bool:
+        """server.py differs from the running one and compiles. A version
+        that does not compile is logged once and the running one stays."""
+        digest = self._digest()
+        if digest == self.digest or digest == self.bad:
+            return False
+        try:
+            with open(self.source, encoding="utf-8") as f:
+                compile(f.read(), self.source, "exec")
+        except (SyntaxError, ValueError) as e:
+            self.bad = digest
+            log(f"update: chat/server.py changed but does not compile ({e}): "
+                f"keeping the running version")
+            return False
+        return True
+
+    def run(self, check_every: float = 5.0) -> None:
+        next_pull = time.monotonic()
+        while not self.stop.wait(0 if next_pull <= time.monotonic() else check_every):
+            if time.monotonic() >= next_pull:
+                next_pull = time.monotonic() + self.every
+                ok, out = self.pull()
+                log(f"update: git pull {'ok' if ok else 'FAILED'}: {out}")
+            if self.changed():
+                log("update: chat/server.py changed: restarting")
+                self.restart()
+                return
+
+
+def up_setup(store: Store, env_path: str, own_url: str) -> dict:
+    env = _read_env(env_path)
+    floor, why = zulip_max_id(env, own_url)
+    if floor is not None:
+        store.seed_ids(floor)
+    stored = store.max_message_id()
+    log(f"ids: {why}; " + (f"its newest id is {floor}; " if floor is not None else "")
+        + (f"ids continue above {stored}" if stored >= 0 else "no floor stored: ids start at 1"))
+    bots = bots_from_env(store, env_path)
+    if not bots:
+        log(f"bots: no ZULIP_<ROLE>_EMAIL / ZULIP_<ROLE>_API_KEY pair in {env_path}: "
+            f"no bot was made")
+    streams, missing = ensure_streams(store)
+    for full in missing:
+        log(f"bots: {full} is missing, so no one speaks for it: add "
+            f"ZULIP_{full.upper()}_EMAIL and ZULIP_{full.upper()}_API_KEY to {env_path}")
+    humans = []
+    for row in store.q("SELECT * FROM users WHERE is_bot=0 ORDER BY id"):
+        subscribe_everywhere(store, row["id"])
+        humans.append(row["email"])
+    return {"bots": bots, "streams": streams, "humans": humans,
+            "id_floor": store.max_message_id(), "founder_in_env": any(
+                k in env for k in FOUNDER_KEYS)}
+
+
+def cmd_up(args, argv: list[str]) -> int:
+    url = f"http://{HOST}:{args.port}"
+    if not os.path.exists(args.env):
+        print(f"up: {args.env} not found. It holds each bot's ZULIP_<ROLE>_EMAIL and "
+              f"ZULIP_<ROLE>_API_KEY (e.g. ZULIP_COO_EMAIL, ZULIP_COO_API_KEY): create it "
+              f"(see bot/README.md) or point --env at it", file=sys.stderr)
+        return 2
+    store = Store(args.db)
+    try:
+        done = up_setup(store, args.env, url)
+    finally:
+        store.db.close()
+    if not done["humans"]:
+        cmd = f'python "{os.path.abspath(__file__)}" add-human --email <your email> ' \
+              f'--name "<your name>" --write-env'
+        cmd += "" if args.db == DEFAULT_DB else f' --db "{args.db}"'
+        cmd += "" if args.env == BOT_ENV else f' --env "{args.env}"'
+        log(f"no human account yet, so nobody can log in to the page. The founder runs, "
+            f"once:\n    {cmd}")
+        if done["founder_in_env"]:
+            log(f"{args.env} already has ZULIP_FOUNDER_*, for an account this database "
+                f"does not have: remove those two lines first")
+    server = None
+    if not args.no_serve:
+        if port_busy(args.port):
+            return _port_error(args.port, "something already answers there")
+        try:
+            server = make_server(args.db, args.port)
+        except OSError as e:
+            return _port_error(args.port, str(e))
+        url = f"http://{HOST}:{server.server_address[1]}"
+    summary = {"url": url, "db": args.db, "bots": done["bots"], "streams": done["streams"],
+               "humans": done["humans"], "pid": os.getpid(), "id_floor": done["id_floor"]}
+    if args.json:
+        print(json.dumps(summary), flush=True)
+    else:
+        for b in done["bots"]:
+            print(f"bot {b['role']}: {b['email']} {b['action']}")
+        print(f"streams: {', '.join('#' + s for s in done['streams'])}")
+        print(f"humans in every stream: {', '.join(done['humans']) or 'none yet'}")
+        print(f"ids continue above {done['id_floor']}")
+    if server is None:
+        return 0
+    if not args.json:
+        print(f"serving {url}/ (open it in the browser) and /api/v1/ db={args.db}", flush=True)
+    restart = threading.Event()
+    updater = None
+    if not args.no_update:
+        def again():
+            restart.set()
+            server.shutdown()
+        updater = Updater(again, args.update_every)
+        threading.Thread(target=updater.run, daemon=True).start()
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        if updater:
+            updater.stop.set()
+        server.server_close()
+    if restart.is_set():
+        subprocess.Popen([sys.executable, os.path.abspath(__file__), *argv])
+    return 0
+
+
+def _port_error(port: int, why: str) -> int:
+    print(f"up: port {port} is busy ({why}). See who holds it with "
+          f"`netstat -ano | findstr :{port}` (Windows; `lsof -i :{port}` elsewhere) and "
+          f"stop it, or pick another port with --port N", file=sys.stderr)
+    return 1
+
+
+# -- autostart (issue #72): one .cmd in the user's Startup folder
+
+
+def _is_windows() -> bool:
+    return sys.platform == "win32"
+
+
+def startup_dir(arg: str | None) -> str:
+    """--startup-dir, else AGORA_STARTUP_DIR, else the real Startup folder.
+    Tests always pass one of the first two."""
+    if arg or os.environ.get("AGORA_STARTUP_DIR"):
+        return arg or os.environ["AGORA_STARTUP_DIR"]
+    return os.path.join(os.environ.get("APPDATA", ""), "Microsoft", "Windows", "Start Menu",
+                        "Programs", "Startup")
+
+
+def startup_script(args) -> str:
+    extra = f" --port {args.port}"
+    extra += "" if args.db == DEFAULT_DB else f' --db "{args.db}"'
+    extra += "" if args.env == BOT_ENV else f' --env "{args.env}"'
+    return ("@echo off\r\n"
+            "REM Agora chat server at login (issue #72). Remove with:\r\n"
+            f'REM   python "{os.path.abspath(__file__)}" autostart remove\r\n'
+            f'if not exist "{os.path.dirname(LOG)}" mkdir "{os.path.dirname(LOG)}"\r\n'
+            f'start "agora-chat" /min cmd /c ""{sys.executable}" "{os.path.abspath(__file__)}"'
+            f' up{extra} >> "{LOG}" 2>&1"\r\n')
+
+
+def answers(port: int) -> bool:
+    """This chat server, not just anything, answers on the port."""
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    try:
+        with opener.open(f"http://{HOST}:{port}/api/v1/users/me", timeout=2) as resp:
+            server = resp.headers.get("Server", "")
+    except urllib.error.HTTPError as e:
+        server = e.headers.get("Server", "")
+    except (urllib.error.URLError, OSError):
+        return False
+    return server.startswith(Handler.server_version)
+
+
+def cmd_autostart(args) -> int:
+    if not _is_windows():
+        print("autostart: Windows only (it writes a .cmd into the Startup folder). "
+              "Elsewhere, start `python chat/server.py up` from your own login script",
+              file=sys.stderr)
+        return 2
+    folder = startup_dir(args.startup_dir)
+    path = os.path.join(folder, STARTUP_FILE)
+    if args.action == "install":
+        if not os.path.isdir(folder):
+            print(f"autostart: no Startup folder at {folder}: nothing was installed",
+                  file=sys.stderr)
+            return 1
+        with open(path, "w", encoding="utf-8", newline="") as f:
+            f.write(startup_script(args))
+        out = {"installed": True, "file": path}
+        text = (f"installed {path}: `up` starts minimised at your next login, logging to "
+                f"{LOG}. It is not running now because of this; start it with "
+                f"`python chat/server.py up`")
+    elif args.action == "remove":
+        existed = os.path.exists(path)
+        if existed:
+            os.remove(path)
+        out = {"removed": existed, "file": path}
+        text = f"removed {path}" if existed else f"not installed ({path} absent): nothing removed"
+    else:
+        out = {"installed": os.path.exists(path), "file": path,
+               "url": f"http://{HOST}:{args.port}", "answering": answers(args.port)}
+        text = (f"autostart: {'installed' if out['installed'] else 'NOT installed'} ({path})\n"
+                f"server at {out['url']}: {'answering' if out['answering'] else 'NOT answering'}")
+    print(json.dumps(out) if args.json else text)
+    return 0
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -1041,9 +1416,23 @@ def main(argv: list[str] | None = None) -> int:
     human = sub.add_parser("add-human", help="create an admin human (the founder runs this)")
     human.add_argument("--email", required=True)
     human.add_argument("--name", required=True)
-    for p in (boot, human):
+    human.add_argument("--write-env", action="store_true",
+                       help="append ZULIP_FOUNDER_EMAIL/_API_KEY to --env; never overwrites")
+    up = sub.add_parser("up", help="set everything up and serve (idempotent)")
+    up.add_argument("--no-serve", action="store_true", help="set up, then exit")
+    up.add_argument("--no-update", action="store_true",
+                    help="no `git pull --ff-only` of main, no restart on a new server.py")
+    up.add_argument("--update-every", type=float, default=UPDATE_EVERY, metavar="SECONDS")
+    auto = sub.add_parser("autostart", help="start `up` at Windows login (Startup folder)")
+    auto.add_argument("action", choices=("install", "remove", "status"))
+    auto.add_argument("--startup-dir", metavar="DIR",
+                      help="default: AGORA_STARTUP_DIR, else the user's Startup folder")
+    for p in (boot, human, up, auto):
         p.add_argument("--json", action="store_true", help="print JSON (the agent path)")
-    for p in (serve, boot, human):
+    for p in (human, up, auto):
+        p.add_argument("--env", default=BOT_ENV, metavar="FILE",
+                       help="the bots' ZULIP_<ROLE>_EMAIL/_API_KEY file (default bot/.env)")
+    for p in (serve, boot, human, up, auto):
         p.add_argument("--db", default=DEFAULT_DB)
         p.add_argument("--port", type=int, default=8095)
     args = parser.parse_args(argv)
@@ -1063,18 +1452,45 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"# {b['role']}: {b['email']} {b['action']}")
         return 0
     if args.cmd == "add-human":
+        if args.write_env and os.path.exists(args.env):
+            present = [k for k in FOUNDER_KEYS if k in _read_env(args.env)]
+            if present:
+                # Checked before the account exists: a refusal makes nothing.
+                print(f"add-human: {args.env} already has {' and '.join(present)}: not "
+                      f"overwritten, and no account was made. Remove those lines first "
+                      f"if they belong to an account that is gone", file=sys.stderr)
+                return 1
+        store = Store(args.db)
         try:
-            user = add_human(Store(args.db), args.email, args.name)
+            user = add_human(store, args.email, args.name)
         except ApiError as e:
             print(f"add-human: {e.msg}", file=sys.stderr)
             return 1
+        streams = subscribe_everywhere(store, user["id"])
+        written = None
+        if args.write_env:
+            try:
+                append_founder(args.env, user["email"], user["api_key"])
+                written = args.env
+            except OSError as e:
+                print(f"add-human: the account exists, but {args.env} could not be "
+                      f"written ({e}): add its two lines yourself", file=sys.stderr)
         if args.json:
             print(json.dumps({"email": user["email"], "api_key": user["api_key"],
-                              "user_id": user["id"], "site": site}))
+                              "user_id": user["id"], "site": site, "streams": streams,
+                              "env_written": written}))
         else:
             print(f"ZULIP_SITE={site}\nZULIP_ADMIN_EMAIL={user['email']}\n"
                   f"ZULIP_ADMIN_API_KEY={user['api_key']}")
-        return 0
+            print(f"# in every stream: {', '.join('#' + s for s in streams)}" if streams else
+                  "# in no stream yet: `python chat/server.py up` subscribes you to each")
+            if written:
+                print(f"# wrote {FOUNDER_KEYS[0]} / {FOUNDER_KEYS[1]} to {written}")
+        return 0 if written or not args.write_env else 1
+    if args.cmd == "up":
+        return cmd_up(args, sys.argv[1:] if argv is None else argv)
+    if args.cmd == "autostart":
+        return cmd_autostart(args)
     server = make_server(args.db, args.port, args.poll_seconds, args.seed_ids)
     print(f"serving http://{HOST}:{server.server_address[1]}/ (page) and /api/v1/ "
           f"db={args.db}", flush=True)
