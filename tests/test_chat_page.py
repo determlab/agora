@@ -1165,4 +1165,81 @@ def test_77_a_toast_follows_each_action_and_says_success_only_when_the_server_di
                  'report("members-status", privateReport(', 'report("create-status", createReport(',
                  'report("create-status", "לא נוצר: "', 'report("members-status", "לא נוסף: "'):
         assert call in script, call
+
+
+# -- issue #85: clickable links (URLs and repo#N refs)
+
+
+def test_85_urls_and_repo_refs_parse_as_link_parts_a_lone_hash_does_not():
+    got = _js(("inlineParts",), r"""
+      out.url = inlineParts("see https://example.com/x for more");
+      out.trailing_dot = inlineParts("see https://example.com/x. next");
+      out.trailing_paren = inlineParts("(https://example.com/x)");
+      out.ref = inlineParts("fixed in ops#94 today");
+      out.other_refs = inlineParts("see agora#80 shal#237 adk-lab#11 pytest-shal#6");
+      out.lone_hash = inlineParts("see #123 here");
+    """)
+    assert got["url"] == [
+        {"kind": "text", "text": "see "},
+        {"kind": "link", "text": "https://example.com/x", "href": "https://example.com/x"},
+        {"kind": "text", "text": " for more"}]
+    # The trailing "." is not part of the link: it belongs to the sentence.
+    assert got["trailing_dot"] == [
+        {"kind": "text", "text": "see "},
+        {"kind": "link", "text": "https://example.com/x", "href": "https://example.com/x"},
+        {"kind": "text", "text": ". next"}]
+    assert got["trailing_paren"] == [
+        {"kind": "text", "text": "("},
+        {"kind": "link", "text": "https://example.com/x", "href": "https://example.com/x"},
+        {"kind": "text", "text": ")"}]
+    assert got["ref"] == [
+        {"kind": "text", "text": "fixed in "},
+        {"kind": "link", "text": "ops#94", "href": "https://github.com/determlab/ops/issues/94"},
+        {"kind": "text", "text": " today"}]
+    assert got["other_refs"] == [
+        {"kind": "text", "text": "see "},
+        {"kind": "link", "text": "agora#80", "href": "https://github.com/determlab/agora/issues/80"},
+        {"kind": "text", "text": " "},
+        {"kind": "link", "text": "shal#237", "href": "https://github.com/determlab/shal/issues/237"},
+        {"kind": "text", "text": " "},
+        {"kind": "link", "text": "adk-lab#11", "href": "https://github.com/determlab/adk-lab/issues/11"},
+        {"kind": "text", "text": " "},
+        {"kind": "link", "text": "pytest-shal#6", "href": "https://github.com/determlab/pytest-shal/issues/6"}]
+    # No repo name in front of the "#": stays plain text, never a link.
+    assert got["lone_hash"] == [{"kind": "text", "text": "see #123 here"}]
+
+
+def test_85_links_render_as_real_anchor_elements_opening_in_a_new_tab():
+    got = _js(("inlineParts", "inlineNodes"), r"""
+      out.nodes = inlineNodes("look at ops#94 and https://x.test/y.").map((n) => (
+        n.tagName ? {tag: n.tagName, text: n.textContent, href: n.href,
+                     target: n.target, rel: n.rel, dir: n.dir}
+                  : {text: n.data}));
+    """, prelude=FAKE_DOM)
+    assert got["nodes"] == [
+        {"text": "look at "},
+        {"tag": "A", "text": "ops#94", "href": "https://github.com/determlab/ops/issues/94",
+         "target": "_blank", "rel": "noopener noreferrer", "dir": "ltr"},
+        {"text": " and "},
+        {"tag": "A", "text": "https://x.test/y", "href": "https://x.test/y",
+         "target": "_blank", "rel": "noopener noreferrer", "dir": "ltr"},
+        {"text": "."}]
+
+
+def test_85_a_hebrew_message_with_a_link_renders_as_dom_nodes_and_keeps_rtl_order():
+    dom = _js(("textDir", "inlineParts", "inlineNodes", "fillBody"), r"""
+      const el = document.createElement("div");
+      fillBody(el, "שלום https://example.com/x ops#94 עולם");
+      out.body = dump(el);
+    """, prelude=FAKE_DOM)
+    body = dom["body"]
+    assert body["dir"] == "rtl"
+    kinds = [(k.get("tag"), k.get("dir"), k["text"]) for k in body["kids"]]
+    assert kinds == [
+        (None, None, "שלום "), ("a", "ltr", "https://example.com/x"), (None, None, " "),
+        ("a", "ltr", "ops#94"), (None, None, " עולם")]
+    # Every link's content is one text node: nothing was parsed as markup.
+    for k in body["kids"]:
+        if k.get("tag") == "a":
+            assert k["kids"] == [{"text": k["text"]}]
     assert 'id="send-status"' not in PAGE.read_text(encoding="utf-8")
