@@ -177,6 +177,7 @@ dialog .buttons { display: flex; justify-content: flex-end; gap: .5rem; margin-t
   transform: translateX(100%); visibility: hidden; transition: transform .2s ease, visibility .2s; }
 .drawer.open { transform: none; visibility: visible; }
 .drawer-head { display: flex; align-items: flex-start; justify-content: space-between; gap: .5rem; }
+#members-name { flex: 1; min-width: 0; }
 #members-list { list-style: none; margin: 0; padding: 0; }
 #members-list li { display: flex; align-items: center; gap: .5rem; padding: .3rem 0; }
 .member-name { flex: 1; min-width: 0; display: flex; flex-direction: column; }
@@ -267,6 +268,11 @@ dialog .buttons { display: flex; justify-content: flex-end; gap: .5rem; margin-t
       <h2 id="members-head">חברים ב-<span id="members-title" dir="auto"></span></h2>
       <button type="button" id="members-close" class="icon" aria-label="סגור">&#10005;</button>
     </div>
+    <form id="members-rename" class="row">
+      <label for="members-name">שם הערוץ</label>
+      <input id="members-name" type="text" dir="auto">
+      <button type="submit" class="btn">שנה שם</button>
+    </form>
     <div class="row"><input id="members-private" type="checkbox">
       <label for="members-private">פרטי (רק חברים יכולים לקרוא)</label></div>
     <ul id="members-list"></ul>
@@ -492,6 +498,14 @@ function setPrivate(streamId, isPrivate) {
   return api("PATCH", "streams/" + streamId, {is_private: isPrivate});
 }
 
+// Empty is refused before this is ever called: the server's own rule is
+// `if p.get("new_name")`, so an empty string is silently ignored there and
+// would report success for a rename that did not happen (the honest-reporting
+// rule this whole page follows for is_private too).
+function renameStream(streamId, newName) {
+  return api("PATCH", "streams/" + streamId, {new_name: newName});
+}
+
 function privacy(s) { return s.invite_only ? "פרטי" : "ציבורי"; }
 
 // What the create dialog says. `s` is the stream as the server lists it after
@@ -517,6 +531,15 @@ function privateReport(name, want, now) {
   if (now) return "#" + name + " עכשיו " + privacy(now);
   return "#" + name + " הוגדר " + (want ? "פרטי" : "ציבורי")
       + " (השרת קיבל; הדף לא יכול לקרוא את זה בחזרה: אינך חבר בו, או שהטעינה נכשלה)";
+}
+
+// Same shape as privateReport: what the server now holds wins over what was
+// typed, and a rename that could not be read back says so rather than
+// claiming the new name stuck.
+function renameReport(oldName, want, now) {
+  if (now) return "#" + oldName + " שונה ל-#" + now.name;
+  return "#" + oldName + ": השרת קיבל בקשה לשם #" + want
+      + " (הדף לא יכול לקרוא את זה בחזרה: אינך חבר בו, או שהטעינה נכשלה)";
 }
 
 // The old queue is deleted before a new one is registered, so a reconnect
@@ -1171,6 +1194,7 @@ function closeMembers() {
 async function openMembers(s) {
   S.panel = s;
   $("members-title").textContent = "#" + s.name;
+  $("members-name").value = s.name;
   $("members-private").checked = !!s.invite_only;
   say("members-status", "");
   $("members-list").replaceChildren();
@@ -1247,6 +1271,34 @@ $("members-add").addEventListener("submit", async (e) => {
   } catch (err) { report("members-status", "לא נוסף: " + err.message, true); }
   await listMembers();
   await loadStreams();
+});
+
+$("members-rename").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  if (!S.panel) return;
+  const oldName = S.panel.name;
+  const want = $("members-name").value.trim();
+  if (!want) {
+    report("members-status", "צריך שם לערוץ.", true);
+    return;
+  }
+  try {
+    await renameStream(S.panel.stream_id, want);
+  } catch (err) {
+    report("members-status", "לא שונה השם: " + err.message, true);
+    return;
+  }
+  let now;
+  try {
+    await loadStreams();
+    now = S.streams.find((x) => x.stream_id === S.panel.stream_id);
+  } catch (err) { now = undefined; }
+  if (now) {
+    S.panel = now;
+    $("members-name").value = now.name;
+    $("members-title").textContent = "#" + now.name;
+  }
+  report("members-status", renameReport(oldName, want, now));
 });
 
 $("members-private").addEventListener("change", async () => {

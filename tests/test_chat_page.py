@@ -563,6 +563,68 @@ def test_create_reports_the_privacy_the_server_holds_not_the_checkbox(world):
     assert got["unread"] == "#new: נוספו 1; הדף לא הצליח לקרוא בחזרה אם הוא פרטי"
 
 
+def test_79_rename_form_prefills_the_name_and_refuses_empty_before_the_server():
+    text = PAGE.read_text(encoding="utf-8")
+    assert 'id="members-rename"' in text and 'for="members-name"' in text
+    script = _markup().script
+    assert '$("members-name").value = s.name' in _function("openMembers")
+    # The rename call, as the page sends it: PATCH with new_name, nothing else.
+    assert 'api("PATCH", "streams/" + streamId, {new_name: newName})' in _function("renameStream")
+    handler = script[script.index('$("members-rename").addEventListener'):
+                     script.index('$("members-private").addEventListener')]
+    # Refused client-side, never reaching renameStream(): the server's own
+    # rule for new_name (`if p.get("new_name")`) silently ignores an empty
+    # string, which would report success for a rename that did not happen.
+    assert handler.index('if (!want)') < handler.index('renameStream(')
+    assert 'report("members-status", "צריך שם לערוץ.", true);\n    return;' in handler
+    # The read-back wins, exactly like the private toggle (D3's shape).
+    assert 'report("members-status", renameReport(oldName, want, now))' in handler
+
+
+def test_79_the_rename_read_back_never_claims_a_name_it_did_not_confirm():
+    got = _js(("renameReport",), """
+      out.read = renameReport("old", "new", {stream_id: 1, name: "new"});
+      out.mismatch = renameReport("old", "new", {stream_id: 1, name: "old"});
+      out.gone = renameReport("old", "new", undefined);
+    """)
+    assert got["read"] == "#old שונה ל-#new"
+    # What the server now holds wins over what was typed.
+    assert got["mismatch"] == "#old שונה ל-#old"
+    assert got["gone"].startswith("#old: השרת קיבל בקשה לשם #new (הדף לא יכול לקרוא את זה בחזרה")
+
+
+def test_79_rename_reaches_the_server_through_the_pages_own_call_and_the_sidebar_label_follows(world):
+    run, human = world["run"], world["human"]
+    status, subs = page_api(run, human, "GET", "users/me/subscriptions")
+    [feature] = [s for s in subs["subscriptions"] if s["name"] == "feature"]
+    # What the page's own renameStream() sends, exactly as it is wired to the
+    # gear panel's form (see the previous test).
+    got = _js(("renameStream",), f"""
+      await renameStream({feature["stream_id"]}, "roadmap");
+      out.calls = calls;
+    """, prelude=API_STUB)
+    [call] = got["calls"]
+    assert call == ["PATCH", f"streams/{feature['stream_id']}", {"new_name": "roadmap"}]
+    # Replayed against the real server, the way the page's fetch would send it.
+    status, body = page_api(run, human, call[0], call[1], **call[2])
+    assert status == 200, body
+    status, subs = page_api(run, human, "GET", "users/me/subscriptions")
+    renamed = {s["stream_id"]: s["name"] for s in subs["subscriptions"]}
+    assert renamed[feature["stream_id"]] == "roadmap"
+    # The sidebar label is exactly this render function reading exactly this
+    # (now server-confirmed) name.
+    prelude = FAKE_DOM + f"""
+      const CARET = "c", GEAR = "g", SVG = "http://www.w3.org/2000/svg";
+      const S = {{streams: [{{stream_id: {feature["stream_id"]}, name: "roadmap", invite_only: true}}],
+                 topics: new Map(), collapsed: new Set(), open: null, adding: null}};
+    """
+    got = _js(("svgIcon", "renderStreams", "newTopicItem"), """
+      renderStreams();
+      out.label = $("streams").querySelector(".stream-label").textContent;
+    """, prelude=prelude)
+    assert got["label"] == "#roadmap"
+
+
 def test_dialogs_are_in_the_page_and_there_is_no_stream_delete_or_unread_count():
     text = PAGE.read_text(encoding="utf-8")
     assert not re.search(r"\b(confirm|prompt|alert)\(", _markup().script)
