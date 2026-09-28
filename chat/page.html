@@ -860,11 +860,19 @@ function renderWeek(w) {
 
 // products: `goal_he` is the product's goal in Hebrew — the one line worth
 // showing next to its name; `due`, `work` and `checks` follow when present.
+// `work` is an object and `checks` a list, so each is summed up into text here
+// (round 2 passed them straight through and the card printed [object Object]).
 function renderProducts(rows) {
-  return renderRows((rows || []).map((r) => ({
-    label: r.name,
-    detail: joinDetail(r.goal_he, r.due ? "due " + r.due : null, r.work, r.checks),
-  })));
+  return renderRows((rows || []).map((r) => {
+    const w = r.work;
+    const work = w && w.points_total != null
+      ? w.points_done + "/" + w.points_total + " pts" + (w.percent != null ? " (" + w.percent + "%)" : "")
+      : null;
+    const checks = Array.isArray(r.checks) && r.checks.length
+      ? r.checks.filter((c) => c.done).length + "/" + r.checks.length + " checks" : null;
+    return {label: r.name,
+            detail: joinDetail(r.goal_he, r.due ? "due " + r.due : null, work, checks)};
+  }));
 }
 
 // Grouped by type; the card itself stays hidden when the section is absent

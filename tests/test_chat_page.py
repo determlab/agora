@@ -1190,19 +1190,18 @@ def test_page_has_the_panel_and_the_switch():
     assert ids.index("view-switch") < ids.index("main") and ids.index("view-switch") < ids.index("dash")
 
 
-# A committed snapshot of `ops/tools/dashboard.py --json` output's shape
-# (round 2 of issue #82: round 1 read an invented `{label, detail}` shape no
-# producer ever sent; the field names here follow the CTO's review of PR #90
-# — https://github.com/determlab/agora/pull/90#issuecomment-5866601187 —
-# which named what `build()` actually sends for each section).
+# The real document: `python tools/dashboard.py --out` from ops, 2026-09-28,
+# committed unchanged from agora#82 comment 5867412108. Rounds 1-3 tested
+# hand-written fields no producer sends; every card test reads this file.
 DASHBOARD_FIXTURE = json.loads(
     (ROOT / "tests" / "fixtures" / "dashboard-doc.json").read_text(encoding="utf-8"))
 
+CARDS = ("live", "stuck", "roles", "queue", "week", "products", "waiting")
 
-def test_page_renders_every_card_from_a_fixture_document():
-    doc = DASHBOARD_FIXTURE
-    got = _js(("renderLive", "renderStuck", "renderRoles", "renderQueue", "renderWeek",
-               "renderProducts", "renderWaiting", "renderRows", "joinDetail", "stuckRow"), f"""
+
+def _render_cards(doc):
+    return _js(("renderLive", "renderStuck", "renderRoles", "renderQueue", "renderWeek",
+                "renderProducts", "renderWaiting", "renderRows", "joinDetail", "stuckRow"), f"""
       const doc = {json.dumps(doc)};
       out.live = dump(renderLive(doc.live));
       out.stuck = dump(renderStuck(doc.stuck));
@@ -1214,45 +1213,57 @@ def test_page_renders_every_card_from_a_fixture_document():
       out.empty = dump(renderLive([]));
     """, prelude=FAKE_DOM)
 
-    def rows(dumped):
-        # [[label, detail], ...] for a rendered <ul class="dash-list">.
-        out = []
-        for li in dumped["kids"]:
-            texts = [k["text"] for k in li["kids"]]
-            out.append(texts + [""] * (2 - len(texts)))
-        return out
+
+def _rows(dumped):
+    # [[label, detail], ...] for a rendered <ul class="dash-list">.
+    out = []
+    for li in dumped["kids"]:
+        texts = [k["text"] for k in li["kids"]]
+        out.append(texts + [""] * (2 - len(texts)))
+    return out
+
+
+def test_page_renders_every_card_from_a_fixture_document():
+    doc = DASHBOARD_FIXTURE
+    got = _render_cards(doc)
 
     def label_tags(dumped):
         return [li["kids"][0]["tag"] for li in dumped["kids"]]
 
-    # No card reads empty against the real producer shape — the bug the CTO
-    # flagged in round 1 (fields that matched nothing a live server sends).
-    for name in ("live", "stuck", "roles", "queue", "week", "products", "waiting"):
-        assert got[name]["cls"] == "dash-list" and got[name]["kids"], name
-        assert rows(got[name]) != [["—", ""]], name
-
-    assert rows(got["live"])[0] == \
-        ["agora#82", "coding · round 2 · claimed 8m ago · idle 1m · opened PR #90"]
-    assert label_tags(got["live"]) == ["a"]  # `ref` links to `url` when the row has one
-    assert rows(got["stuck"]) == [
-        ["agora#82", "NEEDSHUMAN · screenshots need the founder, after round 2"],
-        ["ops#91", "CI_RED · dashboard.py tests failing on the schema change"],
-    ]
+    live0 = doc["live"][0]
+    assert _rows(got["live"])[0] == [
+        "bricks#48", f"CODER round 1 for issue 48 · round 1 · claimed 14m ago · idle -2m · {live0['last_action']}"]
+    assert set(label_tags(got["live"])) == {"a"}  # `ref` links to `url` when the row has one
+    assert len(_rows(got["stuck"])) == len(doc["stuck"])
+    assert _rows(got["stuck"])[0] == ["adk-lab#12", "NEEDSHUMAN · " + doc["stuck"][0]["text"]]
     # "waiting for you": the founder's own rows out of `stuck`, by
     # `check === "NEEDSHUMAN"` — `who_works` carries no such flag at all.
-    assert rows(got["waiting"]) == \
-        [["agora#82", "NEEDSHUMAN · screenshots need the founder, after round 2"]]
-    assert rows(got["roles"])[0] == ["CTO", "working · reviewing PR #90 round 2 · agora#82"]
-    assert label_tags(got["roles"]) == ["a", "span"]  # only the row with a `url` links
-    assert rows(got["queue"])[0] == ["#p1 · agora#82", "chat dashboard panel round 2 · claimed"]
-    assert rows(got["queue"])[1] == ["#p2 · ops#91", "dashboard.py schema doc · needs human"]
-    assert rows(got["week"]) == [["points closed", "7"], ["vs last week", "5"],
-                                  ["% of company", "12%"], ["median time to close", "9.5h"]]
-    assert rows(got["products"])[0][0] == "agora"
-    assert "צ'אט" in rows(got["products"])[0][1] and "due 2026-10-05" in rows(got["products"])[0][1]
+    assert len(_rows(got["waiting"])) == sum(s["check"] == "NEEDSHUMAN" for s in doc["stuck"])
+    assert _rows(got["roles"])[0] == ["CTO", "idle · " + doc["roles"][0]["doing"] + " · ops#52"]
+    assert _rows(got["queue"])[0] == ["#p0 · adk-lab#8", doc["queue"][0]["title"] + " · claimed"]
+    assert _rows(got["queue"])[1] == ["#p0 · ops#57", doc["queue"][1]["title"] + " · needs human"]
+    assert _rows(got["week"]) == [["points closed", "321"], ["vs last week", "0"],
+                                   ["% of company", "52.7%"], ["median time to close", "1.3h"]]
+    # products: `work` is an object and `checks` a list; both read as text.
+    assert _rows(got["products"])[0] == [
+        "SHAL", "SHAL 0.3.0 — מוכן למשתמש ראשון · due 2026-10-31 · 129/149 pts (87%) · 6/7 checks"]
+    assert [r[0] for r in _rows(got["products"])] == [p["name"] for p in doc["products"]]
     # Nothing to show is said, not left blank: the honest-reporting rule.
-    assert rows(got["empty"]) == [["—", ""]]
+    assert _rows(got["empty"]) == [["—", ""]]
     assert got["empty"]["kids"][0]["cls"] == "dash-empty muted"
+
+
+def test_no_card_shows_object_object_undefined_or_empty_text_on_the_real_document():
+    # The round-2 bug: renderProducts passed `work` (an object) and `checks`
+    # (a list) straight to text, so the card read "[object Object]".
+    got = _render_cards(DASHBOARD_FIXTURE)
+    for name in CARDS:
+        assert got[name]["cls"] == "dash-list" and got[name]["kids"], name
+        for label, detail in _rows(got[name]):
+            assert label.strip() and label != "—", (name, label, detail)
+            for text in (label, detail):
+                assert "[object" not in text and "undefined" not in text and "null" not in text, \
+                    (name, text)
 
 
 def test_prs_card_is_grouped_by_type_and_hidden_when_the_section_is_absent():
