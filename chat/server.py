@@ -1240,6 +1240,7 @@ def ensure_streams(store: Store) -> tuple[list[str], list[str]]:
     wanted = [(full, plan.bot_streams(full, short)) for full, short in plan.ROLE_BOTS]
     wanted.append((plan.WATCHDOG_BOT[0], plan.WATCHDOG_STREAMS))
     wanted.append((plan.POOL_BOT[0], {plan.POOL_STREAM}))
+    wanted.append((plan.PM_BOT[0], {plan.PM_STREAM}))
     missing = []
     with store.tx():
         for name in plan.STREAMS:
