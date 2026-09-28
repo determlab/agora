@@ -88,6 +88,19 @@ DASHBOARD_STALE = 7200  # a document older than this is `stale`
 DASHBOARD_KEEP = 24 * 3600  # rows older than this go on the next good sync
 NO_DASHBOARD = "no dashboard command configured: start the server with --dashboard-cmd"
 
+
+def default_dashboard_cmd() -> str:
+    """The dashboard command `chat/run.cmd` passes `--dashboard-cmd` by hand;
+    `startup_script()` below needs the same one so the server autostart
+    launches at login also syncs (issue #87) — this is the one place that
+    builds it. Forward-slashed and quoted around the interpreter path:
+    `Dashboard.sync` runs it through `shlex.split`, which is POSIX-mode and
+    treats `\\` as an escape character, and the path may contain spaces
+    (e.g. `Program Files`)."""
+    dash_py = sys.executable.replace("\\", "/")
+    return f'"{dash_py}" C:/PlayGround/ops/tools/dashboard.py --json --no-tokens'
+
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS users (
     id INTEGER PRIMARY KEY, email TEXT UNIQUE NOT NULL, full_name TEXT NOT NULL,
@@ -1495,6 +1508,16 @@ def startup_script(args) -> str:
     extra = f" --port {args.port}"
     extra += "" if args.db == DEFAULT_DB else f' --db "{args.db}"'
     extra += "" if args.env == BOT_ENV else f' --env "{args.env}"'
+    # Without --dashboard-cmd the server autostart launches at login has no
+    # sync thread and the dashboard panel stays empty until someone runs
+    # run.cmd by hand (issue #87) — so pass the same command run.cmd does.
+    # `\"` here is how Windows' argv parsing (not cmd.exe's) represents a
+    # literal quote inside this already double-quoted argument: the command's
+    # own value quotes the interpreter path (default_dashboard_cmd), and that
+    # inner quote has to survive being embedded in the outer quoted argument
+    # the same way run.cmd's static text spells it out by hand.
+    escaped_dashboard_cmd = default_dashboard_cmd().replace('"', '\\"')
+    extra += f' --dashboard-cmd "{escaped_dashboard_cmd}"'
     return ("@echo off\r\n"
             "REM Agora chat server at login (issue #72). Remove with:\r\n"
             f'REM   python "{os.path.abspath(__file__)}" autostart remove\r\n'
