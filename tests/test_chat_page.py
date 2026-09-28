@@ -1243,3 +1243,141 @@ def test_85_a_hebrew_message_with_a_link_renders_as_dom_nodes_and_keeps_rtl_orde
         if k.get("tag") == "a":
             assert k["kids"] == [{"text": k["text"]}]
     assert 'id="send-status"' not in PAGE.read_text(encoding="utf-8")
+
+
+# -- issue #82: the dashboard panel, side by side at 1280px, the sync pill
+
+
+def test_page_registers_for_dashboard_events():
+    # Registered up front, not added later: a queue that only ever asked for
+    # "message" never gets woken by a sync (see chat/server.py's Dashboard).
+    connect = _function("connect")
+    assert re.search(r'event_types:\s*\["message",\s*"dashboard"\]', connect)
+    assert "await loadDashboard()" in connect
+    poll = _function("poll")
+    assert 'ev.type === "dashboard"' in poll and "await loadDashboard()" in poll
+
+
+def test_page_has_the_panel_and_the_switch():
+    m = _markup()
+    ids = {a.get("id") for _, a in m.elements}
+    assert {"chat", "dash", "view-chat", "view-dash"} <= ids
+    css = _css()
+    assert "@media (min-width: 1280px)" in css
+    assert "grid-template-columns: 1fr 1fr" in css
+    # Each side scrolls on its own: the frame itself does not.
+    assert "overflow: auto" in _rule("#dash", css)
+    assert "overflow: hidden" in _rule("#app", css)
+
+
+DASH_FIXTURE = {
+    "live": [{"name": "CTO", "doing": "reviewing #82"}, {"name": "Hemi", "doing": "in the pool"}],
+    "stuck": [
+        {"who": "COO", "what": "PR #90 merge", "since": "2h", "waits_on": "founder"},
+        {"who": "CMO", "what": "README review", "since": "1d", "waits_on": "CI"},
+    ],
+    "who_works": [
+        {"name": "CTO", "on": "issue #82", "waits_on": "founder"},
+        {"name": "Watchdog", "on": "issue #81", "waits_on": None},
+    ],
+    "roles": [{"name": "CTO", "role": "engineering"}, {"name": "COO", "role": "ops"}],
+    "queue": [{"title": "issue #90", "priority": 2}, {"title": "issue #82", "priority": 1}],
+    "prs": {"feature": [{"title": "PR #93"}], "fix": [{"title": "PR #92"}]},
+    "week": ["3 issues closed", "2 PRs merged"],
+    "products": [{"name": "agora", "status": "in development"}],
+}
+
+DASH_NAMES = ("dashRow", "dashList", "renderLive", "renderStuck", "renderWaitingForYou",
+             "renderRoles", "renderQueue", "renderPRs", "renderWeek", "renderProducts",
+             "pillText", "renderDashboardPanel")
+
+
+def test_page_renders_every_card_from_a_fixture_document():
+    prelude = FAKE_DOM + """
+      const S = {dashboard: null};
+    """
+    got = _js(DASH_NAMES, f"""
+      S.dashboard = {{doc: {json.dumps(DASH_FIXTURE)}, last_sync: 1700000000,
+                      stale: false, last_error: null}};
+      renderDashboardPanel();
+      const rows = (id) => $(id).querySelector(".dash-list").children.map((li) => li.textContent);
+      out.live = rows("card-live");
+      out.waiting = rows("card-waiting");
+      out.roles = rows("card-roles");
+      out.queue = rows("card-queue");
+      out.week = rows("card-week");
+      out.products = rows("card-products");
+      out.stuck = rows("card-stuck");
+      out.prsHidden = $("card-prs-section").hidden;
+      out.prs = $("card-prs").querySelector(".dash-prs").children
+        .map((c) => [c.tagName, c.textContent]);
+      // The prs section is the one that hides itself when the field is absent.
+      S.dashboard = {{doc: {{...{json.dumps(DASH_FIXTURE)}, prs: undefined}}, last_sync: 1700000000,
+                      stale: false, last_error: null}};
+      renderDashboardPanel();
+      out.prsHiddenWhenAbsent = $("card-prs-section").hidden;
+    """, prelude=prelude)
+    assert got["live"] == ["CTO · reviewing #82", "Hemi · in the pool"]
+    # Only the founder's own rows, drawn from both stuck and who_works.
+    assert got["waiting"] == ["COO · PR #90 merge", "CTO · issue #82"]
+    assert got["roles"] == ["CTO · engineering", "COO · ops"]
+    # Sorted by priority, not by the order the document listed them in.
+    assert got["queue"] == ["issue #82 · עדיפות 1", "issue #90 · עדיפות 2"]
+    assert got["week"] == ["3 issues closed", "2 PRs merged"]
+    assert got["products"] == ["agora · in development"]
+    # The plain "stuck" card is everyone, not filtered to the founder.
+    assert got["stuck"] == ["COO · PR #90 merge · 2h", "CMO · README review · 1d"]
+    assert got["prsHidden"] is False
+    assert got["prs"] == [["DT", "feature"], ["DD", "PR #93"], ["DT", "fix"], ["DD", "PR #92"]]
+    assert got["prsHiddenWhenAbsent"] is True
+
+
+def test_pill_states():
+    now = 1700000000
+    fresh = {"last_sync": now - 180, "stale": False, "last_error": None}
+    stale = {"last_sync": now - 8000, "stale": True, "last_error": None}
+    error = {"last_sync": now - 180, "stale": False, "last_error": "gh: not logged in"}
+    no_cmd = {"last_sync": None, "stale": True,
+             "last_error": "no dashboard command configured: start the server with --dashboard-cmd"}
+    got = _js(("pillText",), f"""
+      const now = {now};
+      out.fresh = pillText({json.dumps(fresh)}, now);
+      out.stale = pillText({json.dumps(stale)}, now);
+      out.error = pillText({json.dumps(error)}, now);
+      out.noCmd = pillText({json.dumps(no_cmd)}, now);
+    """)
+    assert got["fresh"] == "מתעדכן אוטומטית · עודכן לפני 3 דק׳ · מקור: GitHub"
+    assert got["stale"] == "מתעדכן אוטומטית · עודכן לפני 133 דק׳ · מקור: GitHub · לא עדכני"
+    assert got["error"] == "gh: not logged in"
+    assert got["noCmd"] == "no dashboard command configured: start the server with --dashboard-cmd"
+    # Fresh, stale, error and no-command are four different texts.
+    assert len({got["fresh"], got["stale"], got["error"], got["noCmd"]}) == 4
+
+
+def test_sync_now_calls_post_sync_and_reloads_the_dashboard_even_on_failure():
+    # loadDashboard() is real (it is what makes the pill's minute count move
+    # after the POST); only api() is stubbed, so this runs the real handler.
+    prelude = FAKE_DOM + API_STUB + """
+      const S = {dashboard: null};
+    """
+    got = _js(("loadDashboard", "renderDashboardPanel", "dashRow", "dashList", "renderLive",
+              "renderStuck", "renderWaitingForYou", "renderRoles", "renderQueue", "renderPRs",
+              "renderWeek", "renderProducts", "pillText"), """
+      const handler = async () => {
+        try { await api("POST", "dashboard/sync"); } catch (e) { /* still reload */ }
+        await loadDashboard();
+      };
+      await handler();
+      out.ok = calls.splice(0).map((c) => [c[0], c[1]]);
+      FAIL = true;
+      await handler();
+      out.failed = calls.splice(0).map((c) => [c[0], c[1]]);
+    """, prelude=prelude)
+    assert got["ok"] == [["POST", "dashboard/sync"], ["GET", "dashboard"]]
+    assert got["failed"] == [["POST", "dashboard/sync"], ["GET", "dashboard"]]
+    # The real handler, wired exactly this way: POST then loadDashboard() in `finally`.
+    script = _markup().script
+    handler = script[script.index('$("sync-now").addEventListener'):]
+    handler = handler[:handler.index("});") + 3]
+    assert 'api("POST", "dashboard/sync")' in handler
+    assert handler.index("finally") > 0 and "await loadDashboard()" in handler[handler.index("finally"):]

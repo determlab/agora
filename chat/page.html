@@ -62,10 +62,26 @@ code, pre { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
 #keys label { display: block; margin: .75rem 0 .25rem; }
 #keys input { width: 100%; }
 #keys code { background: var(--code); padding: 0 .2rem; }
-/* The frame: the app sits in a rounded card on the page background. */
-#app { display: grid; grid-template-columns: 16rem 1fr; height: calc(100vh - 2rem);
-  position: relative; overflow: hidden; background: var(--panel);
+/* The frame: the app sits in a rounded card on the page background. Below
+   1280px only #chat or #dash shows at a time, picked by #view-switch; at
+   1280px and up #app splits into the two side by side, each scrolling on
+   its own (agora#82, the founder's side-by-side rule). */
+#app { display: grid; grid-template-columns: 1fr; grid-template-rows: auto 1fr;
+  height: calc(100vh - 2rem); position: relative; overflow: hidden; background: var(--panel);
   border: 1px solid var(--line); border-radius: 14px; box-shadow: var(--shadow); }
+#view-switch { display: flex; gap: .5rem; padding: .5rem 1rem; border-bottom: 1px solid var(--line); }
+#view-switch button[aria-pressed="true"] { background: var(--accent); color: var(--accent-text);
+  border-color: var(--accent); }
+#chat { display: grid; grid-template-columns: 16rem 1fr; min-height: 0; overflow: hidden; position: relative; }
+#dash { display: none; overflow: auto; padding: 1rem 1.25rem; border-inline-start: 1px solid var(--line); }
+#chat.inactive { display: none; }
+#dash.active { display: block; }
+@media (min-width: 1280px) {
+  #app { grid-template-columns: 1fr 1fr; grid-template-rows: 1fr; }
+  #view-switch { display: none; }
+  #chat, #chat.inactive { display: grid; }
+  #dash, #dash.active { display: block; }
+}
 #side { border-inline-end: 1px solid var(--line); overflow-y: auto; background: var(--panel);
   padding: .75rem .5rem; display: flex; flex-direction: column; gap: .25rem; }
 #brand { padding: .1rem .35rem .4rem; }
@@ -185,6 +201,18 @@ dialog .buttons { display: flex; justify-content: flex-end; gap: .5rem; margin-t
 .api-box { margin-top: 1rem; }
 .api-box pre { background: var(--code); border: 1px solid var(--line); border-radius: 6px;
   padding: .45rem .6rem; margin: .25rem 0 0; font-size: 12px; white-space: pre-wrap; text-align: left; }
+/* The dashboard panel: the sync pill and one card per section of the
+   document GET /api/v1/dashboard returns (agora#82). */
+#sync-pill { display: flex; align-items: center; gap: .5rem; margin-bottom: .75rem;
+  padding: .4rem .6rem; border: 1px solid var(--line); border-radius: 8px; background: var(--code); }
+#sync-pill.stale { border-color: var(--wait); color: var(--wait); }
+#sync-text { flex: 1; min-width: 0; }
+.dash-card { margin-bottom: 1rem; }
+.dash-card h3 { margin: 0 0 .35rem; font-size: 13px; color: var(--muted); }
+.dash-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: .2rem; }
+.dash-list li { font-size: 13px; }
+.dash-prs dt { font-weight: 700; margin-top: .4rem; }
+
 /* Feedback: one short toast per action, gone by itself. */
 #toast { position: fixed; bottom: 1.75rem; left: 50%; transform: translateX(-50%); z-index: 30;
   max-width: min(36rem, 90vw); padding: .5rem 1rem; border-radius: 10px; background: var(--text);
@@ -192,7 +220,8 @@ dialog .buttons { display: flex; justify-content: flex-end; gap: .5rem; margin-t
 #toast.bad { background: var(--error); color: #ffffff; }
 @media (max-width: 700px) {
   body { padding: 0; }
-  #app { grid-template-columns: 1fr; height: 100vh; border: 0; border-radius: 0; }
+  #app { height: 100vh; border: 0; border-radius: 0; }
+  #chat { grid-template-columns: 1fr; }
   #side { position: absolute; top: 0; bottom: 0; right: 0; width: 16rem; z-index: 5; transform: translateX(100%);
     transition: transform .15s; box-shadow: 0 0 12px rgba(0, 0, 0, .3); }
   #app.side-open #side { transform: none; }
@@ -221,6 +250,11 @@ dialog .buttons { display: flex; justify-content: flex-end; gap: .5rem; margin-t
 </section>
 
 <div id="app" hidden>
+  <div id="view-switch">
+    <button type="button" id="view-chat" class="btn" aria-pressed="true">צ'אט</button>
+    <button type="button" id="view-dash" class="btn" aria-pressed="false">לוח</button>
+  </div>
+  <div id="chat">
   <nav id="side">
     <div id="brand"><span id="logo" dir="ltr">agora</span></div>
     <div id="me-row">
@@ -286,6 +320,45 @@ dialog .buttons { display: flex; justify-content: flex-end; gap: .5rem; margin-t
       <pre id="members-api" dir="ltr"></pre>
     </div>
   </aside>
+  </div>
+  <aside id="dash">
+    <div id="sync-pill">
+      <span id="sync-text" class="muted"></span>
+      <button type="button" id="sync-now" class="btn">סנכרן עכשיו</button>
+    </div>
+    <section class="dash-card">
+      <h3>הבריכה עכשיו</h3>
+      <div id="card-live"></div>
+    </section>
+    <section class="dash-card">
+      <h3>מחכה לך</h3>
+      <div id="card-waiting"></div>
+    </section>
+    <section class="dash-card">
+      <h3>מי עובד על מה</h3>
+      <div id="card-roles"></div>
+    </section>
+    <section class="dash-card">
+      <h3>התור לפי עדיפות</h3>
+      <div id="card-queue"></div>
+    </section>
+    <section class="dash-card" id="card-prs-section" hidden>
+      <h3>בקשות משיכה פתוחות לפי סוג</h3>
+      <div id="card-prs"></div>
+    </section>
+    <section class="dash-card">
+      <h3>השבוע</h3>
+      <div id="card-week"></div>
+    </section>
+    <section class="dash-card">
+      <h3>מוצרים</h3>
+      <div id="card-products"></div>
+    </section>
+    <section class="dash-card">
+      <h3>תקוע</h3>
+      <div id="card-stuck"></div>
+    </section>
+  </aside>
 </div>
 
 <div id="toast" role="status" aria-live="polite" hidden></div>
@@ -348,6 +421,7 @@ const S = {
   adding: null,         // {stream_id, text}: the "+ new topic" field being typed in
   pick: null,           // the @ picker: {items, index, start}
   toastTimer: 0,
+  dashboard: null,      // GET /api/v1/dashboard's last answer, or null before the first load
 };
 
 class ApiFailure extends Error {
@@ -655,12 +729,13 @@ async function start() {
 // Register first, then load: a message sent in between arrives as an event
 // and the id set keeps it from showing twice.
 async function connect(gen) {
-  const reg = await api("POST", "register", {event_types: ["message"]});
+  const reg = await api("POST", "register", {event_types: ["message", "dashboard"]});
   if (gen !== S.gen) return;
   S.queue = reg.queue_id;
   S.lastEvent = reg.last_event_id;
   await loadStreams();
   if (S.open) await openTopic(S.open.stream_id, S.open.stream, S.open.topic);
+  await loadDashboard();  // once on load, and again here on every reconnect
   setLive("live", "מחובר");
 }
 
@@ -701,6 +776,7 @@ async function poll(gen) {
     for (const ev of got.events) {
       S.lastEvent = Math.max(S.lastEvent, ev.id);
       if (ev.type === "message") onMessage(ev.message);
+      else if (ev.type === "dashboard") await loadDashboard();
     }
   }
 }
@@ -715,6 +791,134 @@ function onMessage(m) {
       && S.open.topic.toLowerCase() === m.subject.toLowerCase()) {
     addMessages([m], false);
   }
+}
+
+// -- the dashboard panel: GET /api/v1/dashboard's answer, one small render
+// function per card, each pure (a section of the document in, a DOM node
+// out) so tests/test_chat_page.py can run them without a browser. Every
+// value from the document is untrusted GitHub/agent text: textContent only,
+// exactly like a chat message.
+
+function dashRow(parts) {
+  const li = document.createElement("li");
+  parts.forEach((text, i) => {
+    if (i > 0) li.append(document.createTextNode(" · "));
+    const span = document.createElement(i === 0 ? "strong" : "span");
+    span.dir = "auto";
+    if (i > 0) span.className = "muted";
+    span.textContent = text == null ? "" : String(text);
+    li.append(span);
+  });
+  return li;
+}
+
+function dashList(rows) {
+  const ul = document.createElement("ul");
+  ul.className = "dash-list";
+  for (const row of rows) ul.append(dashRow(row));
+  return ul;
+}
+
+function renderLive(items) {
+  return dashList((items || []).map((it) => [it.name, it.doing]));
+}
+
+function renderStuck(items) {
+  return dashList((items || []).map((it) => [it.who, it.what, it.since]));
+}
+
+// "waiting for you": the founder's own rows inside `stuck` and `who_works`,
+// not the whole of either (that is the plain "stuck" card, below).
+function renderWaitingForYou(stuck, whoWorks) {
+  const rows = [
+    ...(stuck || []).filter((it) => it.waits_on === "founder").map((it) => [it.who, it.what]),
+    ...(whoWorks || []).filter((it) => it.waits_on === "founder").map((it) => [it.name, it.on]),
+  ];
+  return dashList(rows);
+}
+
+function renderRoles(items) {
+  return dashList((items || []).map((it) => [it.name, it.role]));
+}
+
+function renderQueue(items) {
+  const sorted = [...(items || [])].sort((a, b) => (a.priority ?? 0) - (b.priority ?? 0));
+  return dashList(sorted.map((it) => [it.title, it.priority != null ? "עדיפות " + it.priority : ""]));
+}
+
+function renderPRs(byType) {
+  const dl = document.createElement("dl");
+  dl.className = "dash-prs";
+  for (const [type, prs] of Object.entries(byType || {})) {
+    const dt = document.createElement("dt");
+    dt.textContent = type;
+    const dd = document.createElement("dd");
+    dd.append(dashList((prs || []).map((pr) => [pr.title])));
+    dl.append(dt, dd);
+  }
+  return dl;
+}
+
+function renderWeek(lines) {
+  const ul = document.createElement("ul");
+  ul.className = "dash-list";
+  for (const line of lines || []) {
+    const li = document.createElement("li");
+    li.dir = "auto";
+    li.textContent = line;
+    ul.append(li);
+  }
+  return ul;
+}
+
+function renderProducts(items) {
+  return dashList((items || []).map((it) => [it.name, it.status]));
+}
+
+// The sync pill's text: the server's own words when something is wrong (a
+// stopped sync and "no command configured" both arrive as last_error) --
+// the page never invents a friendlier status than the server has (D3).
+function pillText(state, nowSec) {
+  if (state.last_error) return state.last_error;
+  if (state.last_sync == null) return "אין עדיין סנכרון";
+  const mins = Math.max(0, Math.round((nowSec - state.last_sync) / 60));
+  let text = "מתעדכן אוטומטית · עודכן לפני " + mins + " דק׳ · מקור: GitHub";
+  if (state.stale) text += " · לא עדכני";
+  return text;
+}
+
+// One section of the document per card; `prs` is the one that hides itself
+// (issue #82: "when present, else hidden") since it is the one section the
+// dashboard command may simply not have collected this run.
+function renderDashboardPanel() {
+  const state = S.dashboard;
+  if (!state) {
+    $("sync-text").textContent = "אין חיבור ללוח";
+    $("sync-pill").classList.remove("stale");
+    return;
+  }
+  $("sync-text").textContent = pillText(state, Date.now() / 1000);
+  $("sync-pill").classList.toggle("stale", !!state.stale);
+  const doc = state.doc || {};
+  $("card-live").replaceChildren(renderLive(doc.live));
+  $("card-waiting").replaceChildren(renderWaitingForYou(doc.stuck, doc.who_works));
+  $("card-roles").replaceChildren(renderRoles(doc.roles));
+  $("card-queue").replaceChildren(renderQueue(doc.queue));
+  const hasPrs = doc.prs !== undefined && doc.prs !== null;
+  $("card-prs-section").hidden = !hasPrs;
+  if (hasPrs) $("card-prs").replaceChildren(renderPRs(doc.prs));
+  $("card-week").replaceChildren(renderWeek(doc.week));
+  $("card-products").replaceChildren(renderProducts(doc.products));
+  $("card-stuck").replaceChildren(renderStuck(doc.stuck));
+}
+
+// A failed GET leaves the last good panel showing rather than blanking it,
+// except before the first load ever succeeds: there is nothing to show yet.
+async function loadDashboard() {
+  try {
+    S.dashboard = await api("GET", "dashboard");
+  } catch (e) { /* keep whatever S.dashboard already held */ }
+  renderDashboardPanel();
 }
 
 function renderStreams() {
@@ -1357,7 +1561,34 @@ document.addEventListener("keydown", (e) => {
   if (e.key === "Escape" && !e.defaultPrevented && $("members-panel").classList.contains("open")) closeMembers();
 });
 
-// -- chrome: sidebar on a narrow screen, theme, keys
+// -- chrome: the chat/dash switch below 1280px, sidebar on a narrow screen, theme, keys
+
+// Below 1280px only one of #chat / #dash is visible; at 1280px and up the
+// CSS shows both and hides #view-switch, so which button was pressed last
+// does not matter there.
+function setView(showDash) {
+  $("chat").classList.toggle("inactive", showDash);
+  $("dash").classList.toggle("active", showDash);
+  $("view-chat").setAttribute("aria-pressed", String(!showDash));
+  $("view-dash").setAttribute("aria-pressed", String(showDash));
+}
+$("view-chat").addEventListener("click", () => setView(false));
+$("view-dash").addEventListener("click", () => setView(true));
+
+$("sync-now").addEventListener("click", async () => {
+  $("sync-now").disabled = true;
+  try {
+    await api("POST", "dashboard/sync");
+    toast("הסנכרון הסתיים");
+  } catch (e) {
+    toast("הסנכרון נכשל: " + e.message, true);
+  } finally {
+    // Read the pill back from the server either way: success or failure,
+    // it must show what the server now holds, not what was hoped for (D3).
+    await loadDashboard();
+    $("sync-now").disabled = false;
+  }
+});
 
 $("menu-btn").addEventListener("click", () => $("app").classList.toggle("side-open"));
 
