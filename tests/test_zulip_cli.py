@@ -7,6 +7,7 @@ defect that cost ops #1 and #2 a round each.
 from __future__ import annotations
 
 import importlib.util
+import json
 import os
 import subprocess
 import sys
@@ -127,6 +128,35 @@ def test_read_since_is_strictly_after_the_id(cli, monkeypatch, capsys):
     params = fake.calls[-1][2]
     assert params["narrow"] == [{"operator": "is", "operand": "mentioned"}]
     assert params["anchor"] == 7 and params["include_anchor"] == "false"
+
+
+def test_as_pool_read_json_prints_one_object_per_message_after_since(
+        cli, monkeypatch, capsys):
+    """The pool daemon's read (issue #80): JSON Lines, strictly after --since."""
+    monkeypatch.setenv("ZULIP_POOL_EMAIL", "pool-bot@x")
+    monkeypatch.setenv("ZULIP_POOL_API_KEY", "k")
+    pool = {"display_recipient": "pool", "subject": "pool control"}
+    fake = _stub(monkeypatch, cli, FakeZulip(subscribed=("pool",), exists=("pool",), messages=[
+        msg(5, "old", **pool), msg(7, "boundary", **pool), msg(9, "pause shal", **pool),
+        msg(11, "status ✓", **pool)]))
+    assert cli.main(["--as", "POOL", "read", "--stream", "pool", "--since", "7", "--json"]) == 0
+    lines = capsys.readouterr().out.splitlines()
+    rows = [json.loads(line) for line in lines]
+    assert [r["id"] for r in rows] == [9, 11]
+    assert rows[0] == {"id": 9, "timestamp": 1790000009, "sender_full_name": "Founder",
+                       "sender_email": "founder@x", "stream": "pool",
+                       "topic": "pool control", "content": "pause shal"}
+    assert rows[1]["content"] == "status ✓"
+    params = fake.calls[-1][2]
+    assert params["narrow"] == [{"operator": "channel", "operand": "pool"}]
+    assert params["anchor"] == 7 and params["include_anchor"] == "false"
+
+
+def test_read_json_with_nothing_new_prints_nothing_on_stdout(cli, monkeypatch, capsys):
+    _stub(monkeypatch, cli, FakeZulip(messages=[msg(5)]))
+    assert cli.main(["read", "--stream", "coo", "--since", "5", "--json"]) == 0
+    out = capsys.readouterr()
+    assert out.out == "" and "(no messages)" in out.err
 
 
 def test_read_unsubscribed_stream_is_refused(cli, monkeypatch, capsys):

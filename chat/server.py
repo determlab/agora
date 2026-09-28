@@ -22,7 +22,9 @@ makes a human: without one it prints the ``add-human --write-env`` command.
 ``bootstrap`` creates one admin *bot* and prints its credentials; with
 ``--from-env`` it also creates each ``ZULIP_<ROLE>_EMAIL`` / ``_API_KEY`` pair
 in that file as a bot with that very email and key, so switching a tool over
-is one line (``ZULIP_SITE``). ``add-human`` is for the founder to run himself:
+is one line (``ZULIP_SITE``). It also makes the Pool bot and a private
+``#pool`` holding it, the COO bot and the founder (issue #80), and prints the
+Pool bot's ``ZULIP_POOL_*`` pair. ``add-human`` is for the founder to run himself:
 no agent creates his account. No password anywhere.
 
 The event queue (D12) lives in SQLite, like everything else: a queue and its
@@ -1100,6 +1102,7 @@ def ensure_streams(store: Store) -> tuple[list[str], list[str]]:
     plan = stream_plan()
     wanted = [(full, plan.bot_streams(full, short)) for full, short in plan.ROLE_BOTS]
     wanted.append((plan.WATCHDOG_BOT[0], plan.WATCHDOG_STREAMS))
+    wanted.append((plan.POOL_BOT[0], {plan.POOL_STREAM}))
     missing = []
     with store.tx():
         for name in plan.STREAMS:
@@ -1116,6 +1119,38 @@ def ensure_streams(store: Store) -> tuple[list[str], list[str]]:
             for name in names:
                 store.subscribe(bots[full], store.stream_by_ref(name)["stream_id"])
     return list(plan.STREAMS), missing
+
+
+def bootstrap_pool(store: Store) -> dict:
+    """The Pool bot and a private #pool (issue #80, ops#85's pool control),
+    with the Pool bot, the COO bot and every human in it. A Pool bot that
+    ``--from-env`` made from ZULIP_POOL_* is the one used, never a second.
+    ``members`` is read back from the subscriptions table, and ``missing``
+    names who is not there yet, so nobody is reported in #pool who is not."""
+    plan = stream_plan()
+    full, short = plan.POOL_BOT
+    with store.tx():
+        row = store.one("SELECT * FROM users WHERE is_bot=1 AND full_name=?", (full,))
+        bot = dict(row) if row else store.create_user(f"{short}-bot@{REALM}", full, is_bot=True)
+        stream = store.stream_by_ref(plan.POOL_STREAM)
+        if stream is None:
+            sid = store.create_stream(plan.POOL_STREAM, invite_only=True)
+        else:
+            sid = stream["stream_id"]
+            store.x("UPDATE streams SET invite_only=1 WHERE stream_id=?", (sid,))
+        who = [bot["id"]] + [r["id"] for r in store.q(
+            "SELECT id FROM users WHERE is_bot=0 OR (is_bot=1 AND full_name IN (%s))"
+            % ",".join("?" * len(plan.POOL_ROLE_BOTS)), tuple(sorted(plan.POOL_ROLE_BOTS)))]
+        for uid in who:
+            store.subscribe(uid, sid)
+    members = store.q("SELECT u.* FROM users u JOIN subscriptions x ON x.user_id=u.id "
+                      "WHERE x.stream_id=? ORDER BY u.id", (sid,))
+    missing = [f for f in sorted(plan.POOL_ROLE_BOTS)
+               if not any(m["is_bot"] and m["full_name"] == f for m in members)]
+    if not any(not m["is_bot"] for m in members):
+        missing.append("founder")
+    return {"email": bot["email"], "api_key": bot["api_key"], "stream": plan.POOL_STREAM,
+            "members": [m["email"] for m in members], "missing": missing}
 
 
 def zulip_max_id(env: dict, own_url: str, timeout: float = 3.0) -> tuple[int | None, str]:
@@ -1443,13 +1478,22 @@ def main(argv: list[str] | None = None) -> int:
         creds = {**bootstrap(store), "site": site}
         if args.from_env:
             creds["bots"] = bots_from_env(store, args.from_env)
+        # After --from-env, so its COO bot joins #pool and its ZULIP_POOL_*
+        # pair, if any, is the Pool bot.
+        creds["pool"] = pool = bootstrap_pool(store)
         if args.json:
             print(json.dumps(creds))
         else:
             print(f"ZULIP_SITE={creds['site']}\nZULIP_BOT_EMAIL={creds['email']}\n"
-                  f"ZULIP_BOT_API_KEY={creds['api_key']}")
+                  f"ZULIP_BOT_API_KEY={creds['api_key']}\n"
+                  f"ZULIP_POOL_EMAIL={pool['email']}\nZULIP_POOL_API_KEY={pool['api_key']}")
             for b in creds.get("bots", []):
                 print(f"# {b['role']}: {b['email']} {b['action']}")
+            print(f"# #{pool['stream']}: {', '.join(pool['members'])}")
+            for who in pool["missing"]:
+                print(f"# #{pool['stream']}: no {who} yet, so not in it: "
+                      + ("add-human subscribes him" if who == "founder" else
+                         f"bootstrap --from-env with ZULIP_{who.upper()}_* adds it"))
         return 0
     if args.cmd == "add-human":
         if args.write_env and os.path.exists(args.env):
