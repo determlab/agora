@@ -936,6 +936,51 @@ def test_77_inline_code_and_mentions_render_as_elements_never_as_markup():
     assert "background: var(--code)" in _rule(".chip", css)
 
 
+def test_85_urls_and_repo_refs_become_clickable_links_bare_hash_does_not():
+    got = _js(("inlineParts",), r"""
+      out.url = inlineParts("see https://example.com/x for more");
+      out.period = inlineParts("see https://example.com/x.");
+      out.ops = inlineParts("ops#94");
+      out.adk = inlineParts("adk-lab#11");
+      out.bare = inlineParts("just #123 here");
+    """)
+    assert got["url"] == [
+        {"kind": "text", "text": "see "},
+        {"kind": "link", "text": "https://example.com/x", "href": "https://example.com/x"},
+        {"kind": "text", "text": " for more"}]
+    # The trailing period is not part of the link.
+    assert got["period"] == [
+        {"kind": "text", "text": "see "},
+        {"kind": "link", "text": "https://example.com/x", "href": "https://example.com/x"},
+        {"kind": "text", "text": "."}]
+    assert got["ops"] == [{"kind": "ref", "text": "ops#94",
+                           "href": "https://github.com/determlab/ops/issues/94"}]
+    assert got["adk"] == [{"kind": "ref", "text": "adk-lab#11",
+                           "href": "https://github.com/determlab/adk-lab/issues/11"}]
+    # A bare #123 has no repo before it: it stays plain text, not a link.
+    assert got["bare"] == [{"kind": "text", "text": "just #123 here"}]
+
+    dom = _js(("textDir", "inlineParts", "inlineNodes", "fillBody"), r"""
+      const el = document.createElement("div");
+      fillBody(el, "שלום https://example.com/x תודה, ראו ops#94.");
+      out.body = dump(el);
+      out.anchors = el.querySelectorAll("a").map(
+        (a) => [a.textContent, a.href, a.target, a.rel, a.className, a.dir]);
+    """, prelude=FAKE_DOM)
+    body = dom["body"]
+    assert body["dir"] == "rtl"  # the Hebrew opener sets the message's own direction
+    kinds = [(k.get("tag"), k.get("dir"), k["text"]) for k in body["kids"]]
+    assert kinds == [
+        (None, None, "שלום "), ("a", "ltr", "https://example.com/x"),
+        (None, None, " תודה, ראו "), ("a", "ltr", "ops#94"), (None, None, ".")]
+    assert dom["anchors"] == [
+        ["https://example.com/x", "https://example.com/x", "_blank", "noopener noreferrer",
+         "msg-link", "ltr"],
+        ["ops#94", "https://github.com/determlab/ops/issues/94", "_blank",
+         "noopener noreferrer", "msg-link", "ltr"]]
+    assert "color: var(--accent)" in _rule(".msg-link")
+
+
 def test_77_a_mentioned_bubble_is_filled_yellow_without_a_side_bar():
     rule = _rule(".msg.mention .bubble")
     assert "background: var(--mention)" in rule and "border-inline-start" not in rule

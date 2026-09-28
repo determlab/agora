@@ -137,6 +137,7 @@ code, pre { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
   white-space: pre-wrap; text-align: left; }
 .chip { background: var(--code); border: 1px solid var(--line); border-radius: 4px; padding: 0 .25rem; font-size: 12.5px; }
 .mention-name { color: var(--accent); font-weight: 700; }
+.msg-link { color: var(--accent); }
 .quote { margin: 0 0 .35rem; padding: .25rem .6rem; border-inline-start: 3px solid var(--accent);
   background: var(--code); border-radius: 6px; }
 .quote-sender { font-size: 12px; font-weight: 600; }
@@ -422,16 +423,34 @@ function initial(name) {
   return first ? first.toUpperCase() : "?";
 }
 
-// `code` and @**Name** (or the silent @_**Name**) inside a message's text, as
-// plain parts: inlineNodes makes each one an element with textContent, so
-// nothing a message says is ever parsed as markup.
+// `code`, @**Name** (or the silent @_**Name**), http(s) links and repo#N
+// issue refs inside a message's text, as plain parts: inlineNodes makes each
+// one an element with textContent, so nothing a message says is ever parsed
+// as markup. A bare #123 has no repo before it and is left as plain text
+// (issue #85): the ref alternative below requires a [\w-]+ immediately
+// before the "#", so it never matches one on its own.
 function inlineParts(text) {
-  const out = [], s = String(text), re = /`([^`\n]+)`|@_?\*\*([^*\n]+)\*\*/g;
+  const out = [], s = String(text);
+  const re = /`([^`\n]+)`|@_?\*\*([^*\n]+)\*\*|(https?:\/\/\S+)|([\w-]+)#(\d+)/g;
   let at = 0, m;
   while ((m = re.exec(s)) !== null) {
     if (m.index > at) out.push({kind: "text", text: s.slice(at, m.index)});
-    if (m[1] !== undefined) out.push({kind: "code", text: m[1]});
-    else out.push({kind: "mention", text: "@" + m[2].replace(/\|\d+$/, "")});
+    if (m[1] !== undefined) {
+      out.push({kind: "code", text: m[1]});
+    } else if (m[2] !== undefined) {
+      out.push({kind: "mention", text: "@" + m[2].replace(/\|\d+$/, "")});
+    } else if (m[3] !== undefined) {
+      // Trailing .,) read as sentence punctuation, not part of the link;
+      // rewind past it so the next iteration (or the final flush) puts it
+      // back as plain text.
+      const trail = /[.,)]+$/.exec(m[3]);
+      const url = trail ? m[3].slice(0, m[3].length - trail[0].length) : m[3];
+      out.push({kind: "link", text: url, href: url});
+      re.lastIndex -= trail ? trail[0].length : 0;
+    } else {
+      out.push({kind: "ref", text: m[0],
+                href: "https://github.com/determlab/" + m[4] + "/issues/" + m[5]});
+    }
     at = re.lastIndex;
   }
   if (at < s.length) out.push({kind: "text", text: s.slice(at)});
@@ -881,6 +900,16 @@ function renderMessages() {
 function inlineNodes(text) {
   return inlineParts(text).map((p) => {
     if (p.kind === "text") return document.createTextNode(p.text);
+    if (p.kind === "link" || p.kind === "ref") {
+      const n = document.createElement("a");
+      n.href = p.href;
+      n.target = "_blank";
+      n.rel = "noopener noreferrer";
+      n.className = "msg-link";
+      n.dir = "ltr";  // a URL or repo#N keeps its own order inside a Hebrew line
+      n.textContent = p.text;
+      return n;
+    }
     const n = document.createElement(p.kind === "code" ? "code" : "strong");
     n.className = p.kind === "code" ? "chip" : "mention-name";
     n.dir = "ltr";  // "@CTO" and code keep their order inside a Hebrew line
