@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import json
 import os
+import re
+import shlex
 import shutil
 import socket
 import subprocess
@@ -238,6 +240,24 @@ def test_autostart_install_status_remove_touch_exactly_one_file(windows, tmp_pat
         script = (windows / made).read_text(encoding="utf-8")
         assert f" up --port {port}" in script and "server.log" in script and "/min" in script
         assert not (tmp_path / "not-this-one").exists()
+
+        # issue #87: without --dashboard-cmd, the server autostart starts at
+        # login has no sync thread and the dashboard panel stays empty.
+        # `startup_script()` must pass the same command `chat/run.cmd` does
+        # (`chat.default_dashboard_cmd()`), escaped for the .cmd file the same
+        # way run.cmd's own static text is: pull the quoted value back out and
+        # prove shlex.split (what `Dashboard.sync` actually runs it through)
+        # parses it into the interpreter path plus the dashboard.py args,
+        # rather than just asserting substrings are present somewhere.
+        assert "--dashboard-cmd" in script
+        m = re.search(r'--dashboard-cmd "((?:[^"\\]|\\.)*)"', script)
+        assert m, script
+        value = m.group(1).replace('\\"', '"')
+        assert value == chat.default_dashboard_cmd()
+        assert shlex.split(value) == [
+            sys.executable.replace("\\", "/"),
+            "C:/PlayGround/ops/tools/dashboard.py", "--json", "--no-tokens",
+        ]
 
         code, out = _auto(capsys, "status", "--startup-dir", str(windows), "--port", port)
         assert code == 0 and out["installed"] is True and out["answering"] is True
