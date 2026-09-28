@@ -1,0 +1,36 @@
+{
+  "live": [
+    {"ref": "agora#82", "round": 2, "phase": "coding", "claimed_min": 8, "idle_min": 1,
+     "last_action": "opened PR #90", "url": "https://github.com/determlab/agora/pull/90"}
+  ],
+  "stuck": [
+    {"check": "NEEDSHUMAN", "repo": "agora", "number": 82,
+     "text": "screenshots need the founder, after round 2"},
+    {"check": "CI_RED", "repo": "ops", "number": 91,
+     "text": "dashboard.py tests failing on the schema change"}
+  ],
+  "who_works": [
+    {"role": "CTO", "state": "working", "doing": "reviewing PR #90 round 2",
+     "ref": "agora#82", "url": "https://github.com/determlab/agora/issues/82"}
+  ],
+  "roles": [
+    {"role": "CTO", "state": "working", "doing": "reviewing PR #90 round 2",
+     "ref": "agora#82", "url": "https://github.com/determlab/agora/issues/82"},
+    {"role": "COO", "state": "idle", "doing": null, "ref": null, "url": null}
+  ],
+  "queue": [
+    {"ref": "agora#82", "priority": "p1", "title": "chat dashboard panel round 2",
+     "url": "https://github.com/determlab/agora/issues/82", "claimed_now": true, "needs_human": false},
+    {"ref": "ops#91", "priority": "p2", "title": "dashboard.py schema doc",
+     "url": "https://github.com/determlab/ops/issues/91", "claimed_now": false, "needs_human": true}
+  ],
+  "week": {
+    "points_closed": 7, "points_closed_previous": 5,
+    "percent_of_company": 12, "median_go_to_close_h": 9.5
+  },
+  "products": [
+    {"name": "agora", "goal_he": "צ'אט + לוח מחוונים לצוות", "due": "2026-10-05",
+     "work": "round 2 of the dashboard panel", "checks": "green"},
+    {"name": "ops", "goal_he": "כלי הפצה ותשתית", "due": null, "work": null, "checks": "green"}
+  ]
+}

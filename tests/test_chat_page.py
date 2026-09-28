@@ -738,7 +738,7 @@ const toasts = [];
 function toast(text, bad) { toasts.push([text, !!bad]); }
 const dump = (n) => n instanceof El
   ? {tag: n.tagName.toLowerCase(), cls: n.className, dir: n.dir, text: n.textContent,
-     kids: n.childNodes.map(dump)}
+     href: n.href, kids: n.childNodes.map(dump)}
   : {text: n.data};
 """
 
@@ -1166,3 +1166,134 @@ def test_77_a_toast_follows_each_action_and_says_success_only_when_the_server_di
                  'report("create-status", "לא נוצר: "', 'report("members-status", "לא נוסף: "'):
         assert call in script, call
     assert 'id="send-status"' not in PAGE.read_text(encoding="utf-8")
+
+
+# -- issue #82: the dashboard panel, side by side with chat at 1280px
+
+
+def test_page_registers_for_dashboard_events():
+    # Extended, not replaced: the same register call still asks for "message"
+    # (issue #82 says "extend an existing tool/call", D1's shape one layer up).
+    script = _markup().script
+    assert re.search(r'api\("POST", "register", \{event_types: \["message", "dashboard"\]\}\)', script)
+
+
+def test_page_has_the_panel_and_the_switch():
+    text = PAGE.read_text(encoding="utf-8")
+    for needle in ('id="dash"', 'id="view-chat"', 'id="view-dash"', "1280px"):
+        assert needle in text, needle
+    assert "@media (min-width: 1280px)" in text and "@media (max-width: 1279px)" in text
+    # The switch survives either pane being hidden: it is its own element,
+    # not nested inside #main or #dash.
+    m = _markup()
+    ids = [a.get("id") for _, a in m.elements]
+    assert ids.index("view-switch") < ids.index("main") and ids.index("view-switch") < ids.index("dash")
+
+
+# A committed snapshot of `ops/tools/dashboard.py --json` output's shape
+# (round 2 of issue #82: round 1 read an invented `{label, detail}` shape no
+# producer ever sent; the field names here follow the CTO's review of PR #90
+# — https://github.com/determlab/agora/pull/90#issuecomment-5866601187 —
+# which named what `build()` actually sends for each section).
+DASHBOARD_FIXTURE = json.loads(
+    (ROOT / "tests" / "fixtures" / "dashboard-doc.json").read_text(encoding="utf-8"))
+
+
+def test_page_renders_every_card_from_a_fixture_document():
+    doc = DASHBOARD_FIXTURE
+    got = _js(("renderLive", "renderStuck", "renderRoles", "renderQueue", "renderWeek",
+               "renderProducts", "renderWaiting", "renderRows", "joinDetail", "stuckRow"), f"""
+      const doc = {json.dumps(doc)};
+      out.live = dump(renderLive(doc.live));
+      out.stuck = dump(renderStuck(doc.stuck));
+      out.roles = dump(renderRoles(doc.roles));
+      out.queue = dump(renderQueue(doc.queue));
+      out.week = dump(renderWeek(doc.week));
+      out.products = dump(renderProducts(doc.products));
+      out.waiting = dump(renderWaiting(doc.stuck));
+      out.empty = dump(renderLive([]));
+    """, prelude=FAKE_DOM)
+
+    def rows(dumped):
+        # [[label, detail], ...] for a rendered <ul class="dash-list">.
+        out = []
+        for li in dumped["kids"]:
+            texts = [k["text"] for k in li["kids"]]
+            out.append(texts + [""] * (2 - len(texts)))
+        return out
+
+    def label_tags(dumped):
+        return [li["kids"][0]["tag"] for li in dumped["kids"]]
+
+    # No card reads empty against the real producer shape — the bug the CTO
+    # flagged in round 1 (fields that matched nothing a live server sends).
+    for name in ("live", "stuck", "roles", "queue", "week", "products", "waiting"):
+        assert got[name]["cls"] == "dash-list" and got[name]["kids"], name
+        assert rows(got[name]) != [["—", ""]], name
+
+    assert rows(got["live"])[0] == \
+        ["agora#82", "coding · round 2 · claimed 8m ago · idle 1m · opened PR #90"]
+    assert label_tags(got["live"]) == ["a"]  # `ref` links to `url` when the row has one
+    assert rows(got["stuck"]) == [
+        ["agora#82", "NEEDSHUMAN · screenshots need the founder, after round 2"],
+        ["ops#91", "CI_RED · dashboard.py tests failing on the schema change"],
+    ]
+    # "waiting for you": the founder's own rows out of `stuck`, by
+    # `check === "NEEDSHUMAN"` — `who_works` carries no such flag at all.
+    assert rows(got["waiting"]) == \
+        [["agora#82", "NEEDSHUMAN · screenshots need the founder, after round 2"]]
+    assert rows(got["roles"])[0] == ["CTO", "working · reviewing PR #90 round 2 · agora#82"]
+    assert label_tags(got["roles"]) == ["a", "span"]  # only the row with a `url` links
+    assert rows(got["queue"])[0] == ["#p1 · agora#82", "chat dashboard panel round 2 · claimed"]
+    assert rows(got["queue"])[1] == ["#p2 · ops#91", "dashboard.py schema doc · needs human"]
+    assert rows(got["week"]) == [["points closed", "7"], ["vs last week", "5"],
+                                  ["% of company", "12%"], ["median time to close", "9.5h"]]
+    assert rows(got["products"])[0][0] == "agora"
+    assert "צ'אט" in rows(got["products"])[0][1] and "due 2026-10-05" in rows(got["products"])[0][1]
+    # Nothing to show is said, not left blank: the honest-reporting rule.
+    assert rows(got["empty"]) == [["—", ""]]
+    assert got["empty"]["kids"][0]["cls"] == "dash-empty muted"
+
+
+def test_prs_card_is_grouped_by_type_and_hidden_when_the_section_is_absent():
+    # `prs` is not a field the real document sends (the CTO's review of PR
+    # #90 said so explicitly, "hidden (OK)"); renderDashboard checks
+    # `doc.prs` before ever calling this, but the grouping itself is still
+    # its own small render path worth its own test.
+    got = _js(("renderPrs", "renderRows"), """
+      out.prs = dump(renderPrs({feature: [{label: "#89", detail: "rename stream UI"}],
+                                 bug: [{label: "#90", detail: "fix pill"}]}));
+    """, prelude=FAKE_DOM)
+    prs_kids = got["prs"]["kids"]
+    assert [k["tag"] for k in prs_kids] == ["h4", "ul", "h4", "ul"]
+    assert [k["text"] for k in prs_kids if k["tag"] == "h4"] == ["feature", "bug"]
+
+
+def test_pill_states():
+    now_s = 1700000000
+    got = _js(("pillText", "renderPill"), f"""
+      const now = {now_s} * 1000;
+      out.fresh = pillText({{last_sync: {now_s} - 120, stale: false, last_error: null}}, now);
+      out.stale = pillText({{last_sync: {now_s} - 10000, stale: true, last_error: null}}, now);
+      out.error = pillText({{last_sync: {now_s} - 120, stale: false,
+                            last_error: "gh: not logged in"}}, now);
+      out.noCmd = pillText({{last_sync: null, stale: true,
+                            last_error: "no dashboard command configured: start the server with --dashboard-cmd"}}, now);
+      renderPill({{last_sync: {now_s} - 120, stale: false, last_error: null}}, now);
+      out.freshText = $("dash-pill-text").textContent;
+      out.freshClass = $("dash-pill").className;
+      renderPill({{last_sync: {now_s} - 10000, stale: true, last_error: null}}, now);
+      out.staleClass = $("dash-pill").className;
+      renderPill({{last_sync: {now_s} - 120, stale: false,
+                  last_error: "gh: not logged in"}}, now);
+      out.errorText = $("dash-pill-text").textContent;
+      out.errorClass = $("dash-pill").className;
+    """, prelude=FAKE_DOM)
+    assert got["fresh"] == "updated automatically · last sync 2 min ago · source: GitHub"
+    assert got["stale"] == "updated automatically · last sync 167 min ago · source: GitHub"
+    assert got["error"] == "gh: not logged in"
+    assert got["noCmd"] == "no dashboard command configured: start the server with --dashboard-cmd"
+    assert got["freshText"] == got["fresh"] and "stale" not in got["freshClass"].split()
+    assert "stale" in got["staleClass"].split()
+    # An error replaces the line outright — it is not appended beside a stale count.
+    assert got["errorText"] == "gh: not logged in" and "stale" not in got["errorClass"].split()
