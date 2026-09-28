@@ -1,0 +1,773 @@
+{
+  "schema": 1,
+  "generated_at": "2026-09-28T09:40:30Z",
+  "as_of": "2026-09-28T09:00:00Z",
+  "content": "ok",
+  "content_problem": null,
+  "company": {
+    "stage1": {
+      "due": "2026-12-08",
+      "days_left": 71,
+      "checks": [
+        {
+          "he": "Quick Start רץ ב-CI",
+          "done": true,
+          "link": "https://github.com/determlab/shal/issues/159"
+        },
+        {
+          "he": "סוכן קר בונה דרייבר או brick שעובר — 5 מתוך 10",
+          "done": false,
+          "link": ""
+        },
+        {
+          "he": "3 מהנדסים מבחוץ הריצו blueprint פעמיים",
+          "done": false,
+          "link": ""
+        }
+      ]
+    },
+    "timeline": [
+      {
+        "he": "Quick Start ב-CI",
+        "date": "2026-09-26",
+        "status": "done",
+        "link": "https://github.com/determlab/shal/issues/159"
+      },
+      {
+        "he": "המאגר עובד מקצה לקצה",
+        "date": "2026-09-27",
+        "status": "done",
+        "link": ""
+      },
+      {
+        "he": "עמדה 1 (שבב) בנויה",
+        "date": "2026-10-03",
+        "status": "not_started",
+        "link": "https://github.com/determlab/adk-lab/issues/11"
+      },
+      {
+        "he": "עמדה 2 (קושחה) בנויה",
+        "date": "2026-10-08",
+        "status": "not_started",
+        "link": "https://github.com/determlab/adk-lab/issues/12"
+      },
+      {
+        "he": "סוכן קר עובר את עמדות 1 ו-2",
+        "date": "2026-10-13",
+        "status": "not_started",
+        "link": ""
+      },
+      {
+        "he": "תיקונים בשאל ממה שהעמדות חשפו",
+        "date": "2026-10-24",
+        "status": "not_started",
+        "link": ""
+      },
+      {
+        "he": "SHAL 0.3.0 למשתמש ראשון",
+        "date": "2026-10-31",
+        "status": "done",
+        "link": "https://github.com/determlab/shal/issues/184"
+      },
+      {
+        "he": "routes: אבן דרך 1 (אחרי שער 2)",
+        "date": "2026-11-14",
+        "status": "not_started",
+        "link": "https://github.com/determlab/ops/issues/44"
+      },
+      {
+        "he": "עמדה 3 (סוף-קו, שני ערוצים)",
+        "date": "2026-11-21",
+        "status": "not_started",
+        "link": ""
+      },
+      {
+        "he": "ADK: 10 ריצות קרות",
+        "date": "2026-11-25",
+        "status": "not_started",
+        "link": "https://github.com/determlab/adk-lab/issues/2"
+      },
+      {
+        "he": "3 מהנדסים מבחוץ, פעמיים (אחרי שלב 1)",
+        "date": "2026-11-30",
+        "status": "not_started",
+        "link": ""
+      },
+      {
+        "he": "יציאה משלב 1",
+        "date": "2026-12-08",
+        "status": "not_started",
+        "link": ""
+      }
+    ]
+  },
+  "products": [
+    {
+      "key": "shal",
+      "name": "SHAL",
+      "repos": [
+        "shal"
+      ],
+      "goal_he": "SHAL 0.3.0 — מוכן למשתמש ראשון",
+      "due": "2026-10-31",
+      "provisional": false,
+      "work": {
+        "issues": 53,
+        "points_total": 149,
+        "points_done": 129,
+        "unsized": 42,
+        "percent": 87
+      },
+      "checks": [
+        {
+          "he": "שחרור ל-PyPI",
+          "done": true,
+          "link": "https://github.com/determlab/shal/issues/184"
+        },
+        {
+          "he": "Quick Start ב-CI מול PyPI",
+          "done": false,
+          "link": "https://github.com/determlab/shal/issues/188"
+        },
+        {
+          "he": "סוכן יכול הכל מה-CLI",
+          "done": true,
+          "link": "https://github.com/determlab/shal/issues/160"
+        },
+        {
+          "he": "אין דרייבר של יצרן בחבילה",
+          "done": true,
+          "link": "https://github.com/determlab/shal/issues/149"
+        },
+        {
+          "he": "HTTP עם GET",
+          "done": true,
+          "link": "https://github.com/determlab/shal/issues/104"
+        },
+        {
+          "he": "AGENTS.md ומדריך",
+          "done": true,
+          "link": "https://github.com/determlab/shal/issues/146"
+        },
+        {
+          "he": "3 דוגמאות",
+          "done": true,
+          "link": "https://github.com/determlab/shal/issues/209"
+        }
+      ]
+    },
+    {
+      "key": "adk",
+      "name": "ADK",
+      "repos": [
+        "adk-lab"
+      ],
+      "goal_he": "סוכן קר כותב דרייבר או brick שעובד — 5 מתוך 10",
+      "due": "2026-12-08",
+      "provisional": false,
+      "work": {
+        "issues": 8,
+        "points_total": 35,
+        "points_done": 9,
+        "unsized": 3,
+        "percent": 26
+      },
+      "checks": [
+        {
+          "he": "ה-runner",
+          "done": true,
+          "link": "https://github.com/determlab/adk-lab/issues/1"
+        },
+        {
+          "he": "6 תרחישים קרים חדשים",
+          "done": false,
+          "link": "https://github.com/determlab/adk-lab/issues/2"
+        },
+        {
+          "he": "הקיר קורא את ה-ADK מהחבילה",
+          "done": false,
+          "link": "https://github.com/determlab/adk-lab/issues/8"
+        }
+      ]
+    },
+    {
+      "key": "pytest-shal",
+      "name": "pytest-shal",
+      "repos": [
+        "pytest-shal"
+      ],
+      "goal_he": "pytest עם SHAL — גרסה 0.1; v1: מריץ blueprint של Bricks",
+      "due": "2026-10-31",
+      "provisional": false,
+      "work": {
+        "issues": 8,
+        "points_total": 20,
+        "points_done": 6,
+        "unsized": 6,
+        "percent": 30
+      },
+      "checks": [
+        {
+          "he": "החבילה",
+          "done": true,
+          "link": "https://github.com/determlab/pytest-shal/issues/1"
+        }
+      ]
+    },
+    {
+      "key": "bricks",
+      "name": "Bricks",
+      "repos": [
+        "bricks"
+      ],
+      "goal_he": "v1: blueprint עם pass/fail, יחידה 2, רשומה ליחידה, ADK ל-bricks",
+      "due": null,
+      "provisional": true,
+      "work": {
+        "issues": 12,
+        "points_total": 32,
+        "points_done": 21,
+        "unsized": 8,
+        "percent": 66
+      },
+      "checks": []
+    },
+    {
+      "key": "aos",
+      "name": "AOS",
+      "repos": [
+        "aos"
+      ],
+      "goal_he": "מושהה עד של-v1 יש משתמש (ops#70)",
+      "due": null,
+      "provisional": true,
+      "work": {
+        "issues": 3,
+        "points_total": 7,
+        "points_done": 7,
+        "unsized": 2,
+        "percent": 100
+      },
+      "checks": [
+        {
+          "he": "אכיפת מצב ה-grant",
+          "done": true,
+          "link": "https://github.com/determlab/aos/issues/3"
+        }
+      ]
+    },
+    {
+      "key": "predictor",
+      "name": "Predictor",
+      "repos": [
+        "predictor"
+      ],
+      "goal_he": "מושהה עד של-v1 יש משתמש (ops#70)",
+      "due": null,
+      "provisional": true,
+      "work": {
+        "issues": 0,
+        "points_total": 0,
+        "points_done": 0,
+        "unsized": 0,
+        "percent": null
+      },
+      "checks": []
+    },
+    {
+      "key": "infra",
+      "name": "תשתית",
+      "repos": [
+        "ops",
+        "agora"
+      ],
+      "goal_he": "ה-pool, Zulip, ה-watchdog והדשבורד",
+      "due": null,
+      "provisional": false,
+      "work": {
+        "issues": 127,
+        "points_total": 366,
+        "points_done": 210,
+        "unsized": 98,
+        "percent": 57
+      },
+      "checks": [
+        {
+          "he": "הדשבורד",
+          "done": false,
+          "link": "https://github.com/determlab/ops/issues/30"
+        },
+        {
+          "he": "Zulip בלי תיוג",
+          "done": true,
+          "link": "https://github.com/determlab/agora/issues/50"
+        }
+      ]
+    }
+  ],
+  "stuck": [
+    {
+      "check": "NEEDSHUMAN",
+      "repo": "adk-lab",
+      "number": 12,
+      "text": "agent:needs-human: Station 2: the firmware test bench (STM32 bootloader rig, oracle, docs, verify) — before 0.3.0"
+    },
+    {
+      "check": "NEEDSHUMAN",
+      "repo": "adk-lab",
+      "number": 11,
+      "text": "agent:needs-human: Station 1: the chip validation bench (tier-2 rig, oracle, docs, verify) — before 0.3.0"
+    },
+    {
+      "check": "NEEDSHUMAN",
+      "repo": "agora",
+      "number": 82,
+      "text": "agent:needs-human: A2 — `chat/page.html`: the panel, side by side at 1280 px, the sync pill, today's cards, live on the `dashboard` event"
+    },
+    {
+      "check": "NEEDSHUMAN",
+      "repo": "agora",
+      "number": 74,
+      "text": "agent:needs-human: chat server: the endpoints the new page needs - delete stream, read state + unread counts"
+    },
+    {
+      "check": "NEEDSHUMAN",
+      "repo": "ops",
+      "number": 71,
+      "text": "agent:needs-human: pool: use the determlab-pool GitHub App token so PRs are bot-authored and the CTO can merge type A"
+    },
+    {
+      "check": "NEEDSHUMAN",
+      "repo": "ops",
+      "number": 62,
+      "text": "agent:needs-human: pool: a worker that can make a venv and run release jobs (no by-hand session)"
+    },
+    {
+      "check": "NEEDSHUMAN",
+      "repo": "ops",
+      "number": 58,
+      "text": "agent:needs-human: Wire guard_scope.py to scope_rules.py and add the Bash matcher (by hand, founder)"
+    },
+    {
+      "check": "NEEDSHUMAN",
+      "repo": "ops",
+      "number": 57,
+      "text": "agent:needs-human: scope_rules.py: pure write-scope rules for the guard (Bash, owner, pool worktrees) + tests"
+    },
+    {
+      "check": "NEEDSHUMAN",
+      "repo": "ops",
+      "number": 46,
+      "text": "agent:needs-human: loop-settings.json: pool coders cannot read main's required status checks, so a PASS never auto-merges"
+    },
+    {
+      "check": "NEEDSHUMAN",
+      "repo": "ops",
+      "number": 36,
+      "text": "agent:needs-human: A stopped coder resumes its own session (claude -p --resume) instead of a new coder starting cold"
+    },
+    {
+      "check": "NEEDSHUMAN",
+      "repo": "ops",
+      "number": 8,
+      "text": "agent:needs-human: guard_scope.py is blind to Bash — and it blocks the CMO from files the CMO owns"
+    },
+    {
+      "check": "NEEDSHUMAN",
+      "repo": "pytest-shal",
+      "number": 6,
+      "text": "agent:needs-human: Tighten the fence: protect approve.py and plugin.py, add mypy --strict to lint"
+    },
+    {
+      "check": "NEEDSHUMAN",
+      "repo": "shal",
+      "number": 237,
+      "text": "agent:needs-human: Routes M1 (4/5): agent surface — routes in shal tools, --via on shal call, MCP via argument, shal routes"
+    },
+    {
+      "check": "IDLE",
+      "repo": "pytest-shal",
+      "number": 0,
+      "text": "2 issue(s) at agent:go, nothing at agent:working"
+    },
+    {
+      "check": "IDLE",
+      "repo": "shal",
+      "number": 0,
+      "text": "3 issue(s) at agent:go, nothing at agent:working"
+    }
+  ],
+  "who_works": [
+    {
+      "repo": "adk-lab",
+      "number": 8,
+      "title": "The wall reads the ADK reference set from the installed package — ready to merge the day 0",
+      "via": "agent:working"
+    },
+    {
+      "repo": "adk-lab",
+      "number": 10,
+      "title": "The wall reads the ADK reference set from the installed package — held for 0.3.0 (#8)",
+      "via": "PR from agent/8-adk-wall"
+    },
+    {
+      "repo": "agora",
+      "number": 55,
+      "title": "#all: one stream where the founder talks to every role — a role wakes only when mentioned,",
+      "via": "agent:working"
+    },
+    {
+      "repo": "agora",
+      "number": 94,
+      "title": "A2 -- chat/page.html: dashboard panel, sync pill, cards, side by side at 1280px (round 2)",
+      "via": "PR from agent/82-r2"
+    },
+    {
+      "repo": "bricks",
+      "number": 48,
+      "title": "measure brick: (name, value, unit, min, max) -> one measurement row with pass",
+      "via": "agent:working"
+    },
+    {
+      "repo": "ops",
+      "number": 30,
+      "title": "The status dashboard: dashboard.py (data), a private Hebrew page (db + answer buttons), re",
+      "via": "agent:working"
+    },
+    {
+      "repo": "ops",
+      "number": 110,
+      "title": "GitHub Actions minutes: the heartbeat cron alone uses ~1,440 of the 2,000 free minutes/mon",
+      "via": "agent:working"
+    },
+    {
+      "repo": "ops",
+      "number": 116,
+      "title": "pool: at least 3 of 5 coders work on product repos (founder rule 2026-09-28)",
+      "via": "agent:working"
+    },
+    {
+      "repo": "ops",
+      "number": 119,
+      "title": "ops CI: cut Actions minutes (heartbeat cadence, Windows-job gating, digest estimate)",
+      "via": "PR from agent/110-r1"
+    },
+    {
+      "repo": "shal",
+      "number": 248,
+      "title": "agent: routes on the agent surface — routes in shal tools, --via, MCP via, shal routes (#2",
+      "via": "PR from agent/237-r1"
+    }
+  ],
+  "roles": [
+    {
+      "role": "CTO",
+      "state": "idle",
+      "doing": "Big feature: the E2E agent-test harness — drivers against b…",
+      "ref": "ops#52",
+      "url": "https://github.com/determlab/ops/issues/52"
+    },
+    {
+      "role": "CMO",
+      "state": "idle",
+      "doing": "CMO: verify the market table of channel pairs for the route…",
+      "ref": "ops#49",
+      "url": "https://github.com/determlab/ops/issues/49"
+    },
+    {
+      "role": "COO",
+      "state": "off",
+      "doing": "אין משימה פתוחה",
+      "ref": null,
+      "url": null
+    },
+    {
+      "role": "Pool",
+      "state": "busy",
+      "doing": "ops#66",
+      "ref": "ops#66",
+      "url": "https://github.com/determlab/ops/issues/66"
+    }
+  ],
+  "live": [
+    {
+      "ref": "bricks#48",
+      "round": 1,
+      "phase": "CODER round 1 for issue 48",
+      "claimed_min": 14,
+      "idle_min": -2,
+      "last_action": "Bash: cd \"C:/PlayGround/pool/runs/bricks-48-r1\" && git…",
+      "url": "https://github.com/determlab/bricks/issues/48"
+    },
+    {
+      "ref": "ops#110",
+      "round": 2,
+      "phase": "CODER round 2 for issue 110",
+      "claimed_min": 26,
+      "idle_min": 0,
+      "last_action": "Bash: python -m pytest -q --basetemp=C:/PlayGround/pool…",
+      "url": "https://github.com/determlab/ops/issues/110"
+    },
+    {
+      "ref": "ops#116",
+      "round": 1,
+      "phase": "Round 1 coder for issue 116",
+      "claimed_min": 19,
+      "idle_min": 0,
+      "last_action": "Bash: cd C:/PlayGround/pool/runs/ops-116-r1 && python -…",
+      "url": "https://github.com/determlab/ops/issues/116"
+    },
+    {
+      "ref": "ops#66",
+      "round": 1,
+      "phase": null,
+      "claimed_min": -1,
+      "idle_min": -2,
+      "last_action": "Read tests/test_watchdog_check.py",
+      "url": "https://github.com/determlab/ops/issues/66"
+    }
+  ],
+  "queue": [
+    {
+      "ref": "adk-lab#8",
+      "title": "The wall reads the ADK reference set from the installed package — ready to merge the day…",
+      "priority": "p0",
+      "url": "https://github.com/determlab/adk-lab/issues/8",
+      "claimed_now": true,
+      "needs_human": false
+    },
+    {
+      "ref": "ops#57",
+      "title": "scope_rules.py: pure write-scope rules for the guard (Bash, owner, pool worktrees) + tests",
+      "priority": "p0",
+      "url": "https://github.com/determlab/ops/issues/57",
+      "claimed_now": false,
+      "needs_human": true
+    },
+    {
+      "ref": "agora#82",
+      "title": "A2 — `chat/page.html`: the panel, side by side at 1280 px, the sync pill, today's cards,…",
+      "priority": "p0",
+      "url": "https://github.com/determlab/agora/issues/82",
+      "claimed_now": false,
+      "needs_human": true
+    },
+    {
+      "ref": "pytest-shal#6",
+      "title": "Tighten the fence: protect approve.py and plugin.py, add mypy --strict to lint",
+      "priority": "p1",
+      "url": "https://github.com/determlab/pytest-shal/issues/6",
+      "claimed_now": false,
+      "needs_human": true
+    },
+    {
+      "ref": "ops#46",
+      "title": "loop-settings.json: pool coders cannot read main's required status checks, so a PASS neve…",
+      "priority": "p1",
+      "url": "https://github.com/determlab/ops/issues/46",
+      "claimed_now": false,
+      "needs_human": true
+    },
+    {
+      "ref": "agora#74",
+      "title": "chat server: the endpoints the new page needs - delete stream, read state + unread counts",
+      "priority": "p1",
+      "url": "https://github.com/determlab/agora/issues/74",
+      "claimed_now": false,
+      "needs_human": true
+    },
+    {
+      "ref": "ops#62",
+      "title": "pool: a worker that can make a venv and run release jobs (no by-hand session)",
+      "priority": "p1",
+      "url": "https://github.com/determlab/ops/issues/62",
+      "claimed_now": false,
+      "needs_human": true
+    },
+    {
+      "ref": "ops#66",
+      "title": "batch: ops watchdog",
+      "priority": "p1",
+      "url": "https://github.com/determlab/ops/issues/66",
+      "claimed_now": true,
+      "needs_human": false
+    },
+    {
+      "ref": "ops#110",
+      "title": "GitHub Actions minutes: the heartbeat cron alone uses ~1,440 of the 2,000 free minutes/mo…",
+      "priority": "p1",
+      "url": "https://github.com/determlab/ops/issues/110",
+      "claimed_now": true,
+      "needs_human": false
+    },
+    {
+      "ref": "ops#116",
+      "title": "pool: at least 3 of 5 coders work on product repos (founder rule 2026-09-28)",
+      "priority": "p1",
+      "url": "https://github.com/determlab/ops/issues/116",
+      "claimed_now": true,
+      "needs_human": false
+    },
+    {
+      "ref": "bricks#48",
+      "title": "measure brick: (name, value, unit, min, max) -> one measurement row with pass",
+      "priority": "p1",
+      "url": "https://github.com/determlab/bricks/issues/48",
+      "claimed_now": true,
+      "needs_human": false
+    },
+    {
+      "ref": "pytest-shal#7",
+      "title": "Depend on pyshal>=0.3.0 from PyPI, drop the git pin",
+      "priority": "p1",
+      "url": "https://github.com/determlab/pytest-shal/issues/7",
+      "claimed_now": false,
+      "needs_human": false
+    },
+    {
+      "ref": "shal#252",
+      "title": "sim-psu: a simulated PSU device (shal,sim-psu) with set_voltage, measure_voltage/current…",
+      "priority": "p1",
+      "url": "https://github.com/determlab/shal/issues/252",
+      "claimed_now": false,
+      "needs_human": false
+    },
+    {
+      "ref": "adk-lab#12",
+      "title": "Station 2: the firmware test bench (STM32 bootloader rig, oracle, docs, verify) — before…",
+      "priority": "p2",
+      "url": "https://github.com/determlab/adk-lab/issues/12",
+      "claimed_now": false,
+      "needs_human": true
+    },
+    {
+      "ref": "shal#250",
+      "title": "RELEASING.md: the two release paths (type A bump+changelog PR, type B founder gh release…",
+      "priority": "p2",
+      "url": "https://github.com/determlab/shal/issues/250",
+      "claimed_now": false,
+      "needs_human": false
+    },
+    {
+      "ref": "ops#111",
+      "title": "bricks pre-flight: widen the type B file list (ops#98 must come out B)",
+      "priority": "p2",
+      "url": "https://github.com/determlab/ops/issues/111",
+      "claimed_now": false,
+      "needs_human": false
+    },
+    {
+      "ref": "ops#113",
+      "title": "bricks shadow tally: record the CTO's comparison per PR and print n / agreement / missed B",
+      "priority": "p2",
+      "url": "https://github.com/determlab/ops/issues/113",
+      "claimed_now": false,
+      "needs_human": false
+    },
+    {
+      "ref": "shal#251",
+      "title": "shal records: read the record store from the CLI (filters, --json, a fix in every error)",
+      "priority": "p2",
+      "url": "https://github.com/determlab/shal/issues/251",
+      "claimed_now": false,
+      "needs_human": false
+    },
+    {
+      "ref": "pytest-shal#8",
+      "title": "Terminal summary: where the records went, counts per verdict, the failing record ids",
+      "priority": "p2",
+      "url": "https://github.com/determlab/pytest-shal/issues/8",
+      "claimed_now": false,
+      "needs_human": false
+    },
+    {
+      "ref": "bricks#51",
+      "title": "bricks check-brick: the ADK check for a brick, plus the new-brick scaffold fix and I3 in…",
+      "priority": "p2",
+      "url": "https://github.com/determlab/bricks/issues/51",
+      "claimed_now": false,
+      "needs_human": false
+    }
+  ],
+  "tokens": {
+    "weighted_24h": 170949282,
+    "cache_read_share": 0.984,
+    "by_session": [
+      {
+        "name": "COO",
+        "weighted": 97110826,
+        "share": 0.568
+      },
+      {
+        "name": "Pool (57 runs)",
+        "weighted": 40200622,
+        "share": 0.235
+      },
+      {
+        "name": "CTO",
+        "weighted": 30592961,
+        "share": 0.179
+      },
+      {
+        "name": "coder",
+        "weighted": 2875315,
+        "share": 0.017
+      },
+      {
+        "name": "CMO",
+        "weighted": 169558,
+        "share": 0.001
+      }
+    ]
+  },
+  "week": {
+    "points_closed": 321,
+    "points_closed_previous": 0,
+    "percent_of_company": 52.7,
+    "median_go_to_close_h": 1.3
+  },
+  "next_moves": [
+    {
+      "id": "sim-rigs",
+      "q_he": "לאשר לבנות את 3 ה-rigs המדומים?",
+      "why_he": "מתוכננים (שבב, סוף-קו, קושחה). כן = מתחילים מבדיקת השבב.",
+      "link": "https://github.com/determlab/ops/blob/main/projects/shal/specs/adk.md"
+    },
+    {
+      "id": "pool-perm-2",
+      "q_he": "הרשאות pool, חלק 2 — לאשר?",
+      "why_he": "בלי זה ה-pool לא שומר עבודה. ריצת pool ≈ 0.1M טוקנים, Coder2 שרף 85M.",
+      "link": "https://github.com/determlab/ops/pull/21"
+    },
+    {
+      "id": "coder2-approvals",
+      "q_he": "לאשר 3 פעולות בחלון של Coder2?",
+      "why_he": "בדיקת הבטיחות שלו עצרה: CHANGELOG של 0.3.0, aos #3, ערוץ #all.",
+      "link": "https://github.com/determlab/agora/issues/55"
+    },
+    {
+      "id": "pytest-shal-fence",
+      "q_he": "להדק את ה-fence של pytest-shal?",
+      "why_he": "להגן על קבצי האישור ולהוסיף mypy. משנה .agent-loop.yml — רק במילה שלך.",
+      "link": "https://github.com/determlab/pytest-shal/pull/4"
+    },
+    {
+      "id": "pytest-shal-public",
+      "q_he": "להפוך את pytest-shal לציבורי?",
+      "why_he": "כל השאר ציבוריים. בלי זה אין CI חובה ואני ממזג ידנית.",
+      "link": "https://github.com/determlab/pytest-shal"
+    },
+    {
+      "id": "guard-hook",
+      "q_he": "לאשר תיקון ל-guard hook (ops #8)?",
+      "why_he": "הוא לא רואה פקודות Bash וחוסם את ה-CMO מהקבצים שלו. זו בקרת הרשאות.",
+      "link": "https://github.com/determlab/ops/issues/8"
+    },
+    {
+      "id": "zulip-settings",
+      "q_he": "ב-Zulip: ערוצים פרטיים + עריכת הודעות 'Any time'?",
+      "why_he": "שתי לחיצות בהגדרות. הערוצים עדיין ציבוריים, והודעת #status לא מתעדכנת אחרי 10 דקות.",
+      "link": "http://127.0.0.1:8090"
+    }
+  ]
+}

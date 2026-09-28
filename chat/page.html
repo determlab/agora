@@ -198,6 +198,30 @@ dialog .buttons { display: flex; justify-content: flex-end; gap: .5rem; margin-t
   #app.side-open #side { transform: none; }
   #menu-btn { display: inline-block; }
 }
+/* A2 (#82): #dash is the human view of GET /api/v1/dashboard, side by side
+   with chat at 1280px and up (the founder's side-by-side rule). Below that,
+   #view-switch (spanning the grid's full width, so it survives either pane
+   being hidden) shows one of #main / #dash at a time. */
+#view-switch { grid-column: 1 / -1; display: none; gap: .25rem; padding: .4rem .75rem;
+  border-bottom: 1px solid var(--line); background: var(--panel); }
+#view-switch button.active { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
+#dash { overflow: auto; padding: .75rem 1rem; display: flex; flex-direction: column; gap: .75rem; }
+.dash-pill { display: flex; align-items: center; justify-content: space-between; gap: .5rem;
+  padding: .4rem .6rem; border: 1px solid var(--line); border-radius: 8px; font-size: 12px; color: var(--muted); }
+/* Amber, not red: a stale dashboard is a document that is still trusted, only old. */
+.dash-pill.stale { color: var(--wait); border-color: var(--wait); }
+.dash-card h3 { margin: 0 0 .35rem; font-size: 13px; }
+.dash-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: .2rem; }
+.dash-list li { display: flex; justify-content: space-between; gap: .5rem; font-size: 12.5px; }
+.dash-label { font-weight: 600; }
+@media (max-width: 1279px) {
+  #view-switch { display: flex; }
+}
+@media (min-width: 1280px) {
+  #app { grid-template-columns: 16rem 1fr 1fr; }
+  /* Side by side: the switch's choice of pane only matters below 1280px. */
+  #main[hidden], #dash[hidden] { display: flex !important; }
+}
 </style>
 </head>
 <body>
@@ -221,6 +245,10 @@ dialog .buttons { display: flex; justify-content: flex-end; gap: .5rem; margin-t
 </section>
 
 <div id="app" hidden>
+  <div id="view-switch">
+    <button type="button" id="view-chat" class="btn active">צ'אט</button>
+    <button type="button" id="view-dash" class="btn">לוח מחוונים</button>
+  </div>
   <nav id="side">
     <div id="brand"><span id="logo" dir="ltr">agora</span></div>
     <div id="me-row">
@@ -263,6 +291,20 @@ dialog .buttons { display: flex; justify-content: flex-end; gap: .5rem; margin-t
       <p id="send-error" class="error" hidden></p>
     </div>
   </main>
+  <aside id="dash" hidden>
+    <div id="dash-pill" class="dash-pill">
+      <span id="dash-pill-text"></span>
+      <button type="button" id="dash-sync" class="btn">רענן עכשיו</button>
+    </div>
+    <section class="dash-card" id="dash-live"><h3></h3><div class="dash-body"></div></section>
+    <section class="dash-card" id="dash-waiting"><h3></h3><div class="dash-body"></div></section>
+    <section class="dash-card" id="dash-roles"><h3></h3><div class="dash-body"></div></section>
+    <section class="dash-card" id="dash-queue"><h3></h3><div class="dash-body"></div></section>
+    <section class="dash-card" id="dash-prs" hidden><h3></h3><div class="dash-body"></div></section>
+    <section class="dash-card" id="dash-week"><h3></h3><div class="dash-body"></div></section>
+    <section class="dash-card" id="dash-products"><h3></h3><div class="dash-body"></div></section>
+    <section class="dash-card" id="dash-stuck"><h3></h3><div class="dash-body"></div></section>
+  </aside>
   <aside id="members-panel" class="drawer" aria-labelledby="members-head">
     <div class="drawer-head">
       <h2 id="members-head">חברים ב-<span id="members-title" dir="auto"></span></h2>
@@ -336,7 +378,7 @@ const CARET = "M4 6l4 4 4-4";
 const GEAR = "M8 5.6a2.4 2.4 0 1 0 0 4.8 2.4 2.4 0 0 0 0-4.8zM8 1.5v2M8 12.5v2M1.5 8h2M12.5 8h2"
            + "M3.4 3.4l1.4 1.4M11.2 11.2l1.4 1.4M3.4 12.6l1.4-1.4M11.2 4.8l1.4-1.4";
 const S = {
-  creds: null, gen: 0, queue: null, lastEvent: -1, me: null, sending: false,
+  creds: null, gen: 0, queue: null, lastEvent: -1, me: null, sending: false, dashboard: null,
   streams: [],          // [{stream_id, name, invite_only}]
   topics: new Map(),    // stream name -> Map(topic -> newest message id)
   collapsed: new Set(), // stream ids whose topics are folded away
@@ -655,12 +697,13 @@ async function start() {
 // Register first, then load: a message sent in between arrives as an event
 // and the id set keeps it from showing twice.
 async function connect(gen) {
-  const reg = await api("POST", "register", {event_types: ["message"]});
+  const reg = await api("POST", "register", {event_types: ["message", "dashboard"]});
   if (gen !== S.gen) return;
   S.queue = reg.queue_id;
   S.lastEvent = reg.last_event_id;
   await loadStreams();
   if (S.open) await openTopic(S.open.stream_id, S.open.stream, S.open.topic);
+  await loadDashboard();  // once on load, and again on every reconnect through here
   setLive("live", "מחובר");
 }
 
@@ -701,8 +744,192 @@ async function poll(gen) {
     for (const ev of got.events) {
       S.lastEvent = Math.max(S.lastEvent, ev.id);
       if (ev.type === "message") onMessage(ev.message);
+      // Not awaited: a dashboard refresh must never hold up the message poll
+      // loop, and loadDashboard() only ever replaces S.dashboard wholesale.
+      else if (ev.type === "dashboard") loadDashboard();
     }
   }
+}
+
+// -- the dashboard panel (issue #82): the human view of the same document an
+// agent reads from GET /api/v1/dashboard. Every card below is fed by one
+// named section of that document, through a single shared list renderer —
+// each card's own function says only which section and how to filter it.
+
+// The pill's text: an error (which is also how "no dashboard command
+// configured" reaches the page, per chat/server.py) replaces the normal line
+// outright, so a human sees why there is nothing fresh instead of a stale
+// timestamp sitting next to a silent problem. `now` (ms) is a parameter so
+// this stays pure and testable; live callers omit it and get Date.now().
+function pillText(d, now) {
+  if (d.last_error) return d.last_error;
+  if (now === undefined) now = Date.now();
+  const mins = d.last_sync == null ? null : Math.max(0, Math.round(now / 1000 / 60 - d.last_sync / 60));
+  return "updated automatically · last sync " + (mins == null ? "never" : mins + " min") + " ago · source: GitHub";
+}
+
+function renderPill(d, now) {
+  $("dash-pill-text").textContent = pillText(d, now);
+  $("dash-pill").classList.toggle("stale", !!d.stale);
+}
+
+// One row shape, {label, detail, url}, covers every card except "open PRs by
+// type": a list of rows, rendered as text through textContent alone; `url`
+// (when a row has one) makes the label a link instead of plain text — still
+// built with createElement and textContent, never a markup sink.
+function renderRows(rows) {
+  const ul = document.createElement("ul");
+  ul.className = "dash-list";
+  for (const row of rows || []) {
+    const li = document.createElement("li");
+    const label = document.createElement(row.url ? "a" : "span");
+    if (row.url) { label.href = row.url; label.target = "_blank"; label.rel = "noopener"; }
+    label.className = "dash-label";
+    label.textContent = row.label || "";
+    li.append(label);
+    if (row.detail) {
+      const detail = document.createElement("span");
+      detail.className = "dash-detail muted";
+      detail.textContent = row.detail;
+      li.append(detail);
+    }
+    ul.append(li);
+  }
+  if (!ul.children.length) {
+    const li = document.createElement("li");
+    li.className = "dash-empty muted";
+    li.textContent = "—";
+    ul.append(li);
+  }
+  return ul;
+}
+
+// The mappers below turn one producer row into the {label, detail, url}
+// shape renderRows wants. Field names follow the CTO's review of PR #90
+// (round 1) — https://github.com/determlab/agora/pull/90#issuecomment-5866601187
+// — which named the real shape `ops/tools/dashboard.py` `build()` sends;
+// round 1 had invented a `{label, detail}` shape no producer ever filled, so
+// every card but "open PRs by type" read empty against the live server.
+// Only these functions, and the fixture in tests/fixtures/dashboard-doc.json,
+// should need to change if the real fields drift further from that review.
+
+function joinDetail(...parts) { return parts.filter((p) => p !== null && p !== undefined && p !== "").join(" · "); }
+
+// pool now: one row per agent/session currently on a ref.
+function renderLive(rows) {
+  return renderRows((rows || []).map((r) => ({
+    label: r.ref, url: r.url,
+    detail: joinDetail(r.phase, r.round != null ? "round " + r.round : null,
+                        r.claimed_min != null ? "claimed " + r.claimed_min + "m ago" : null,
+                        r.idle_min != null ? "idle " + r.idle_min + "m" : null,
+                        r.last_action),
+  })));
+}
+
+// stuck: every row the producer flags, regardless of who it is blocking on;
+// `repo`/`number` are the issue or PR's own coordinates, not a link (the
+// producer sends no `url` for these).
+function stuckRow(r) {
+  return {label: (r.repo || "") + (r.number != null ? "#" + r.number : ""),
+          detail: joinDetail(r.check, r.text)};
+}
+function renderStuck(rows) { return renderRows((rows || []).map(stuckRow)); }
+
+// "waiting for you" is not a section of its own: it is the founder's own
+// rows out of `stuck` — the ones flagged NEEDSHUMAN, not another agent's.
+// (Round 1 filtered `who_works` too, by a `for` field the real document
+// does not have, so those rows never showed; `who_works` carries no such
+// flag at all, so it is not consulted here.)
+function renderWaiting(stuck) {
+  return renderRows((stuck || []).filter((r) => r.check === "NEEDSHUMAN").map(stuckRow));
+}
+
+// who works on what: one row per role, its current state and task; `ref`
+// links to whatever it is currently on, when there is one.
+function renderRoles(rows) {
+  return renderRows((rows || []).map((r) => ({
+    label: r.role, url: r.url,
+    detail: joinDetail(r.state, r.doing, r.ref),
+  })));
+}
+
+// the queue by priority: `priority` already reads like "p1", so "#" + it is
+// enough — no re-numbering needed. `claimed_now` / `needs_human` are flags,
+// not text, so they only add a word when true.
+function renderQueue(rows) {
+  return renderRows((rows || []).map((r) => ({
+    label: joinDetail(r.priority != null ? "#" + r.priority : null, r.ref),
+    url: r.url,
+    detail: joinDetail(r.title, r.claimed_now ? "claimed" : null, r.needs_human ? "needs human" : null),
+  })));
+}
+
+// the week: not a list of rows at all but four company-wide counters, so
+// the rows are built here rather than passed straight through.
+function renderWeek(w) {
+  const rows = [];
+  if (w && w.points_closed != null) rows.push({label: "points closed", detail: String(w.points_closed)});
+  if (w && w.points_closed_previous != null) rows.push({label: "vs last week", detail: String(w.points_closed_previous)});
+  if (w && w.percent_of_company != null) rows.push({label: "% of company", detail: w.percent_of_company + "%"});
+  if (w && w.median_go_to_close_h != null) rows.push({label: "median time to close", detail: w.median_go_to_close_h + "h"});
+  return renderRows(rows);
+}
+
+// products: `goal_he` is the product's goal in Hebrew — the one line worth
+// showing next to its name; `due`, `work` and `checks` follow when present.
+// `work` is an object and `checks` a list, so each is summed up into text here
+// (round 2 passed them straight through and the card printed [object Object]).
+function renderProducts(rows) {
+  return renderRows((rows || []).map((r) => {
+    const w = r.work;
+    const work = w && w.points_total != null
+      ? w.points_done + "/" + w.points_total + " pts" + (w.percent != null ? " (" + w.percent + "%)" : "")
+      : null;
+    const checks = Array.isArray(r.checks) && r.checks.length
+      ? r.checks.filter((c) => c.done).length + "/" + r.checks.length + " checks" : null;
+    return {label: r.name,
+            detail: joinDetail(r.goal_he, r.due ? "due " + r.due : null, work, checks)};
+  }));
+}
+
+// Grouped by type; the card itself stays hidden when the section is absent
+// (renderDashboard never calls this without checking doc.prs first).
+function renderPrs(byType) {
+  const wrap = document.createElement("div");
+  for (const [type, rows] of Object.entries(byType || {})) {
+    const h = document.createElement("h4");
+    h.textContent = type;
+    wrap.append(h, renderRows(rows));
+  }
+  return wrap;
+}
+
+function mountCard(id, node) {
+  $(id).querySelector(".dash-body").replaceChildren(node);
+}
+
+function renderDashboard(d) {
+  renderPill(d);
+  const doc = d.doc || {};
+  mountCard("dash-live", renderLive(doc.live));
+  mountCard("dash-waiting", renderWaiting(doc.stuck));
+  mountCard("dash-roles", renderRoles(doc.roles));
+  mountCard("dash-queue", renderQueue(doc.queue));
+  mountCard("dash-week", renderWeek(doc.week));
+  mountCard("dash-products", renderProducts(doc.products));
+  mountCard("dash-stuck", renderStuck(doc.stuck));
+  $("dash-prs").hidden = !doc.prs;
+  if (doc.prs) mountCard("dash-prs", renderPrs(doc.prs));
+}
+
+// The one place GET /api/v1/dashboard is fetched from: on load, on every
+// "dashboard" event and on reconnect, all through connect() and poll() above.
+// A failed fetch renders as its own error line rather than leaving the last
+// good render in place silently unlabeled as stale.
+async function loadDashboard() {
+  try { S.dashboard = await api("GET", "dashboard"); }
+  catch (e) { S.dashboard = {doc: null, last_sync: null, stale: true, last_error: e.message}; }
+  renderDashboard(S.dashboard);
 }
 
 function onMessage(m) {
@@ -1357,9 +1584,41 @@ document.addEventListener("keydown", (e) => {
   if (e.key === "Escape" && !e.defaultPrevented && $("members-panel").classList.contains("open")) closeMembers();
 });
 
-// -- chrome: sidebar on a narrow screen, theme, keys
+// -- chrome: sidebar on a narrow screen, the dashboard switch, theme, keys
 
 $("menu-btn").addEventListener("click", () => $("app").classList.toggle("side-open"));
+
+// Titles set once, here, rather than written into the markup: every other
+// string on this page that is not static Hebrew chrome goes through
+// textContent from a render function, and these are no exception.
+const DASH_TITLES = {
+  "dash-live": "pool now", "dash-waiting": "waiting for you", "dash-roles": "who works on what",
+  "dash-queue": "the queue by priority", "dash-prs": "open PRs by type", "dash-week": "the week",
+  "dash-products": "products", "dash-stuck": "stuck",
+};
+for (const [id, title] of Object.entries(DASH_TITLES)) {
+  $(id).querySelector("h3").textContent = title;
+}
+
+// Below 1280px only one of #main / #dash shows; the media query in the
+// stylesheet forces both visible at 1280px and up regardless of this.
+function setView(view) {
+  $("main").hidden = view !== "chat";
+  $("dash").hidden = view !== "dash";
+  $("view-chat").classList.toggle("active", view === "chat");
+  $("view-dash").classList.toggle("active", view === "dash");
+}
+$("view-chat").addEventListener("click", () => setView("chat"));
+$("view-dash").addEventListener("click", () => setView("dash"));
+
+$("dash-sync").addEventListener("click", async () => {
+  $("dash-sync").disabled = true;
+  try { await api("POST", "dashboard/sync"); }
+  catch (e) { toast("לא סונכרן: " + e.message, true); }
+  // Reload either way: a failed sync still changes last_error, and the pill
+  // must show what the server now holds, not what was asked (D3's shape).
+  finally { await loadDashboard(); $("dash-sync").disabled = false; }
+});
 
 function applyTheme(theme) {
   if (theme === "dark" || theme === "light") document.documentElement.dataset.theme = theme;
