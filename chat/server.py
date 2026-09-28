@@ -404,7 +404,7 @@ class Dashboard:
         with self.running:
             try:
                 done = subprocess.run(shlex.split(self.cmd), capture_output=True, text=True,
-                                      encoding="utf-8", errors="replace", timeout=self.timeout)
+                                      timeout=self.timeout)
             except subprocess.TimeoutExpired as e:
                 err = e.stderr.decode("utf-8", "replace") if isinstance(e.stderr, bytes) \
                     else (e.stderr or "")
@@ -419,12 +419,6 @@ class Dashboard:
                 err = (done.stderr or "").strip()
                 self.last_error = (err or f"exited {done.returncode} with nothing on "
                                           f"stderr: {self.cmd}")[-500:]
-                return False, self.last_error.splitlines()[-1]
-            if not done.stdout:
-                err = (done.stderr or "").strip()
-                self.last_error = (f"{err}\n" if err else "") + \
-                    f"exited 0 but printed nothing on stdout: {self.cmd}"
-                self.last_error = self.last_error[-500:]
                 return False, self.last_error.splitlines()[-1]
             ts = int(self.clock())
             with self.s.tx():
@@ -446,21 +440,15 @@ class Dashboard:
             return {"doc": None, "last_sync": None, "stale": True, "last_error": NO_DASHBOARD}
         row = self.s.one("SELECT ts, doc FROM dashboard ORDER BY ts DESC LIMIT 1")
         doc = None
-        last_error = self.last_error
         if row is not None:
             try:
                 doc = json.loads(row["doc"])
-            except (ValueError, TypeError):
-                # exit 0 with text that is not JSON: shown as it came. A stored
-                # `NULL` (or any other non-str/bytes) hits TypeError, not
-                # ValueError — a bad row must never raise out of state().
-                doc = row["doc"]
-                if doc is None:
-                    last_error = last_error or "the stored dashboard document is empty"
+            except ValueError:
+                doc = row["doc"]  # exit 0 with text that is not JSON: shown as it came
         last = row["ts"] if row is not None else None
         return {"doc": doc, "last_sync": last,
                 "stale": last is None or self.clock() - last > DASHBOARD_STALE,
-                "last_error": last_error}
+                "last_error": self.last_error}
 
 
 class Chat:

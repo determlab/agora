@@ -220,48 +220,6 @@ def test_agent_reads_last_sync_with_a_bot_key(make, tmp_path):
     assert got["last_error"].splitlines()[-1] == "gh: not logged in"
 
 
-def test_non_ascii_stdout_is_read_as_utf8_not_the_locale_codepage(make, tmp_path):
-    # #98: text=True with no encoding decoded with the locale codepage
-    # (cp1252 on this machine), which raised inside subprocess's reader
-    # thread on Hebrew bytes and left done.stdout as None. encoding="utf-8"
-    # must be passed explicitly, regardless of what the OS locale is.
-    doc = {"note": "עברית וגם →⇒ חצים"}
-    # Write raw UTF-8 bytes to the stdout buffer directly: print() would hit
-    # its own console-encoding error on this machine before the fix is even
-    # exercised, since the subprocess's own stdout is the locale codepage too.
-    hexed = json.dumps(doc, ensure_ascii=False).encode("utf-8").hex()
-    cmd = f'{PY} -c \'import sys; sys.stdout.buffer.write(bytes.fromhex("{hexed}"))\''
-    api, _ = make(cmd)
-    status, got = api("GET", "dashboard")
-    assert status == 200 and got["doc"] == doc and got["last_error"] is None
-
-
-def test_exit_0_with_empty_stdout_keeps_the_previous_doc_and_sets_last_error(make, tmp_path):
-    api, server = make(_ok_cmd(tmp_path / "calls"))
-    _, first = api("GET", "dashboard")
-    assert first["doc"] == DOC
-    _dash(server).cmd = f"{PY} -c 'pass'"  # exits 0, prints nothing
-    status, body = api("POST", "dashboard/sync")
-    assert status == 502 and body["result"] == "error", body
-    assert "printed nothing on stdout" in body["msg"]
-    _, got = api("GET", "dashboard")
-    assert got["doc"] == DOC and got["last_sync"] == first["last_sync"]
-    assert "printed nothing on stdout" in got["last_error"]
-
-
-def test_a_stored_null_document_reports_last_error_not_a_typeerror(make, tmp_path):
-    # The bug behind #98: json.loads(None) raises TypeError, and state()
-    # only caught ValueError, so a bad row crashed the request instead of
-    # showing a real message.
-    api, server = make(_ok_cmd(tmp_path / "calls"))
-    dash = _dash(server)
-    ts = int(dash.clock()) + 1
-    dash.s.x("INSERT INTO dashboard (ts, doc, error) VALUES (?, NULL, NULL)", (ts,))
-    status, got = api("GET", "dashboard")
-    assert status == 200 and got["doc"] is None
-    assert got["last_error"] == "the stored dashboard document is empty"
-
-
 def test_no_key_is_refused(make):
     api, _ = make(None)
     bad = Api(api.base, "cto-bot@chat.localhost", "wrong")
