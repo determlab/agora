@@ -1245,7 +1245,9 @@ def test_85_a_hebrew_message_with_a_link_renders_as_dom_nodes_and_keeps_rtl_orde
     assert 'id="send-status"' not in PAGE.read_text(encoding="utf-8")
 
 
-# -- issue #82: the dashboard panel, side by side with chat at 1280px
+# -- issue #82: the dashboard panel. Revised on agora#100 (founder ruling):
+# full width with a chat/board switch, chat and the board never shown
+# together, at every viewport size — not just side by side at 1280px.
 
 
 def test_page_registers_for_dashboard_events():
@@ -1257,14 +1259,30 @@ def test_page_registers_for_dashboard_events():
 
 def test_page_has_the_panel_and_the_switch():
     text = PAGE.read_text(encoding="utf-8")
-    for needle in ('id="dash"', 'id="view-chat"', 'id="view-dash"', "1280px"):
+    for needle in ('id="dash"', 'id="view-chat"', 'id="view-dash"'):
         assert needle in text, needle
-    assert "@media (min-width: 1280px)" in text and "@media (max-width: 1279px)" in text
+    # agora#100: chat and the board are never shown together at any width —
+    # the side-by-side-at-1280px rule (agora#82) is gone.
+    assert "1280px" not in text
     # The switch survives either pane being hidden: it is its own element,
-    # not nested inside #main or #dash.
+    # not nested inside #side, #main or #dash.
     m = _markup()
     ids = [a.get("id") for _, a in m.elements]
+    assert ids.index("view-switch") < ids.index("side")
     assert ids.index("view-switch") < ids.index("main") and ids.index("view-switch") < ids.index("dash")
+
+
+def test_the_board_view_hides_the_sidebar_and_chat_not_just_chat():
+    # agora#100: "when the board is shown, hide the channel list and the
+    # chat; the switch brings them back" — setView("dash") must hide #side
+    # too, not only #main, so the board gets the full width.
+    script = _markup().script
+    m = re.search(r"function setView\(view\) \{.*?\n\}", script, re.S)
+    assert m, "setView not found"
+    body = m.group(0)
+    assert re.search(r'\$\("side"\)\.hidden\s*=\s*view\s*!==\s*"chat"', body)
+    assert re.search(r'\$\("main"\)\.hidden\s*=\s*view\s*!==\s*"chat"', body)
+    assert re.search(r'\$\("dash"\)\.hidden\s*=\s*view\s*!==\s*"dash"', body)
 
 
 # The real document: `python tools/dashboard.py --out` from ops, 2026-09-28,

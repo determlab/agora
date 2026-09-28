@@ -1761,7 +1761,7 @@ for (const [id, title] of Object.entries(DASH_TITLES)) {
 
 // Chat and the board are never shown together (founder's ruling on agora#100):
 // the switch hides the channel list and chat and gives the board the full
-// width, at every viewport size — not just below 1280px.
+// width, at every viewport size.
 function setView(view) {
   $("side").hidden = view !== "chat";
   $("main").hidden = view !== "chat";
