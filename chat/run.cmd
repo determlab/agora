@@ -8,4 +8,4 @@ set PY=%LOCALAPPDATA%\Programs\Python\Python312\python.exe
 if not exist "%PY%" set PY=py
 set DASH_PY=%PY:\=/%
 cd /d "%~dp0.."
-"%PY%" chat\server.py up --dashboard-cmd "\"%DASH_PY%\" C:/PlayGround/ops/tools/dashboard.py --json" %*
+"%PY%" chat\server.py up --dashboard-cmd "\"%DASH_PY%\" C:/PlayGround/ops/tools/dashboard.py --json --no-tokens" %*

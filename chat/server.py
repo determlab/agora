@@ -81,7 +81,7 @@ QUEUE_TTL = 7 * 24 * 3600  # a queue nobody polled for this long is gone
 # wake rule that is a mention like any other.
 WILDCARDS = ("@**all**", "@**everyone**", "@**channel**", "@**stream**")
 DASHBOARD_EVERY = 300.0  # seconds between --dashboard-cmd runs (RFC-002 §1)
-DASHBOARD_TIMEOUT = 120.0  # a run past this stores nothing
+DASHBOARD_TIMEOUT = 300.0  # a run past this stores nothing (dashboard.py --json --no-tokens takes ~113 s here)
 DASHBOARD_STALE = 7200  # a document older than this is `stale`
 DASHBOARD_KEEP = 24 * 3600  # rows older than this go on the next good sync
 NO_DASHBOARD = "no dashboard command configured: start the server with --dashboard-cmd"
