@@ -122,9 +122,9 @@ def test_setup_creates_watchdog_on_status_and_coo_only(capsys):
     assert wd["is_bot"] and wd["email"] == "watchdog-bot@x"
     assert _bot_streams(z, "Watchdog") == {"status", "coo"}
     # role bots: each in its own stream, plus #feature for CTO and COO (#56),
-    # plus #pool for the COO (#80)
-    assert _bot_streams(z, "COO") == {"coo", "feature", "pool"}
-    assert _bot_streams(z, "CTO") == {"cto", "feature"}
+    # plus #pool for the COO (#80), plus #PM for the COO and CTO (#104)
+    assert _bot_streams(z, "COO") == {"coo", "feature", "pool", "PM"}
+    assert _bot_streams(z, "CTO") == {"cto", "feature", "PM"}
     assert _bot_streams(z, "CMO") == {"cmo"}
     capsys.readouterr()
     assert setup_streams.run_check(z)
@@ -324,6 +324,7 @@ def test_setup_creates_private_pool_with_founder_coo_and_pool_bot(capsys):
     assert _members(z, "pool") == {"Admin", "COO", "Pool"}
     assert _bot(z, "Pool")["email"] == "pool-bot@x"
     assert _bot_streams(z, "Pool") == {"pool"}
+    assert _bot_streams(z, "PM") == {"PM"}  # issue #104: the PM bot, in #PM only
     capsys.readouterr()
     assert setup_streams.run_check(z)
     assert "#pool: OK" in capsys.readouterr().out
