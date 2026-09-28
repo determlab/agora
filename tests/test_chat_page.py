@@ -1104,3 +1104,96 @@ def test_77_a_toast_follows_each_action_and_says_success_only_when_the_server_di
                  'report("create-status", "לא נוצר: "', 'report("members-status", "לא נוסף: "'):
         assert call in script, call
     assert 'id="send-status"' not in PAGE.read_text(encoding="utf-8")
+
+
+# -- issue #82: the panel, side by side at 1280px, the sync pill, the cards
+
+
+def test_page_registers_for_dashboard_events():
+    # The one register call, on both the first connect and every reconnect.
+    conn = _function("connect")
+    assert re.search(r'event_types: \["message", "dashboard"\]', conn), conn
+
+
+def test_page_has_the_panel_and_the_switch():
+    m = _markup()
+    ids = {a["id"] for _, a in m.elements if "id" in a}
+    assert {"dash", "view-chat", "view-dash", "chat"} <= ids
+    assert "1280px" in _css()
+    # GET /dashboard is fetched once on load/reconnect (connect()) and on
+    # every "dashboard" event (poll()); "sync now" forces one too.
+    assert "await loadDashboard()" in _function("connect")
+    assert 'if (ev.type === "dashboard") loadDashboard();' in _function("poll")
+    assert 'await api("POST", "dashboard/sync")' in _markup().script
+
+
+def test_pill_states():
+    got = _js(("pillText",), """
+      const now = 1700000000000;
+      out.fresh = pillText(now, {last_sync: now / 1000 - 120, stale: false, last_error: null});
+      out.stale = pillText(now, {last_sync: now / 1000 - 10000, stale: true, last_error: null});
+      out.error = pillText(now, {last_sync: now / 1000 - 120, stale: false,
+                                 last_error: "gh: not logged in"});
+      out.none = pillText(now, {last_sync: null, stale: true,
+        last_error: "no dashboard command configured: start the server with --dashboard-cmd"});
+    """)
+    assert got["fresh"] == "מתעדכן אוטומטית · עודכן לפני 2 דק׳ · מקור: GitHub"
+    assert got["stale"] == "מתעדכן אוטומטית · עודכן לפני 167 דק׳ · מקור: GitHub"
+    assert got["error"] == "gh: not logged in"
+    assert got["none"] == "no dashboard command configured: start the server with --dashboard-cmd"
+    # Four distinct texts: fresh, stale, a real failure, and the no-command flag.
+    assert len({got["fresh"], got["stale"], got["error"], got["none"]}) == 4
+
+
+def test_page_renders_every_card_from_a_fixture_document():
+    # Every section named in the issue, fed through the seam the page exposes:
+    # each render function is pure text-in (a row of the document) / text-out
+    # (one .dash-row per item), so this never touches a server.
+    doc = {
+        "live": [{"title": "r1: issue #82", "agent": "coder"}],
+        "stuck": [{"title": "#70 review", "why": "3 rounds", "for": "founder"},
+                  {"title": "#65 flaky test", "why": "ci red"}],
+        "who_works": [{"role": "COO", "doing": "reviewing #81", "for": "founder"},
+                      {"role": "CTO", "doing": "issue #82"}],
+        "roles": [{"role": "CTO", "agent": "claude-sonnet"}],
+        "queue": [{"priority": 1, "title": "#90 next"}],
+        "prs": [{"type": "feature", "count": 3}],
+        "week": {"summary": "12 closed, 3 opened"},
+        "products": [{"name": "agora", "status": "ok"}],
+    }
+    fresh = {"doc": doc, "last_sync": 1700000000, "stale": False, "last_error": None}
+    empty = {"doc": {}, "last_sync": None, "stale": True, "last_error": "no dashboard command configured"}
+    got = _js(("renderDash", "pillText", "dashRow", "fillRows", "renderLive", "renderStuck",
+               "waitingRows", "renderWaiting", "renderRoles", "renderQueue", "renderPrs",
+               "renderWeek", "renderProducts"), f"""
+      Date.now = () => 1700000120000;
+      renderDash({json.dumps(fresh)});
+      const text = (id) => $(id).childNodes.map((n) => n.textContent);
+      out.live = text("live-body");
+      out.waiting = text("waiting-body");
+      out.roles = text("roles-body");
+      out.queue = text("queue-body");
+      out.prs = text("prs-body");
+      out.prsShown = !$("card-prs").hidden;
+      out.week = text("week-body");
+      out.products = text("products-body");
+      out.stuck = text("stuck-body");
+      out.pill = $("sync-text").textContent;
+      out.dirs = $("live-body").childNodes.map((n) => n.dir);
+      renderDash({json.dumps(empty)});
+      out.prsHiddenWhenAbsent = $("card-prs").hidden;
+      out.emptyLive = text("live-body");
+    """, prelude=FAKE_DOM)
+    assert got["live"] == ["r1: issue #82 · coder"]
+    assert got["waiting"] == ["#70 review · 3 rounds", "COO · reviewing #81"]
+    assert got["roles"] == ["CTO · claude-sonnet"]
+    assert got["queue"] == ["#1 · #90 next"]
+    assert got["prs"] == ["feature · 3"] and got["prsShown"] is True
+    assert got["week"] == ["12 closed, 3 opened"]
+    assert got["products"] == ["agora · ok"]
+    assert got["stuck"] == ["#70 review · 3 rounds", "#65 flaky test · ci red"]
+    assert got["pill"] == "מתעדכן אוטומטית · עודכן לפני 2 דק׳ · מקור: GitHub"
+    assert got["dirs"] == ["auto"]
+    # No prs section at all: the card is hidden rather than shown empty.
+    assert got["prsHiddenWhenAbsent"] is True
+    assert got["emptyLive"] == []

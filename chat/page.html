@@ -62,10 +62,28 @@ code, pre { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
 #keys label { display: block; margin: .75rem 0 .25rem; }
 #keys input { width: 100%; }
 #keys code { background: var(--code); padding: 0 .2rem; }
-/* The frame: the app sits in a rounded card on the page background. */
-#app { display: grid; grid-template-columns: 16rem 1fr; height: calc(100vh - 2rem);
+/* The frame: the app sits in a rounded card on the page background. Below
+   1280px only #chat or #dash shows, picked by #view-switch; at 1280px and
+   up they sit side by side and the switch is hidden (issue #82). */
+#app { display: grid; grid-template-columns: 1fr; height: calc(100vh - 2rem);
   position: relative; overflow: hidden; background: var(--panel);
   border: 1px solid var(--line); border-radius: 14px; box-shadow: var(--shadow); }
+#chat { display: grid; grid-template-columns: 16rem 1fr; position: relative;
+  min-height: 0; overflow: auto; }
+#dash { overflow: auto; padding: 1rem 1.25rem; }
+@media (min-width: 1280px) {
+  #app { grid-template-columns: 1fr 1fr; }
+  #view-switch { display: none; }
+  /* [hidden] wins on specificity alone; the id beats it back here. */
+  #chat[hidden] { display: grid !important; }
+  #dash[hidden] { display: block !important; }
+}
+#view-switch { position: absolute; left: 50%; transform: translateX(-50%); bottom: .75rem;
+  z-index: 8; display: flex; gap: .2rem; background: var(--panel); border: 1px solid var(--line);
+  border-radius: 999px; padding: .2rem; box-shadow: var(--shadow); }
+#view-switch button { border: 0; background: none; border-radius: 999px; padding: .3rem .9rem;
+  color: var(--muted); }
+#view-switch button.active { background: var(--accent); color: var(--accent-text); }
 #side { border-inline-end: 1px solid var(--line); overflow-y: auto; background: var(--panel);
   padding: .75rem .5rem; display: flex; flex-direction: column; gap: .25rem; }
 #brand { padding: .1rem .35rem .4rem; }
@@ -184,6 +202,19 @@ dialog .buttons { display: flex; justify-content: flex-end; gap: .5rem; margin-t
 .api-box { margin-top: 1rem; }
 .api-box pre { background: var(--code); border: 1px solid var(--line); border-radius: 6px;
   padding: .45rem .6rem; margin: .25rem 0 0; font-size: 12px; white-space: pre-wrap; text-align: left; }
+/* The dashboard (issue #82): the sync pill above one small card per section
+   of GET /api/v1/dashboard's document. */
+#dash-head { display: flex; align-items: center; justify-content: space-between;
+  gap: .5rem; margin-bottom: .75rem; }
+#dash-head h2 { margin: 0; font-size: 16px; }
+#sync-pill { display: inline-flex; align-items: center; gap: .5rem; font-size: 12px; color: var(--muted); }
+#sync-pill.stale #sync-text { color: var(--wait); }
+#sync-pill.err #sync-text { color: var(--error); }
+#dash-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(14rem, 1fr)); gap: .75rem; }
+.card { border: 1px solid var(--line); border-radius: 10px; padding: .6rem .75rem; background: var(--panel); }
+.card h3 { margin: 0 0 .4rem; font-size: 13px; color: var(--muted); }
+.dash-row { padding: .2rem 0; border-bottom: 1px solid var(--line); font-size: 13px; }
+.dash-row:last-child { border-bottom: 0; }
 /* Feedback: one short toast per action, gone by itself. */
 #toast { position: fixed; bottom: 1.75rem; left: 50%; transform: translateX(-50%); z-index: 30;
   max-width: min(36rem, 90vw); padding: .5rem 1rem; border-radius: 10px; background: var(--text);
@@ -220,6 +251,11 @@ dialog .buttons { display: flex; justify-content: flex-end; gap: .5rem; margin-t
 </section>
 
 <div id="app" hidden>
+  <div id="view-switch">
+    <button type="button" id="view-chat" class="active">צ'אט</button>
+    <button type="button" id="view-dash">לוח</button>
+  </div>
+  <div id="chat">
   <nav id="side">
     <div id="brand"><span id="logo" dir="ltr">agora</span></div>
     <div id="me-row">
@@ -280,6 +316,26 @@ dialog .buttons { display: flex; justify-content: flex-end; gap: .5rem; margin-t
       <pre id="members-api" dir="ltr"></pre>
     </div>
   </aside>
+  </div>
+  <section id="dash" hidden aria-label="לוח מחוונים">
+    <div id="dash-head">
+      <h2>לוח מחוונים</h2>
+      <div id="sync-pill" role="status">
+        <span id="sync-text"></span>
+        <button type="button" id="sync-now" class="btn">סנכרן עכשיו</button>
+      </div>
+    </div>
+    <div id="dash-cards">
+      <section id="card-live" class="card"><h3>עכשיו בבריכה</h3><div id="live-body"></div></section>
+      <section id="card-waiting" class="card"><h3>מחכה לך</h3><div id="waiting-body"></div></section>
+      <section id="card-roles" class="card"><h3>מי עובד על מה</h3><div id="roles-body"></div></section>
+      <section id="card-queue" class="card"><h3>התור לפי עדיפות</h3><div id="queue-body"></div></section>
+      <section id="card-prs" class="card" hidden><h3>בקשות משיכה פתוחות לפי סוג</h3><div id="prs-body"></div></section>
+      <section id="card-week" class="card"><h3>השבוע</h3><div id="week-body"></div></section>
+      <section id="card-products" class="card"><h3>מוצרים</h3><div id="products-body"></div></section>
+      <section id="card-stuck" class="card"><h3>תקוע</h3><div id="stuck-body"></div></section>
+    </div>
+  </section>
 </div>
 
 <div id="toast" role="status" aria-live="polite" hidden></div>
@@ -615,12 +671,13 @@ async function start() {
 // Register first, then load: a message sent in between arrives as an event
 // and the id set keeps it from showing twice.
 async function connect(gen) {
-  const reg = await api("POST", "register", {event_types: ["message"]});
+  const reg = await api("POST", "register", {event_types: ["message", "dashboard"]});
   if (gen !== S.gen) return;
   S.queue = reg.queue_id;
   S.lastEvent = reg.last_event_id;
   await loadStreams();
   if (S.open) await openTopic(S.open.stream_id, S.open.stream, S.open.topic);
+  await loadDashboard();  // once on load, and again on every reconnect (#82)
   setLive("live", "מחובר");
 }
 
@@ -661,6 +718,7 @@ async function poll(gen) {
     for (const ev of got.events) {
       S.lastEvent = Math.max(S.lastEvent, ev.id);
       if (ev.type === "message") onMessage(ev.message);
+      if (ev.type === "dashboard") loadDashboard();
     }
   }
 }
@@ -1278,6 +1336,125 @@ $("members-btn").addEventListener("click", () => {
 document.addEventListener("keydown", (e) => {
   if (e.key === "Escape" && !e.defaultPrevented && $("members-panel").classList.contains("open")) closeMembers();
 });
+
+// -- the dashboard (#82): the human view of GET /api/v1/dashboard, the same
+// document an agent reads (A1). Every card has its own small render function,
+// each pure text-in/text-out over one section, so a fixture document exercises
+// them without a server. The producer's exact row shape lives outside this
+// repo (ops/tools/dashboard.py); each function reads only the fields it
+// names and drops a row silently rather than guessing at a missing one.
+
+function dashRow(parts) {
+  return parts.filter((p) => p !== undefined && p !== null && p !== "").join(" · ");
+}
+
+// One row per item, textContent only: never markup, same rule as a message.
+function fillRows(el, rows, toLine) {
+  el.replaceChildren(...(rows || []).map((r) => {
+    const row = document.createElement("div");
+    row.className = "dash-row";
+    row.dir = "auto";
+    row.textContent = toLine(r);
+    return row;
+  }));
+}
+
+function renderLive(el, items) {
+  fillRows(el, items, (r) => dashRow([r.title, r.agent]));
+}
+
+function renderStuck(el, items) {
+  fillRows(el, items, (r) => dashRow([r.title, r.why]));
+}
+
+// "Waiting for you": the stuck and who-works rows marked for the founder
+// specifically, not every stuck item (that is the "stuck" card below).
+function waitingRows(stuck, whoWorks) {
+  return [...(stuck || []), ...(whoWorks || [])].filter((r) => r.for === "founder");
+}
+
+function renderWaiting(el, stuck, whoWorks) {
+  fillRows(el, waitingRows(stuck, whoWorks), (r) => dashRow([r.title, r.role, r.why, r.doing]));
+}
+
+function renderRoles(el, items) {
+  fillRows(el, items, (r) => dashRow([r.role, r.agent]));
+}
+
+function renderQueue(el, items) {
+  fillRows(el, items, (r) => dashRow([r.priority != null ? "#" + r.priority : null, r.title]));
+}
+
+function renderPrs(el, items) {
+  fillRows(el, items, (r) => dashRow([r.type, r.count != null ? String(r.count) : null]));
+}
+
+function renderWeek(el, week) {
+  fillRows(el, week && week.summary ? [week] : [], (r) => r.summary);
+}
+
+function renderProducts(el, items) {
+  fillRows(el, items, (r) => dashRow([r.name, r.status]));
+}
+
+// The pill's text: an error (a real failure, or "no dashboard command
+// configured") always wins over the normal line; amber ("stale") is a CSS
+// class the caller sets, never a different string.
+function pillText(nowMs, state) {
+  if (state.last_error) return state.last_error;
+  if (state.last_sync == null) return "מתעדכן אוטומטית · טרם סונכרן · מקור: GitHub";
+  const mins = Math.max(0, Math.round((nowMs / 1000 - state.last_sync) / 60));
+  return "מתעדכן אוטומטית · עודכן לפני " + mins + " דק׳ · מקור: GitHub";
+}
+
+function renderDash(state) {
+  const doc = state.doc || {};
+  $("sync-text").textContent = pillText(Date.now(), state);
+  $("sync-pill").classList.toggle("err", !!state.last_error);
+  $("sync-pill").classList.toggle("stale", !state.last_error && !!state.stale);
+  renderLive($("live-body"), doc.live);
+  renderWaiting($("waiting-body"), doc.stuck, doc.who_works);
+  renderRoles($("roles-body"), doc.roles);
+  renderQueue($("queue-body"), doc.queue);
+  $("card-prs").hidden = !(doc.prs && doc.prs.length);
+  renderPrs($("prs-body"), doc.prs);
+  renderWeek($("week-body"), doc.week);
+  renderProducts($("products-body"), doc.products);
+  renderStuck($("stuck-body"), doc.stuck);
+}
+
+// A failed fetch never pretends the last document is still fresh: it shows
+// why, through the very same pill an error from the server would.
+async function loadDashboard() {
+  let state;
+  try {
+    state = await api("GET", "dashboard");
+  } catch (e) {
+    if (e.status === 401) return;
+    state = {doc: null, last_sync: null, stale: true, last_error: "לוח לא נטען: " + e.message};
+  }
+  renderDash(state);
+}
+
+$("sync-now").addEventListener("click", async () => {
+  $("sync-now").disabled = true;
+  try {
+    await api("POST", "dashboard/sync");
+  } catch (e) {
+    toast("סנכרון נכשל: " + e.message, true);
+  }
+  $("sync-now").disabled = false;
+  await loadDashboard();
+});
+
+function setView(view) {
+  $("chat").hidden = view !== "chat";
+  $("dash").hidden = view !== "dash";
+  $("view-chat").classList.toggle("active", view === "chat");
+  $("view-dash").classList.toggle("active", view === "dash");
+}
+$("view-chat").addEventListener("click", () => setView("chat"));
+$("view-dash").addEventListener("click", () => setView("dash"));
 
 // -- chrome: sidebar on a narrow screen, theme, keys
 
