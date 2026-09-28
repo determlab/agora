@@ -1,35 +1,36 @@
 <!doctype html>
-<html lang="en">
+<html lang="he" dir="rtl">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Agora chat</title>
+<title>agora · צ'אט</title>
 <style>
 :root {
   color-scheme: light;
-  --bg: #f4f5f7; --panel: #ffffff; --text: #1d2330; --muted: #6b7280; --line: #e2e5ea;
-  --accent: #2f6fed; --accent-text: #ffffff; --accent-soft: #e5edff; --bubble: #ffffff;
-  --mine: #dcebff; --mention: #fff3c4; --mention-line: #d99a00; --error: #b00020;
-  --code: #eef0f3; --shadow: 0 1px 2px rgba(0, 0, 0, .08);
+  --bg: #eef1ed; --panel: #ffffff; --text: #1b2624; --muted: #5f6d69; --line: #d8dfda;
+  --accent: #1f6f78; --accent-text: #ffffff; --accent-soft: #dcebea; --bubble: #ffffff;
+  --mine: #d6eae7; --mention: #fff1b8; --mention-line: #e3c04f; --error: #b00020;
+  --code: #e6ebe7; --ok: #2e9e5b; --wait: #e0a100; --shadow: 0 1px 2px rgba(0, 0, 0, .07);
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
     color-scheme: dark;
-    --bg: #14171c; --panel: #1b1f26; --text: #e6e8eb; --muted: #9aa3ad; --line: #2a3039;
-    --accent: #6b9bff; --accent-text: #0d1117; --accent-soft: #243150; --bubble: #232933;
-    --mine: #22385c; --mention: #43391a; --mention-line: #e0b400; --error: #ff7a8e;
-    --code: #10141a; --shadow: none;
+    --bg: #131917; --panel: #1b2321; --text: #e2e9e6; --muted: #93a39e; --line: #2b3633;
+    --accent: #5fb3bb; --accent-text: #0b1413; --accent-soft: #1d3a3c; --bubble: #222c2a;
+    --mine: #1d4043; --mention: #4a3f17; --mention-line: #8a7424; --error: #ff7a8e;
+    --code: #111816; --ok: #4cc47c; --wait: #f0b429; --shadow: none;
   }
 }
 :root[data-theme="dark"] {
   color-scheme: dark;
-  --bg: #14171c; --panel: #1b1f26; --text: #e6e8eb; --muted: #9aa3ad; --line: #2a3039;
-  --accent: #6b9bff; --accent-text: #0d1117; --accent-soft: #243150; --bubble: #232933;
-  --mine: #22385c; --mention: #43391a; --mention-line: #e0b400; --error: #ff7a8e;
-  --code: #10141a; --shadow: none;
+  --bg: #131917; --panel: #1b2321; --text: #e2e9e6; --muted: #93a39e; --line: #2b3633;
+  --accent: #5fb3bb; --accent-text: #0b1413; --accent-soft: #1d3a3c; --bubble: #222c2a;
+  --mine: #1d4043; --mention: #4a3f17; --mention-line: #8a7424; --error: #ff7a8e;
+  --code: #111816; --ok: #4cc47c; --wait: #f0b429; --shadow: none;
 }
 * { box-sizing: border-box; }
-body { margin: 0; font: 14px/1.45 system-ui, sans-serif; color: var(--text); background: var(--bg); }
+body { margin: 0; padding: 1rem; font: 14px/1.45 system-ui, sans-serif; color: var(--text);
+  background: var(--bg); }
 [hidden] { display: none !important; }
 button { font: inherit; cursor: pointer; color: inherit; }
 input, select, textarea { font: inherit; color: var(--text); background: var(--panel);
@@ -42,82 +43,156 @@ code, pre { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
 .btn:disabled { opacity: .5; cursor: default; }
 .icon { border: 0; background: none; border-radius: 4px; padding: .1rem .4rem; color: var(--muted); }
 .icon:hover { background: var(--accent-soft); color: var(--text); }
-#keys { max-width: 32rem; margin: 4rem auto; padding: 1.5rem; background: var(--panel);
-  border: 1px solid var(--line); border-radius: 10px; }
+.ico { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.6;
+  stroke-linecap: round; stroke-linejoin: round; vertical-align: middle; }
+.tag { font-size: 10px; font-weight: 600; color: var(--muted); border: 1px solid var(--line);
+  border-radius: 999px; padding: 0 .4rem; }
+/* Avatars: a coloured square with the first letter, one colour per role. */
+.avatar { flex: none; width: 32px; height: 32px; border-radius: 8px; display: inline-grid;
+  place-items: center; font-weight: 700; color: #ffffff; background: #6b7280; }
+.avatar.small { width: 22px; height: 22px; border-radius: 6px; font-size: 11px; }
+.role-human { background: #1f6f78; }
+.role-cto { background: #3b5ba5; }
+.role-coo { background: #7a4f9a; }
+.role-cmo { background: #b4552d; }
+.role-watchdog { background: #6b7b2c; }
+.role-bot { background: #5f6b78; }
+#keys { max-width: 32rem; margin: 3rem auto; padding: 1.5rem; background: var(--panel);
+  border: 1px solid var(--line); border-radius: 14px; }
 #keys label { display: block; margin: .75rem 0 .25rem; }
 #keys input { width: 100%; }
 #keys code { background: var(--code); padding: 0 .2rem; }
-#app { display: grid; grid-template-columns: 16rem 1fr; height: 100vh; }
+/* The frame: the app sits in a rounded card on the page background. */
+#app { display: grid; grid-template-columns: 16rem 1fr; height: calc(100vh - 2rem);
+  position: relative; overflow: hidden; background: var(--panel);
+  border: 1px solid var(--line); border-radius: 14px; box-shadow: var(--shadow); }
 #side { border-inline-end: 1px solid var(--line); overflow-y: auto; background: var(--panel);
   padding: .75rem .5rem; display: flex; flex-direction: column; gap: .25rem; }
-#who { font-size: 12px; color: var(--muted); overflow-wrap: anywhere; padding: 0 .25rem; }
-#side-tools { display: flex; gap: .25rem; padding: 0 .25rem .5rem; }
+#brand { padding: .1rem .35rem .4rem; }
+#logo { font-weight: 800; font-size: 18px; letter-spacing: .02em; color: var(--accent); }
+#me-row { display: flex; align-items: center; gap: .45rem; padding: .2rem .35rem .6rem;
+  border-bottom: 1px solid var(--line); margin-bottom: .35rem; }
+#who { flex: 1; min-width: 0; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#forget { font-size: 11px; }
 #streams-head { display: flex; align-items: center; justify-content: space-between;
   font-size: 11px; font-weight: 700; letter-spacing: .08em; color: var(--muted); padding: .25rem; }
 #side ul { list-style: none; margin: 0; padding: 0; }
 .stream-row { display: flex; align-items: center; border-radius: 6px; }
 .stream-row.open { background: var(--accent-soft); }
-.stream-name { flex: 1; text-align: start; border: 0; background: none; padding: .3rem .4rem;
-  font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.stream-row .icon { visibility: hidden; }
-.stream-row:hover .icon, .stream-row.open .icon, .stream-row .icon:focus { visibility: visible; }
+.stream-name { flex: 1; min-width: 0; display: flex; align-items: center; gap: .3rem; text-align: start;
+  border: 0; background: none; padding: .3rem .4rem; font-weight: 600; }
+.stream-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.caret { transition: transform .15s; color: var(--muted); }
+.stream-row.folded .caret { transform: rotate(90deg); }
+.gear { opacity: 0; transition: opacity .15s; }
+.stream-row:hover .gear, .stream-row.open .gear, .gear:focus { opacity: 1; }
 .topic { display: block; width: 100%; text-align: start; border: 0; background: none;
-  padding: .2rem .5rem .2rem 1.4rem; border-radius: 6px; color: var(--muted);
+  padding-block: .2rem; padding-inline: 1.4rem .5rem; border-radius: 6px; color: var(--muted);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .topic:hover { color: var(--text); }
 .topic.open { background: var(--accent); color: var(--accent-text); }
-#main { display: flex; flex-direction: column; min-width: 0; height: 100vh; position: relative; }
+.new-topic { border: 0; background: none; font-size: 12px; color: var(--accent);
+  padding-block: .15rem; padding-inline: 1.4rem .5rem; }
+.new-topic:hover { text-decoration: underline; }
+.new-topic-form { display: flex; gap: .25rem; padding-block: .15rem; padding-inline: 1.2rem .25rem; }
+.new-topic-form input { flex: 1; min-width: 0; font-size: 12px; padding: .2rem .4rem; }
+.new-topic-form button { font-size: 12px; padding: .15rem .45rem; }
+#main { display: flex; flex-direction: column; min-width: 0; min-height: 0; height: 100%; position: relative; }
 #top { display: flex; align-items: center; gap: .5rem; padding: .5rem 1rem;
   border-bottom: 1px solid var(--line); background: var(--panel); }
 #menu-btn { display: none; }
 #topic-title { font-weight: 600; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-#live { font-size: 12px; color: var(--muted); }
-#messages { flex: 1; overflow-y: auto; padding: .75rem 1rem; }
-.day { text-align: center; font-size: 12px; color: var(--muted); margin: 1rem 0 .5rem; }
-.msg { display: flex; flex-direction: column; align-items: flex-start; margin: .15rem 0; }
+/* Live status: a green dot when the event queue answers, amber and blinking
+   while it reconnects, red when it is down. */
+#live { display: inline-flex; align-items: center; gap: .35rem; font-size: 12px; color: var(--muted);
+  max-width: 16rem; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+#live .dot { flex: none; width: 9px; height: 9px; border-radius: 50%; background: var(--error); }
+#live.live .dot { background: var(--ok); }
+#live.wait .dot { background: var(--wait); animation: blink 1s ease-in-out infinite; }
+@keyframes blink { 50% { opacity: .2; } }
+#messages { flex: 1; min-height: 0; overflow-y: auto; padding: .75rem 1rem; background: var(--bg); }
+.day { display: flex; align-items: center; gap: .75rem; font-size: 12px; color: var(--muted); margin: 1rem 0 .5rem; }
+.day::before, .day::after { content: ""; flex: 1; border-top: 1px solid var(--line); }
+/* Messages are laid out physically: others on the left, your own group
+   mirrored to the right (avatar, name and the tail corner with it). */
+.msg { direction: ltr; display: flex; align-items: flex-start; gap: .5rem; margin: .15rem 0; }
 .msg.first { margin-top: .75rem; }
-.msg .head { font-size: 12px; color: var(--muted); margin: 0 .25rem .15rem; }
-.msg .sender { font-weight: 600; color: var(--text); margin-inline-end: .5rem; }
-.bubble { max-width: min(46rem, 85%); background: var(--bubble); border: 1px solid var(--line);
+.msg.mine { flex-direction: row-reverse; }
+.msg:not(.first) .avatar { visibility: hidden; height: 0; }
+.stack { display: flex; flex-direction: column; align-items: flex-start; min-width: 0; max-width: min(46rem, 80%); }
+.msg.mine .stack { align-items: flex-end; }
+.msg .head { display: flex; gap: .5rem; align-items: baseline; font-size: 12px; color: var(--muted); margin: 0 .25rem .15rem; }
+.msg.mine .head { flex-direction: row-reverse; }
+.msg .sender { font-weight: 600; color: var(--text); }
+.line { display: flex; align-items: center; gap: .35rem; max-width: 100%; }
+.msg.mine .line { flex-direction: row-reverse; }
+.bubble { min-width: 0; background: var(--bubble); border: 1px solid var(--line);
   border-radius: 12px; padding: .4rem .7rem; box-shadow: var(--shadow); }
-.msg.mine { align-items: flex-end; }
+.msg.first .bubble { border-top-left-radius: 4px; }
+.msg.mine.first .bubble { border-top-left-radius: 12px; border-top-right-radius: 4px; }
 .msg.mine .bubble { background: var(--mine); border-color: transparent; }
-.msg.mention .bubble { background: var(--mention); border-inline-start: 3px solid var(--mention-line); }
+.msg.mention .bubble { background: var(--mention); border-color: var(--mention-line); }
 .body { white-space: pre-wrap; overflow-wrap: anywhere; }
 .body pre { background: var(--code); border-radius: 6px; padding: .4rem .5rem; margin: .25rem 0;
   white-space: pre-wrap; text-align: left; }
+.chip { background: var(--code); border: 1px solid var(--line); border-radius: 4px; padding: 0 .25rem; font-size: 12.5px; }
+.mention-name { color: var(--accent); font-weight: 700; }
 .quote { margin: 0 0 .35rem; padding: .25rem .6rem; border-inline-start: 3px solid var(--accent);
-  background: var(--accent-soft); border-radius: 6px; }
+  background: var(--code); border-radius: 6px; }
 .quote-sender { font-size: 12px; font-weight: 600; }
 .quote-text { white-space: pre-wrap; overflow-wrap: anywhere; }
-.actions { visibility: hidden; font-size: 12px; }
-.msg:hover .actions, .actions:focus-within { visibility: visible; }
-#new-pill { position: absolute; left: 50%; transform: translateX(-50%); bottom: 9rem;
+.quote-btn { flex: none; font-size: 12px; opacity: 0; transition: opacity .15s; }
+.msg:hover .quote-btn, .quote-btn:focus { opacity: 1; }
+#new-pill { position: absolute; left: 50%; transform: translateX(-50%); bottom: 10rem;
   border: 0; border-radius: 999px; padding: .3rem .9rem; background: var(--accent);
   color: var(--accent-text); box-shadow: 0 2px 6px rgba(0, 0, 0, .25); }
 #write { border-top: 1px solid var(--line); background: var(--panel); padding: .5rem 1rem; }
-#mentions { display: flex; flex-wrap: wrap; gap: .25rem; margin-bottom: .35rem; }
+#mentions { display: flex; flex-wrap: wrap; align-items: center; gap: .25rem; margin-bottom: .35rem; }
+#mention-label { font-size: 12px; color: var(--muted); }
 #mentions button { border: 1px solid var(--line); background: var(--bg); border-radius: 999px;
   padding: .05rem .6rem; font-size: 12px; }
 #compose-row { display: flex; gap: .5rem; align-items: flex-end; }
+#compose-wrap { flex: 1; display: flex; position: relative; }
 #compose { flex: 1; min-height: 2.6rem; max-height: 40vh; resize: none; border-radius: 10px; }
-#send-status { font-size: 12px; color: var(--muted); }
-#newtopic { margin-top: .4rem; font-size: 12px; color: var(--muted); display: flex; flex-wrap: wrap;
-  gap: .35rem; align-items: center; }
+#picker { position: absolute; bottom: calc(100% + 4px); inset-inline-start: 0; z-index: 6; min-width: 13rem;
+  list-style: none; margin: 0; padding: .25rem; background: var(--panel); border: 1px solid var(--line);
+  border-radius: 10px; box-shadow: 0 4px 14px rgba(0, 0, 0, .18); }
+#picker li { display: flex; align-items: center; gap: .45rem; padding: .25rem .45rem; border-radius: 6px; cursor: pointer; }
+#picker li.active { background: var(--accent-soft); }
+#hint { margin: .3rem 0 0; }
 dialog { background: var(--panel); color: var(--text); border: 1px solid var(--line);
   border-radius: 10px; padding: 1rem 1.25rem; width: min(28rem, 92vw); }
 dialog::backdrop { background: rgba(0, 0, 0, .4); }
-dialog h2 { margin: 0 0 .75rem; font-size: 16px; }
+dialog h2, .drawer h2 { margin: 0 0 .75rem; font-size: 16px; }
 dialog label { display: block; margin: .5rem 0 .2rem; }
-dialog .row { display: flex; gap: .5rem; align-items: center; margin: .5rem 0; }
+dialog .row, .drawer .row { display: flex; gap: .5rem; align-items: center; margin: .5rem 0; }
 dialog .people { max-height: 14rem; overflow-y: auto; border: 1px solid var(--line);
   border-radius: 6px; padding: .25rem .5rem; }
 dialog .people label { display: flex; gap: .5rem; align-items: center; margin: .2rem 0; }
 dialog .buttons { display: flex; justify-content: flex-end; gap: .5rem; margin-top: 1rem; }
-#members-list li { display: flex; align-items: center; justify-content: space-between; padding: .2rem 0; }
+/* Members: a panel that slides in from the right edge of the card. */
+.drawer { position: absolute; top: 0; bottom: 0; right: 0; z-index: 10; width: min(22rem, 92%);
+  overflow-y: auto; background: var(--panel); border-left: 1px solid var(--line);
+  box-shadow: -6px 0 18px rgba(0, 0, 0, .15); padding: 1rem 1.1rem;
+  transform: translateX(100%); visibility: hidden; transition: transform .2s ease, visibility .2s; }
+.drawer.open { transform: none; visibility: visible; }
+.drawer-head { display: flex; align-items: flex-start; justify-content: space-between; gap: .5rem; }
+#members-list { list-style: none; margin: 0; padding: 0; }
+#members-list li { display: flex; align-items: center; gap: .5rem; padding: .3rem 0; }
+.member-name { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.member-name .muted { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.api-box { margin-top: 1rem; }
+.api-box pre { background: var(--code); border: 1px solid var(--line); border-radius: 6px;
+  padding: .45rem .6rem; margin: .25rem 0 0; font-size: 12px; white-space: pre-wrap; text-align: left; }
+/* Feedback: one short toast per action, gone by itself. */
+#toast { position: fixed; bottom: 1.75rem; left: 50%; transform: translateX(-50%); z-index: 30;
+  max-width: min(36rem, 90vw); padding: .5rem 1rem; border-radius: 10px; background: var(--text);
+  color: var(--panel); box-shadow: 0 4px 14px rgba(0, 0, 0, .25); }
+#toast.bad { background: var(--error); color: #ffffff; }
 @media (max-width: 700px) {
-  #app { grid-template-columns: 1fr; }
-  #side { position: fixed; inset: 0 auto 0 0; width: 16rem; z-index: 5; transform: translateX(-100%);
+  body { padding: 0; }
+  #app { grid-template-columns: 1fr; height: 100vh; border: 0; border-radius: 0; }
+  #side { position: absolute; top: 0; bottom: 0; right: 0; width: 16rem; z-index: 5; transform: translateX(100%);
     transition: transform .15s; box-shadow: 0 0 12px rgba(0, 0, 0, .3); }
   #app.side-open #side { transform: none; }
   #menu-btn { display: inline-block; }
@@ -127,45 +202,48 @@ dialog .buttons { display: flex; justify-content: flex-end; gap: .5rem; margin-t
 <body>
 
 <section id="keys" hidden>
-  <h1>Agora chat</h1>
-  <p>Paste your email and API key once. They stay in this browser
-  (<code>localStorage</code>) and go to the server as HTTP Basic auth,
-  exactly like the bots.</p>
-  <p>No account yet? Make it yourself:
-  <code>python chat/server.py add-human --email you@example.com --name "Your Name" --json</code>
-  prints your <code>api_key</code>.</p>
+  <h1>agora</h1>
+  <p>הדביקו פעם אחת את ה-email ואת ה-API key. הם נשמרים בדפדפן הזה
+  (<code>localStorage</code>) ונשלחים לשרת כ-HTTP Basic auth,
+  בדיוק כמו אצל הבוטים.</p>
+  <p>אין עדיין חשבון? צרו אותו בעצמכם:
+  <code dir="ltr">python chat/server.py add-human --email you@example.com --name "Your Name" --json</code>
+  מדפיס את ה-<code>api_key</code> שלכם.</p>
   <form id="key-form">
     <label for="key-email">Email</label>
-    <input id="key-email" type="email" autocomplete="username" required>
+    <input id="key-email" type="email" dir="ltr" autocomplete="username" required>
     <label for="key-key">API key</label>
-    <input id="key-key" type="password" autocomplete="current-password" required>
+    <input id="key-key" type="password" dir="ltr" autocomplete="current-password" required>
     <p id="key-error" class="error" hidden></p>
-    <p><button type="submit" class="btn primary">Open chat</button></p>
+    <p><button type="submit" class="btn primary">כניסה לצ'אט</button></p>
   </form>
 </section>
 
 <div id="app" hidden>
   <nav id="side">
-    <div id="who"></div>
-    <div id="side-tools">
-      <button type="button" id="forget" class="btn">Forget key</button>
+    <div id="brand"><span id="logo" dir="ltr">agora</span></div>
+    <div id="me-row">
+      <span id="me-avatar" class="avatar small role-human" aria-hidden="true"></span>
+      <span id="who" dir="auto"></span>
+      <button type="button" id="forget" class="icon" title="מוחק את ה-API key מהדפדפן הזה">שכח מפתח</button>
     </div>
-    <div id="streams-head"><span>STREAMS</span>
-      <button type="button" id="new-stream-btn" class="icon" title="Create a stream" aria-label="Create a stream">+</button></div>
+    <div id="streams-head"><span>ערוצים</span>
+      <button type="button" id="new-stream-btn" class="icon" title="ערוץ חדש" aria-label="ערוץ חדש">+</button></div>
     <ul id="streams"></ul>
   </nav>
   <main id="main">
     <div id="top">
-      <button type="button" id="menu-btn" class="icon" aria-label="Streams">&#9776;</button>
-      <span id="topic-title" dir="auto">Pick a topic</span>
-      <span id="live"></span>
-      <button type="button" id="members-btn" class="btn" disabled>Members</button>
-      <button type="button" id="theme-btn" class="icon" title="Dark / light" aria-label="Dark / light">&#9681;</button>
+      <button type="button" id="menu-btn" class="icon" aria-label="ערוצים">&#9776;</button>
+      <span id="topic-title" dir="auto">בחרו נושא</span>
+      <span id="live" class="down" role="status"><span class="dot" aria-hidden="true"></span><span id="live-text">לא מחובר</span></span>
+      <button type="button" id="members-btn" class="btn" disabled>חברים</button>
+      <button type="button" id="theme-btn" class="icon" title="כהה / בהיר" aria-label="כהה / בהיר">&#9681;</button>
     </div>
     <div id="messages"></div>
-    <button type="button" id="new-pill" hidden>New messages &#8595;</button>
+    <button type="button" id="new-pill" hidden>הודעות חדשות &#8595;</button>
     <div id="write">
       <div id="mentions">
+        <span id="mention-label">הזכר:</span>
         <button type="button" data-mention="COO">@COO</button>
         <button type="button" data-mention="CTO">@CTO</button>
         <button type="button" data-mention="CMO">@CMO</button>
@@ -173,59 +251,69 @@ dialog .buttons { display: flex; justify-content: flex-end; gap: .5rem; margin-t
         <button type="button" data-mention="all">@all</button>
       </div>
       <div id="compose-row">
-        <textarea id="compose" dir="auto" rows="1" placeholder="Enter sends, Shift+Enter makes a new line"></textarea>
-        <button type="button" id="send-btn" class="btn primary">Send</button>
+        <div id="compose-wrap">
+          <ul id="picker" role="listbox" aria-label="בחירת שם להזכרה" hidden></ul>
+          <textarea id="compose" dir="auto" rows="1" placeholder="כתבו הודעה…"
+                    aria-autocomplete="list" aria-controls="picker"></textarea>
+        </div>
+        <button type="button" id="send-btn" class="btn primary">שלח</button>
       </div>
-      <div id="send-status"></div>
+      <p id="hint" class="muted">@ פותח רשימת שמות · Enter שולח · Shift+Enter שורה חדשה</p>
       <p id="send-error" class="error" hidden></p>
-      <form id="newtopic">
-        New topic: <select id="new-stream"></select>
-        <input id="new-topic" dir="auto" placeholder="topic">
-        <button type="submit" class="btn">Open</button>
-        then write it in the box above.
-      </form>
     </div>
   </main>
+  <aside id="members-panel" class="drawer" aria-labelledby="members-head">
+    <div class="drawer-head">
+      <h2 id="members-head">חברים ב-<span id="members-title" dir="auto"></span></h2>
+      <button type="button" id="members-close" class="icon" aria-label="סגור">&#10005;</button>
+    </div>
+    <div class="row"><input id="members-private" type="checkbox">
+      <label for="members-private">פרטי (רק חברים יכולים לקרוא)</label></div>
+    <ul id="members-list"></ul>
+    <form id="members-add" class="row">
+      <select id="members-who" aria-label="מי להוסיף"></select>
+      <button type="submit" class="btn">הוסף</button>
+    </form>
+    <p id="members-status" class="muted"></p>
+    <div class="api-box">
+      <div class="muted">מה הדף שולח</div>
+      <pre id="members-api" dir="ltr"></pre>
+    </div>
+  </aside>
 </div>
+
+<div id="toast" role="status" aria-live="polite" hidden></div>
 
 <dialog id="create-dlg">
   <form id="create-form">
-    <h2>Create a stream</h2>
-    <label for="create-name">Name</label>
+    <h2>ערוץ חדש</h2>
+    <label for="create-name">שם</label>
     <input id="create-name" dir="auto" maxlength="60" required>
     <div class="row"><input id="create-private" type="checkbox" checked>
-      <label for="create-private">Private (only members can read it)</label></div>
-    <div>Members (you are always one)</div>
+      <label for="create-private">פרטי (רק חברים יכולים לקרוא)</label></div>
+    <div>חברים (את/ה תמיד חבר/ה)</div>
     <div id="create-people" class="people"></div>
     <p id="create-status" class="muted"></p>
     <div class="buttons">
-      <button type="button" id="create-cancel" class="btn">Close</button>
-      <button type="submit" id="create-ok" class="btn primary">Create</button>
+      <button type="button" id="create-cancel" class="btn">סגור</button>
+      <button type="submit" id="create-ok" class="btn primary">צור</button>
     </div>
   </form>
-</dialog>
-
-<dialog id="members-dlg">
-  <h2>Members of <span id="members-title" dir="auto"></span></h2>
-  <div class="row"><input id="members-private" type="checkbox">
-    <label for="members-private">Private (only members can read it)</label></div>
-  <ul id="members-list"></ul>
-  <form id="members-add" class="row">
-    <select id="members-who"></select>
-    <button type="submit" class="btn">Add</button>
-  </form>
-  <p id="members-status" class="muted"></p>
-  <div class="buttons"><button type="button" id="members-close" class="btn">Close</button></div>
 </dialog>
 
 <template id="msg-tpl">
   <div class="msg">
-    <div class="head"><span class="sender" dir="auto"></span><time class="when"></time></div>
-    <div class="bubble">
-      <div class="quote" hidden><div class="quote-sender" dir="auto"></div><div class="quote-text" dir="auto"></div></div>
-      <div class="body" dir="auto"></div>
+    <span class="avatar" aria-hidden="true"></span>
+    <div class="stack">
+      <div class="head"><span class="sender" dir="auto"></span><time class="when"></time></div>
+      <div class="line">
+        <div class="bubble">
+          <blockquote class="quote" hidden><div class="quote-sender" dir="auto"></div><div class="quote-text" dir="auto"></div></blockquote>
+          <div class="body" dir="auto"></div>
+        </div>
+        <button type="button" class="icon quote-btn">ציטוט</button>
+      </div>
     </div>
-    <div class="actions"><button type="button" class="icon quote-btn">quote</button></div>
   </div>
 </template>
 
@@ -237,6 +325,10 @@ dialog .buttons { display: flex; justify-content: flex-end; gap: .5rem; margin-t
 const $ = (id) => document.getElementById(id);
 const STORE = "agora-chat-credentials";
 const THEME = "agora-chat-theme";
+const SVG = "http://www.w3.org/2000/svg";
+const CARET = "M4 6l4 4 4-4";
+const GEAR = "M8 5.6a2.4 2.4 0 1 0 0 4.8 2.4 2.4 0 0 0 0-4.8zM8 1.5v2M8 12.5v2M1.5 8h2M12.5 8h2"
+           + "M3.4 3.4l1.4 1.4M11.2 11.2l1.4 1.4M3.4 12.6l1.4-1.4M11.2 4.8l1.4-1.4";
 const S = {
   creds: null, gen: 0, queue: null, lastEvent: -1, me: null, sending: false,
   streams: [],          // [{stream_id, name, invite_only}]
@@ -247,6 +339,9 @@ const S = {
   shown: new Set(),     // message ids in the open topic
   msgs: [],             // the open topic's messages, oldest first
   panel: null,          // the stream the members panel is about
+  adding: null,         // {stream_id, text}: the "+ new topic" field being typed in
+  pick: null,           // the @ picker: {items, index, start}
+  toastTimer: 0,
 };
 
 class ApiFailure extends Error {
@@ -278,7 +373,7 @@ async function api(method, path, params) {
     resp = await fetch(url, {method, body, credentials: "omit", cache: "no-store",
                              headers: {Authorization: basic(S.creds.email, S.creds.key)}});
   } catch (e) {
-    throw new ApiFailure(0, {msg: "cannot reach the chat server: " + e.message});
+    throw new ApiFailure(0, {msg: "אין חיבור לשרת הצ'אט: " + e.message});
   }
   try { data = await resp.json(); } catch (e) { data = {msg: "HTTP " + resp.status}; }
   if (resp.status === 401) {
@@ -299,7 +394,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 function textDir(text) {
   const rest = String(text).replace(/^\s*(?:@_?\*\*[^*]*\*\*\s*)+/, "");
   const first = rest.match(/\p{L}/u);
-  return first && /[֐-ࣿיִ-﷿ﹰ-﻿]/.test(first[0]) ? "rtl" : "ltr";
+  return first && /[֐-ࣿיִ-﷿ﹰ-﻿]/.test(first[0]) ? "rtl" : "ltr";
 }
 
 // Zulip's quote: "@_**Name** said:" (or "[said](link):"), a ```quote fence,
@@ -314,7 +409,69 @@ function quoteBlock(name, text) {
   return "@_**" + name + "** said:\n```quote\n" + text + "\n```\n";
 }
 
-// -- the calls the stream dialogs make. A human needs the admin role for
+// One colour per role, from what the page knows about a user: a role bot by
+// its name, any other bot, or a person. The same sender always gets the same.
+function roleOf(name, isBot) {
+  const n = String(name || "").trim().toLowerCase();
+  for (const r of ["cto", "coo", "cmo", "watchdog"]) if (n === r) return r;
+  return isBot ? "bot" : "human";
+}
+
+function initial(name) {
+  const first = [...String(name || "").trim()][0];
+  return first ? first.toUpperCase() : "?";
+}
+
+// `code` and @**Name** (or the silent @_**Name**) inside a message's text, as
+// plain parts: inlineNodes makes each one an element with textContent, so
+// nothing a message says is ever parsed as markup.
+function inlineParts(text) {
+  const out = [], s = String(text), re = /`([^`\n]+)`|@_?\*\*([^*\n]+)\*\*/g;
+  let at = 0, m;
+  while ((m = re.exec(s)) !== null) {
+    if (m.index > at) out.push({kind: "text", text: s.slice(at, m.index)});
+    if (m[1] !== undefined) out.push({kind: "code", text: m[1]});
+    else out.push({kind: "mention", text: "@" + m[2].replace(/\|\d+$/, "")});
+    at = re.lastIndex;
+  }
+  if (at < s.length) out.push({kind: "text", text: s.slice(at)});
+  return out;
+}
+
+// The day line: today and yesterday by name, the rest of the last week by
+// its weekday, anything older by the date alone. Days are local calendar days.
+function dayLabel(when, now) {
+  const days = ["יום ראשון", "יום שני", "יום שלישי", "יום רביעי", "יום חמישי", "יום שישי", "שבת"];
+  const dmy = when.getDate() + "." + (when.getMonth() + 1) + "." + when.getFullYear();
+  const midnight = (d) => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+  const ago = Math.round((midnight(now) - midnight(when)) / 86400000);
+  if (ago === 0) return "היום · " + dmy;
+  if (ago === 1) return "אתמול · " + dmy;
+  if (ago > 1 && ago < 7) return days[when.getDay()] + " · " + dmy;
+  return dmy;
+}
+
+// What the @ picker filters on: the word being typed right after an "@" at
+// the caret, or null when the caret is not in one.
+function mentionQuery(before) {
+  const m = /(?:^|\s)@([^\s@*]*)$/.exec(String(before));
+  return m ? m[1] : null;
+}
+
+function pickNames(names, q) {
+  const low = String(q).toLowerCase();
+  const starts = names.filter((n) => n.toLowerCase().startsWith(low));
+  const inside = names.filter((n) => !n.toLowerCase().startsWith(low) && n.toLowerCase().includes(low));
+  return [...starts, ...inside].slice(0, 8);
+}
+
+// The count on the members button is the server's list; when the page could
+// not read it, the button shows no number rather than a guess.
+function membersLabel(n) {
+  return typeof n === "number" ? "חברים · " + n : "חברים";
+}
+
+// -- the calls the stream panels make. A human needs the admin role for
 // principals other than themselves; the server's own refusal is shown.
 
 function createStream(name, isPrivate, emails) {
@@ -335,7 +492,7 @@ function setPrivate(streamId, isPrivate) {
   return api("PATCH", "streams/" + streamId, {is_private: isPrivate});
 }
 
-function privacy(s) { return s.invite_only ? "private" : "public"; }
+function privacy(s) { return s.invite_only ? "פרטי" : "ציבורי"; }
 
 // What the create dialog says. `s` is the stream as the server lists it after
 // the call (undefined if the page could not read it back). The server applies
@@ -343,12 +500,12 @@ function privacy(s) { return s.invite_only ? "private" : "public"; }
 function createReport(name, wantPrivate, r, s) {
   const added = Object.keys(r.subscribed || {});
   const already = Object.keys(r.already_subscribed || {});
-  let msg = "#" + name + (s ? " (" + privacy(s) + ")" : "") + ": " + added.length + " added"
-      + (already.length ? ", " + already.length + " already members (the stream existed)" : "");
-  if (!s) msg += "; the page could not read its privacy back";
+  let msg = "#" + name + (s ? " (" + privacy(s) + ")" : "") + ": נוספו " + added.length
+      + (already.length ? ", " + already.length + " כבר חברים (הערוץ היה קיים)" : "");
+  if (!s) msg += "; הדף לא הצליח לקרוא בחזרה אם הוא פרטי";
   else if (!!s.invite_only !== !!wantPrivate) {
-    msg += "; it already existed as " + privacy(s) + ", so " + (wantPrivate ? "Private" : "Public")
-        + " was not applied";
+    msg += "; הוא כבר היה קיים כ" + privacy(s) + ", לכן " + (wantPrivate ? "פרטי" : "ציבורי")
+        + " לא הוחל";
   }
   return msg;
 }
@@ -357,9 +514,9 @@ function createReport(name, wantPrivate, r, s) {
 // the page cannot read it (no longer a member, or the reload failed), only
 // what the server accepted.
 function privateReport(name, want, now) {
-  if (now) return "#" + name + " is now " + privacy(now);
-  return "#" + name + " set to " + (want ? "private" : "public")
-      + " (the server accepted it; the page cannot read it back: you are not a member, or the reload failed)";
+  if (now) return "#" + name + " עכשיו " + privacy(now);
+  return "#" + name + " הוגדר " + (want ? "פרטי" : "ציבורי")
+      + " (השרת קיבל; הדף לא יכול לקרוא את זה בחזרה: אינך חבר בו, או שהטעינה נכשלה)";
 }
 
 // The old queue is deleted before a new one is registered, so a reconnect
@@ -375,6 +532,38 @@ async function dropQueue() {
 async function reconnect(gen) {
   await dropQueue();
   await connect(gen);
+}
+
+// -- feedback
+
+// A toast says what the server confirmed, or why it refused: callers pass the
+// result they read back (D3), never what they asked for.
+function toast(text, bad) {
+  const t = $("toast");
+  t.textContent = text;
+  t.classList.toggle("bad", !!bad);
+  t.hidden = false;
+  clearTimeout(S.toastTimer);
+  S.toastTimer = setTimeout(() => { t.hidden = true; }, bad ? 7000 : 3500);
+}
+
+function svgIcon(d, cls) {
+  const svg = document.createElementNS(SVG, "svg");
+  svg.setAttribute("viewBox", "0 0 16 16");
+  svg.setAttribute("aria-hidden", "true");
+  svg.setAttribute("class", "ico " + cls);
+  const path = document.createElementNS(SVG, "path");
+  path.setAttribute("d", d);
+  svg.append(path);
+  return svg;
+}
+
+function avatar(name, isBot, small) {
+  const a = document.createElement("span");
+  a.className = "avatar role-" + roleOf(name, isBot) + (small ? " small" : "");
+  a.setAttribute("aria-hidden", "true");
+  a.textContent = initial(name);
+  return a;
 }
 
 // -- screens
@@ -394,18 +583,30 @@ function showKeys(msg) {
   $("keys").hidden = false;
 }
 
-function setLive(text) { $("live").textContent = text; }
+// state: "live" (the queue answered), "wait" (reconnecting), "down".
+function setLive(state, text) {
+  $("live").className = state;
+  $("live").title = text;
+  $("live-text").textContent = text;
+}
 
 async function start() {
   $("keys").hidden = true;
   $("app").hidden = false;
   const gen = ++S.gen;
+  setLive("wait", "מתחבר…");
   try {
     S.me = await api("GET", "users/me");
-    $("who").textContent = S.me.full_name + " <" + S.me.email + ">";
+    $("who").textContent = S.me.full_name;
+    $("who").title = S.me.email;
+    $("me-avatar").className = "avatar small role-" + roleOf(S.me.full_name, S.me.is_bot);
+    $("me-avatar").textContent = initial(S.me.full_name);
+    // Who is a bot colours the avatars and fills the @ picker; without it
+    // the page still works, with names only.
+    try { await loadUsers(); } catch (e) { if (e.status === 401) return; }
     await connect(gen);
   } catch (e) {
-    if (e.status !== 401) setLive("not connected: " + e.message);
+    if (e.status !== 401) setLive("down", "לא מחובר: " + e.message);
     return;
   }
   poll(gen);
@@ -420,7 +621,7 @@ async function connect(gen) {
   S.lastEvent = reg.last_event_id;
   await loadStreams();
   if (S.open) await openTopic(S.open.stream_id, S.open.stream, S.open.topic);
-  setLive("live");
+  setLive("live", "מחובר");
 }
 
 async function loadStreams() {
@@ -447,16 +648,16 @@ async function poll(gen) {
     } catch (e) {
       if (gen !== S.gen || e.status === 401) return;
       if (e.code === "BAD_EVENT_QUEUE_ID") {
-        setLive("queue expired, reconnecting");
+        setLive("wait", "התור פג, מתחבר מחדש");
       } else {
-        setLive("not live: " + e.message + " (retrying)");
+        setLive("wait", "לא מחובר: " + e.message + " (מנסה שוב)");
         await sleep(3000);
       }
       try { await reconnect(gen); } catch (e2) { if (e2.status === 401) return; await sleep(3000); }
       continue;
     }
     if (gen !== S.gen) return;
-    setLive("live");
+    setLive("live", "מחובר");
     for (const ev of got.events) {
       S.lastEvent = Math.max(S.lastEvent, ev.id);
       if (ev.type === "message") onMessage(ev.message);
@@ -478,31 +679,43 @@ function onMessage(m) {
 
 function renderStreams() {
   const list = $("streams");
+  // A live message re-renders the list: keep the "+ new topic" field focused.
+  const typing = !!(document.activeElement && document.activeElement.closest
+                    && document.activeElement.closest(".new-topic-form"));
   list.replaceChildren();
-  const select = $("new-stream");
-  const picked = select.value;
-  select.replaceChildren();
   for (const s of S.streams) {
     const li = document.createElement("li");
     const row = document.createElement("div");
     row.className = "stream-row";
     if (S.open && S.open.stream_id === s.stream_id) row.classList.add("open");
+    const folded = S.collapsed.has(s.stream_id);
+    if (folded) row.classList.add("folded");
     const name = document.createElement("button");
     name.type = "button";
     name.className = "stream-name";
-    name.dir = "auto";
-    const folded = S.collapsed.has(s.stream_id);
-    name.textContent = (folded ? "▸ #" : "▾ #") + s.name;
-    name.title = s.invite_only ? "private stream" : "public stream";
+    name.setAttribute("aria-expanded", String(!folded));
+    name.title = s.invite_only ? "ערוץ פרטי" : "ערוץ ציבורי";
+    const label = document.createElement("span");
+    label.className = "stream-label";
+    label.dir = "auto";
+    label.textContent = "#" + s.name;
+    name.append(svgIcon(CARET, "caret"), label);
+    if (s.invite_only) {
+      const tag = document.createElement("span");
+      tag.className = "tag";
+      tag.textContent = "פרטי";
+      name.append(tag);
+    }
     name.addEventListener("click", () => {
       if (folded) S.collapsed.delete(s.stream_id); else S.collapsed.add(s.stream_id);
       renderStreams();
     });
     const gear = document.createElement("button");
     gear.type = "button";
-    gear.className = "icon";
-    gear.title = "Members and settings";
-    gear.textContent = "⚙";
+    gear.className = "icon gear";
+    gear.title = "חברים והגדרות";
+    gear.setAttribute("aria-label", "חברים והגדרות");
+    gear.append(svgIcon(GEAR, "gear-ico"));
     gear.addEventListener("click", () => openMembers(s));
     row.append(name, gear);
     li.append(row);
@@ -521,14 +734,57 @@ function renderStreams() {
       item.append(btn);
       ul.append(item);
     }
+    ul.append(newTopicItem(s));
     li.append(ul);
     list.append(li);
-    const opt = document.createElement("option");
-    opt.value = String(s.stream_id);
-    opt.textContent = "#" + s.name;
-    select.append(opt);
   }
-  if (picked) select.value = picked;
+  const field = list.querySelector(".new-topic-form input");
+  if (field && typing) field.focus();
+}
+
+// "+ new topic" under each stream opens a field in place; the topic itself
+// exists on the server only once its first message is sent.
+function newTopicItem(s) {
+  const item = document.createElement("li");
+  if (!S.adding || S.adding.stream_id !== s.stream_id) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "new-topic";
+    btn.textContent = "+ נושא חדש";
+    btn.addEventListener("click", () => {
+      S.adding = {stream_id: s.stream_id, text: ""};
+      renderStreams();
+      $("streams").querySelector(".new-topic-form input").focus();
+    });
+    item.append(btn);
+    return item;
+  }
+  const form = document.createElement("form");
+  form.className = "new-topic-form";
+  const input = document.createElement("input");
+  input.dir = "auto";
+  input.placeholder = "שם הנושא";
+  input.setAttribute("aria-label", "נושא חדש ב-#" + s.name);
+  input.value = S.adding.text;
+  input.addEventListener("input", () => { S.adding.text = input.value; });
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") { e.preventDefault(); S.adding = null; renderStreams(); }
+  });
+  const ok = document.createElement("button");
+  ok.type = "submit";
+  ok.className = "btn";
+  ok.textContent = "פתח";
+  form.append(input, ok);
+  form.addEventListener("submit", (e) => {
+    e.preventDefault();
+    const topic = input.value.trim();
+    if (!topic) { toast("כתבו שם לנושא.", true); return; }
+    S.adding = null;
+    openTopic(s.stream_id, s.name, topic);
+    toast("#" + s.name + " › " + topic + ": הנושא ייווצר בשרת עם ההודעה הראשונה");
+  });
+  item.append(form);
+  return item;
 }
 
 function closeTopic() {
@@ -536,8 +792,17 @@ function closeTopic() {
   S.msgs = [];
   S.shown = new Set();
   $("messages").replaceChildren();
-  $("topic-title").textContent = "Pick a topic";
+  $("topic-title").textContent = "בחרו נושא";
   $("members-btn").disabled = true;
+  $("members-btn").textContent = membersLabel(null);
+}
+
+async function refreshCount(streamId) {
+  let n = null;
+  try {
+    n = (await api("GET", "streams/" + streamId + "/members")).subscribers.length;
+  } catch (e) { n = null; }
+  if (S.open && S.open.stream_id === streamId) $("members-btn").textContent = membersLabel(n);
 }
 
 async function openTopic(streamId, stream, topic) {
@@ -548,6 +813,8 @@ async function openTopic(streamId, stream, topic) {
   $("new-pill").hidden = true;
   $("topic-title").textContent = "#" + stream + " › " + topic;
   $("members-btn").disabled = false;
+  $("members-btn").textContent = membersLabel(null);
+  refreshCount(streamId);
   $("app").classList.remove("side-open");
   S.collapsed.delete(streamId);
   renderStreams();
@@ -557,7 +824,7 @@ async function openTopic(streamId, stream, topic) {
       narrow: [{operator: "channel", operand: stream}, {operator: "topic", operand: topic}],
       anchor: "newest", num_before: 1000, num_after: 0});
   } catch (e) {
-    if (e.status !== 401) setLive("could not load the topic: " + e.message);
+    if (e.status !== 401) toast("לא ניתן לטעון את הנושא: " + e.message, true);
     return;
   }
   if (!S.open || S.open.stream_id !== streamId || S.open.topic !== topic) return;
@@ -592,6 +859,7 @@ function addMessages(list, toEnd) {
 function renderMessages() {
   const box = $("messages");
   const nodes = [];
+  const now = new Date();
   let prev = null;
   for (const m of S.msgs) {
     const when = new Date(m.timestamp * 1000);
@@ -600,7 +868,8 @@ function renderMessages() {
     if (newDay) {
       const sep = document.createElement("div");
       sep.className = "day";
-      sep.textContent = when.toLocaleDateString([], {weekday: "long", year: "numeric", month: "long", day: "numeric"});
+      sep.dir = "rtl";
+      sep.textContent = dayLabel(when, now);
       nodes.push(sep);
     }
     nodes.push(messageNode(m, when, newDay || prev.sender_id !== m.sender_id));
@@ -609,17 +878,31 @@ function renderMessages() {
   box.replaceChildren(...nodes);
 }
 
+function inlineNodes(text) {
+  return inlineParts(text).map((p) => {
+    if (p.kind === "text") return document.createTextNode(p.text);
+    const n = document.createElement(p.kind === "code" ? "code" : "strong");
+    n.className = p.kind === "code" ? "chip" : "mention-name";
+    n.dir = "ltr";  // "@CTO" and code keep their order inside a Hebrew line
+    n.textContent = p.text;
+    return n;
+  });
+}
+
 function fillBody(el, text) {
   // Code (``` fences) stays left-to-right inside a right-to-left message.
   el.dir = textDir(text);
   const parts = String(text).split("```");
   el.replaceChildren();
   parts.forEach((part, i) => {
-    const code = i % 2 === 1 && i < parts.length - 1;
-    const n = document.createElement(code ? "pre" : "span");
-    if (code) n.dir = "ltr";
-    n.textContent = code ? part.replace(/^[^\n]*\n/, "") : (i % 2 ? "```" + part : part);
-    el.append(n);
+    if (i % 2 === 1 && i < parts.length - 1) {
+      const n = document.createElement("pre");
+      n.dir = "ltr";
+      n.textContent = part.replace(/^[^\n]*\n/, "");
+      el.append(n);
+    } else {
+      el.append(...inlineNodes(i % 2 ? "```" + part : part));
+    }
   });
 }
 
@@ -629,6 +912,10 @@ function messageNode(m, when, first) {
   if (first) node.classList.add("first"); else node.querySelector(".head").hidden = true;
   if (S.me && m.sender_id === S.me.user_id) node.classList.add("mine");
   if ((m.flags || []).includes("mentioned")) node.classList.add("mention");
+  const u = S.users.get(m.sender_id);
+  const av = node.querySelector(".avatar");
+  av.classList.add("role-" + roleOf(m.sender_full_name, u ? u.is_bot : false));
+  av.textContent = initial(m.sender_full_name);
   node.querySelector(".sender").textContent = m.sender_full_name;
   const t = node.querySelector(".when");
   t.dateTime = when.toISOString();
@@ -691,22 +978,25 @@ async function send() {
   const box = $("compose");
   const text = box.value;
   if (!text.trim()) return;
-  if (!S.open) { sendError("Open a topic first, or start a new one below."); return; }
+  if (!S.open) {
+    sendError("פתחו נושא קודם, או התחילו אחד עם \"+ נושא חדש\" בסרגל הצד.");
+    toast("לא נשלח: אין נושא פתוח", true);
+    return;
+  }
   sendError("");
   S.sending = true;
   box.disabled = true;
   $("send-btn").disabled = true;
-  $("send-status").textContent = "sending…";
   try {
     const sent = await api("POST", "messages", {
       type: "stream", to: S.open.stream_id, topic: S.open.topic, content: text});
-    // Cleared only once the server returned the new message's id.
+    // Cleared, and reported sent, only once the server returned the new id.
     if (box.value === text) box.value = "";
-    $("send-status").textContent = "sent, id " + sent.id;
+    toast("נשלח · id " + sent.id);
   } catch (e) {
     // The text stays in the box; the server's own msg says why.
-    $("send-status").textContent = "not sent";
     sendError(e.message);
+    toast("לא נשלח: " + e.message, true);
   } finally {
     S.sending = false;
     box.disabled = false;
@@ -716,28 +1006,86 @@ async function send() {
   }
 }
 
+// -- the @ picker: the mention buttons' names and everyone the server lists.
+
+function mentionNames() {
+  const names = [...document.querySelectorAll("[data-mention]")].map((b) => b.dataset.mention);
+  for (const u of S.users.values()) {
+    if (S.me && u.user_id === S.me.user_id) continue;
+    if (!names.includes(u.full_name)) names.push(u.full_name);
+  }
+  return names;
+}
+
+function closePick() {
+  S.pick = null;
+  $("picker").hidden = true;
+  $("picker").replaceChildren();
+}
+
+function renderPick() {
+  const list = $("picker");
+  list.replaceChildren();
+  S.pick.items.forEach((name, i) => {
+    const li = document.createElement("li");
+    li.setAttribute("role", "option");
+    li.setAttribute("aria-selected", String(i === S.pick.index));
+    if (i === S.pick.index) li.className = "active";
+    const u = [...S.users.values()].find((x) => x.full_name === name);
+    const label = document.createElement("span");
+    label.dir = "auto";
+    label.textContent = name;
+    li.append(avatar(name, u ? u.is_bot : false, true), label);
+    // mousedown, not click: the compose box must keep the focus and caret.
+    li.addEventListener("mousedown", (e) => { e.preventDefault(); choosePick(i); });
+    list.append(li);
+  });
+  list.hidden = false;
+}
+
+function updatePick() {
+  const box = $("compose");
+  const caret = box.selectionStart;
+  const q = caret === box.selectionEnd ? mentionQuery(box.value.slice(0, caret)) : null;
+  const items = q === null ? [] : pickNames(mentionNames(), q);
+  if (!items.length) { closePick(); return; }
+  S.pick = {items, index: 0, start: caret - q.length - 1};
+  renderPick();
+}
+
+function choosePick(i) {
+  const box = $("compose");
+  const name = S.pick.items[i];
+  box.setRangeText("@**" + name + "** ", S.pick.start, box.selectionStart, "end");
+  closePick();
+  fitCompose();
+  box.focus();
+}
+
 $("compose").addEventListener("keydown", (e) => {
+  if (S.pick && !e.isComposing) {
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault();
+      const n = S.pick.items.length;
+      S.pick.index = (S.pick.index + (e.key === "ArrowDown" ? 1 : n - 1)) % n;
+      renderPick();
+      return;
+    }
+    if (e.key === "Enter" || e.key === "Tab") { e.preventDefault(); choosePick(S.pick.index); return; }
+    if (e.key === "Escape") { e.preventDefault(); closePick(); return; }
+  }
   if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
     e.preventDefault();
     send();
   }
 });
-$("compose").addEventListener("input", fitCompose);
+$("compose").addEventListener("input", () => { fitCompose(); updatePick(); });
+$("compose").addEventListener("blur", closePick);
 $("send-btn").addEventListener("click", send);
 
 for (const btn of document.querySelectorAll("[data-mention]")) {
   btn.addEventListener("click", () => insertText("@**" + btn.dataset.mention + "** "));
 }
-
-$("newtopic").addEventListener("submit", (e) => {
-  e.preventDefault();
-  const topic = $("new-topic").value.trim();
-  const s = S.streams.find((x) => String(x.stream_id) === $("new-stream").value);
-  if (!s || !topic) { sendError("Pick a stream and type a topic."); return; }
-  sendError("");
-  $("new-topic").value = "";
-  openTopic(s.stream_id, s.name, topic);
-});
 
 // -- streams: create, members, private
 
@@ -747,7 +1095,7 @@ async function loadUsers() {
 }
 
 function userLabel(u) {
-  return u.full_name + (u.is_bot ? " (bot)" : "") + " <" + u.email + ">";
+  return u.full_name + (u.is_bot ? " (בוט)" : "") + " <" + u.email + ">";
 }
 
 function say(id, text, bad) {
@@ -755,12 +1103,18 @@ function say(id, text, bad) {
   $(id).className = bad ? "error" : "muted";
 }
 
+// A result: in the panel's status line and as a toast.
+function report(id, text, bad) {
+  say(id, text, bad);
+  toast(text, bad);
+}
+
 // What the server says it did, not what was asked: "already a member" and
 // "was not a member" are not reported as done.
 function subscribeReport(r, email) {
-  if ((r.subscribed[email] || []).length) return "added " + email;
-  if ((r.already_subscribed[email] || []).length) return email + " was already a member";
-  return "the server added nobody";
+  if ((r.subscribed[email] || []).length) return "נוסף " + email;
+  if ((r.already_subscribed[email] || []).length) return email + " כבר חבר";
+  return "השרת לא הוסיף אף אחד";
 }
 
 $("new-stream-btn").addEventListener("click", async () => {
@@ -768,7 +1122,7 @@ $("new-stream-btn").addEventListener("click", async () => {
   $("create-name").value = "";
   $("create-people").replaceChildren();
   $("create-dlg").showModal();
-  try { await loadUsers(); } catch (e) { say("create-status", "could not list people: " + e.message, true); return; }
+  try { await loadUsers(); } catch (e) { report("create-status", "לא ניתן לטעון את רשימת האנשים: " + e.message, true); return; }
   for (const u of S.users.values()) {
     if (S.me && u.user_id === S.me.user_id) continue;
     const label = document.createElement("label");
@@ -788,10 +1142,10 @@ $("create-cancel").addEventListener("click", () => $("create-dlg").close());
 $("create-form").addEventListener("submit", async (e) => {
   e.preventDefault();
   const name = $("create-name").value.trim().replace(/^#/, "");
-  if (!name) { say("create-status", "Type a name.", true); return; }
+  if (!name) { say("create-status", "כתבו שם.", true); return; }
   const emails = [S.me.email, ...[...$("create-people").querySelectorAll("input:checked")].map((b) => b.value)];
   $("create-ok").disabled = true;
-  say("create-status", "creating…");
+  say("create-status", "יוצר…");
   try {
     const wantPrivate = $("create-private").checked;
     const r = await createStream(name, wantPrivate, emails);
@@ -802,33 +1156,45 @@ $("create-form").addEventListener("submit", async (e) => {
       await loadStreams();
       s = S.streams.find((x) => x.name === name);
     } catch (err) { s = undefined; }
-    say("create-status", createReport(name, wantPrivate, r, s));
+    report("create-status", createReport(name, wantPrivate, r, s));
   } catch (err) {
-    say("create-status", "not created: " + err.message, true);
+    report("create-status", "לא נוצר: " + err.message, true);
   } finally {
     $("create-ok").disabled = false;
   }
 });
+
+function closeMembers() {
+  $("members-panel").classList.remove("open");
+}
 
 async function openMembers(s) {
   S.panel = s;
   $("members-title").textContent = "#" + s.name;
   $("members-private").checked = !!s.invite_only;
   say("members-status", "");
-  if (!$("members-dlg").open) $("members-dlg").showModal();
+  $("members-list").replaceChildren();
+  if (!$("members-panel").classList.contains("open")) {
+    $("members-panel").classList.add("open");
+    $("members-close").focus();
+  }
   await listMembers();
 }
 
 async function listMembers() {
   const s = S.panel;
+  const path = "streams/" + s.stream_id + "/members";
+  // The box shows the very requests this list is read from.
+  $("members-api").textContent = "GET /api/v1/users\nGET /api/v1/" + path;
   let ids;
   try {
     await loadUsers();
-    ids = new Set((await api("GET", "streams/" + s.stream_id + "/members")).subscribers);
+    ids = new Set((await api("GET", path)).subscribers);
   } catch (e) {
-    say("members-status", "could not list the members: " + e.message, true);
+    report("members-status", "לא ניתן לטעון את החברים: " + e.message, true);
     return;
   }
+  if (S.open && S.open.stream_id === s.stream_id) $("members-btn").textContent = membersLabel(ids.size);
   const list = $("members-list");
   list.replaceChildren();
   const who = $("members-who");
@@ -837,21 +1203,31 @@ async function listMembers() {
     if (ids.has(u.user_id)) {
       const li = document.createElement("li");
       const name = document.createElement("span");
-      name.dir = "auto";
-      name.textContent = userLabel(u);
+      name.className = "member-name";
+      const full = document.createElement("span");
+      full.dir = "auto";
+      full.textContent = u.full_name;
+      const mail = document.createElement("span");
+      mail.className = "muted";
+      mail.dir = "ltr";
+      mail.textContent = u.email;
+      name.append(full, mail);
+      const tag = document.createElement("span");
+      tag.className = "tag";
+      tag.textContent = u.is_bot ? "בוט" : "אדם";
       const rm = document.createElement("button");
       rm.type = "button";
       rm.className = "icon";
-      rm.textContent = "remove";
+      rm.textContent = "הסר";
       rm.addEventListener("click", async () => {
         try {
           const r = await removeMember(s.name, u.email);
-          say("members-status", r.removed.length ? "removed " + u.email : u.email + " was not a member");
-        } catch (e) { say("members-status", "not removed: " + e.message, true); }
+          report("members-status", r.removed.length ? "הוסר " + u.email : u.email + " לא היה חבר");
+        } catch (e) { report("members-status", "לא הוסר: " + e.message, true); }
         await listMembers();
         await loadStreams();
       });
-      li.append(name, rm);
+      li.append(avatar(u.full_name, u.is_bot), name, tag, rm);
       list.append(li);
     } else {
       const opt = document.createElement("option");
@@ -867,8 +1243,8 @@ $("members-add").addEventListener("submit", async (e) => {
   const email = $("members-who").value;
   if (!email || !S.panel) return;
   try {
-    say("members-status", subscribeReport(await addMember(S.panel.name, email), email));
-  } catch (err) { say("members-status", "not added: " + err.message, true); }
+    report("members-status", subscribeReport(await addMember(S.panel.name, email), email));
+  } catch (err) { report("members-status", "לא נוסף: " + err.message, true); }
   await listMembers();
   await loadStreams();
 });
@@ -880,7 +1256,7 @@ $("members-private").addEventListener("change", async () => {
     await setPrivate(S.panel.stream_id, want);
   } catch (err) {
     $("members-private").checked = !want;
-    say("members-status", "not changed: " + err.message, true);
+    report("members-status", "לא שונה: " + err.message, true);
     return;
   }
   // Show what the server now has, not what the box was set to. After you
@@ -891,13 +1267,16 @@ $("members-private").addEventListener("change", async () => {
     now = S.streams.find((x) => x.stream_id === S.panel.stream_id);
   } catch (err) { now = undefined; }
   if (now) { S.panel = now; $("members-private").checked = !!now.invite_only; }
-  say("members-status", privateReport(S.panel.name, want, now));
+  report("members-status", privateReport(S.panel.name, want, now));
 });
 
-$("members-close").addEventListener("click", () => $("members-dlg").close());
+$("members-close").addEventListener("click", closeMembers);
 $("members-btn").addEventListener("click", () => {
   const s = S.open && S.streams.find((x) => x.stream_id === S.open.stream_id);
   if (s) openMembers(s);
+});
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && !e.defaultPrevented && $("members-panel").classList.contains("open")) closeMembers();
 });
 
 // -- chrome: sidebar on a narrow screen, theme, keys
@@ -929,6 +1308,7 @@ $("forget").addEventListener("click", () => {
   localStorage.removeItem(STORE);
   S.creds = null;
   closeTopic();
+  closeMembers();
   $("key-email").value = "";
   showKeys("");
 });
