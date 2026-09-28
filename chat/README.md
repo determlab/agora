@@ -44,6 +44,20 @@ off. For agents: `up --no-serve --json` (set up, one JSON line, exit 0) and
 
 `serve --port 8095 --seed-ids 600` still serves without any setup.
 
+## The dashboard
+
+Start `up` (or `serve`) with `--dashboard-cmd "<command>"` and the server runs
+that command every `--dashboard-every` seconds (default 300); `POST
+/api/v1/dashboard/sync` runs it now and answers `{"result":"success",
+"last_sync":…}`, or an error naming the command's last stderr line. `GET
+/api/v1/dashboard`, with the same auth as every endpoint, returns the newest
+document (`doc`) with `last_sync` (when it was stored), `stale` (true past two
+hours) and `last_error`; read `last_sync`, not the document's own date, to know
+how old it is. A failed run stores nothing: the previous document stays and
+`last_error` says why. `chat\run.cmd` passes this PC's `ops/tools/dashboard.py
+--json`. A queue registered with `dashboard` in its `event_types` gets
+`{"type":"dashboard","last_sync":…}` after each good sync.
+
 ## Accounts, by hand
 
     python chat/server.py bootstrap --json                      # an admin bot

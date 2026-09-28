@@ -9,9 +9,10 @@ tools read them.
 
 Usage:
   python chat/server.py up [--json] [--no-serve] [--no-update] [--env bot/.env] [--port 8095]
+                           [--dashboard-cmd "COMMAND"] [--dashboard-every 300]
   python chat/server.py add-human --email E --name N [--write-env] [--json] [--db PATH]
   python chat/server.py autostart install|remove|status [--json] [--startup-dir DIR]
-  python chat/server.py serve --port 8095 [--db PATH] [--seed-ids N]
+  python chat/server.py serve --port 8095 [--db PATH] [--seed-ids N] [--dashboard-cmd "COMMAND"]
   python chat/server.py bootstrap --json [--from-env bot/.env] [--db PATH]
 
 ``up`` (issue #72) is the one command: it seeds ids above Zulip's, makes
@@ -47,6 +48,7 @@ import json
 import os
 import re
 import secrets
+import shlex
 import socket
 import sqlite3
 import string
@@ -78,6 +80,11 @@ QUEUE_TTL = 7 * 24 * 3600  # a queue nobody polled for this long is gone
 # `@**all**` and its aliases notify everyone in the stream: for the hook's
 # wake rule that is a mention like any other.
 WILDCARDS = ("@**all**", "@**everyone**", "@**channel**", "@**stream**")
+DASHBOARD_EVERY = 300.0  # seconds between --dashboard-cmd runs (RFC-002 §1)
+DASHBOARD_TIMEOUT = 120.0  # a run past this stores nothing
+DASHBOARD_STALE = 7200  # a document older than this is `stale`
+DASHBOARD_KEEP = 24 * 3600  # rows older than this go on the next good sync
+NO_DASHBOARD = "no dashboard command configured: start the server with --dashboard-cmd"
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS users (
@@ -108,6 +115,7 @@ CREATE TABLE IF NOT EXISTS queues (
 CREATE TABLE IF NOT EXISTS events (
     id INTEGER PRIMARY KEY AUTOINCREMENT, queue_id TEXT NOT NULL, body TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS events_queue ON events (queue_id, id);
+CREATE TABLE IF NOT EXISTS dashboard (ts INTEGER PRIMARY KEY, doc TEXT, error TEXT);
 """
 
 
@@ -340,12 +348,102 @@ def _known_op(op, operand) -> bool:
         op == "is" and operand in ("mentioned", "private", "dm"))
 
 
+class Dashboard:
+    """The sync thread (issue #81, RFC-002 §1): runs ``--dashboard-cmd``
+    every ``every`` seconds and on ``POST /dashboard/sync``, and keeps each
+    good document in the ``dashboard`` table.
+
+    Only exit 0 stores anything. A failure or a timeout leaves the previous
+    document where it was and puts the command's own stderr in
+    ``last_error``, so a reader can tell a fresh document from an old one
+    that nothing replaced (D3). The subprocess runs outside the store lock:
+    a two-minute ``gh`` call must not stall every request."""
+
+    def __init__(self, store: Store, cmd: str | None = None, every: float = DASHBOARD_EVERY,
+                 clock=time.time):
+        self.s, self.cmd, self.every, self.clock = store, cmd, every, clock
+        self.timeout = DASHBOARD_TIMEOUT
+        self.last_error: str | None = None
+        self.running = threading.Lock()  # one run at a time, thread or POST
+        self.stop = threading.Event()
+
+    def start(self) -> None:
+        if self.cmd:
+            threading.Thread(target=self._loop, daemon=True).start()
+
+    def _loop(self) -> None:
+        while True:
+            try:
+                ok, why = self.sync()
+                if not ok:
+                    log(f"dashboard: sync failed: {why}")
+            except Exception as e:  # the thread outlives one bad run
+                log(f"dashboard: sync crashed: {e!r}")
+            if self.stop.wait(self.every):
+                return
+
+    def sync(self) -> tuple[bool, str | int]:
+        """(True, ts) when a document was stored; (False, why) otherwise."""
+        if not self.cmd:
+            return False, NO_DASHBOARD
+        with self.running:
+            try:
+                done = subprocess.run(shlex.split(self.cmd), capture_output=True, text=True,
+                                      timeout=self.timeout)
+            except subprocess.TimeoutExpired as e:
+                err = e.stderr.decode("utf-8", "replace") if isinstance(e.stderr, bytes) \
+                    else (e.stderr or "")
+                self.last_error = (f"{err.rstrip()}\n" if err.strip() else "") + \
+                    f"timed out after {self.timeout:g}s: {self.cmd}"
+                self.last_error = self.last_error[-500:]
+                return False, self.last_error.splitlines()[-1]
+            except (OSError, ValueError) as e:
+                self.last_error = f"could not run {self.cmd!r}: {e}"[-500:]
+                return False, self.last_error
+            if done.returncode != 0:
+                err = (done.stderr or "").strip()
+                self.last_error = (err or f"exited {done.returncode} with nothing on "
+                                          f"stderr: {self.cmd}")[-500:]
+                return False, self.last_error.splitlines()[-1]
+            ts = int(self.clock())
+            with self.s.tx():
+                self.s.x("INSERT OR REPLACE INTO dashboard (ts, doc, error) VALUES (?,?,NULL)",
+                         (ts, done.stdout))
+                self.s.x("DELETE FROM dashboard WHERE ts < ?", (ts - DASHBOARD_KEEP,))
+                # Only a queue that named `dashboard` gets it, stream membership
+                # aside: a hook registered for ["message"] is never woken by it.
+                for q in self.s.q("SELECT queue_id, event_types FROM queues"):
+                    if q["event_types"] and "dashboard" in json.loads(q["event_types"]):
+                        self.s.x("INSERT INTO events (queue_id, body) VALUES (?,?)",
+                                 (q["queue_id"], json.dumps({"type": "dashboard",
+                                                             "last_sync": ts})))
+            self.last_error = None
+            return True, ts
+
+    def state(self) -> dict:
+        if not self.cmd:
+            return {"doc": None, "last_sync": None, "stale": True, "last_error": NO_DASHBOARD}
+        row = self.s.one("SELECT ts, doc FROM dashboard ORDER BY ts DESC LIMIT 1")
+        doc = None
+        if row is not None:
+            try:
+                doc = json.loads(row["doc"])
+            except ValueError:
+                doc = row["doc"]  # exit 0 with text that is not JSON: shown as it came
+        last = row["ts"] if row is not None else None
+        return {"doc": doc, "last_sync": last,
+                "stale": last is None or self.clock() - last > DASHBOARD_STALE,
+                "last_error": self.last_error}
+
+
 class Chat:
     """The endpoints. Each returns the success body (without ``result``)."""
 
-    def __init__(self, store: Store, poll_seconds: float = POLL_SECONDS):
+    def __init__(self, store: Store, poll_seconds: float = POLL_SECONDS,
+                 dashboard: Dashboard | None = None):
         self.s = store
         self.poll_seconds = poll_seconds
+        self.dashboard = dashboard or Dashboard(store)
 
     def message_json(self, row, me: dict) -> dict:
         s = self.s
@@ -854,6 +952,16 @@ class Chat:
             return self.update_stream(me, int(st.group(1)), p)
         if path == "bots" and method == "POST":
             return self.create_bot(me, p)
+        if path == "dashboard" and method == "GET":
+            return self.dashboard.state()
+        if path == "dashboard/sync" and method == "POST":
+            ok, out = self.dashboard.sync()
+            if ok:
+                return {"last_sync": out}
+            if out == NO_DASHBOARD:
+                raise ApiError(out, "DASHBOARD_NOT_CONFIGURED", last_error=out)
+            raise ApiError(f"dashboard sync failed, nothing stored: {out}",
+                           "DASHBOARD_SYNC_FAILED", 502, last_error=self.dashboard.last_error)
         raise ApiError(f"Endpoint not found: {method} /api/v1/{path} is not served by this "
                        f"chat server (see chat/README.md for what it serves)",
                        "BAD_REQUEST", 404)
@@ -981,14 +1089,18 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def make_server(db: str, port: int = 8095, poll_seconds: float = POLL_SECONDS,
-                seed_ids: int | None = None) -> ThreadingHTTPServer:
-    """A server bound to 127.0.0.1 only; ``port=0`` picks a free one."""
+                seed_ids: int | None = None, dashboard_cmd: str | None = None,
+                dashboard_every: float = DASHBOARD_EVERY) -> ThreadingHTTPServer:
+    """A server bound to 127.0.0.1 only; ``port=0`` picks a free one. With
+    ``dashboard_cmd`` its sync thread starts too (first run at once)."""
     store = Store(db)
     if seed_ids is not None:
         store.seed_ids(seed_ids)
-    handler = type("ChatHandler", (Handler,), {"chat": Chat(store, poll_seconds)})
+    dashboard = Dashboard(store, dashboard_cmd, dashboard_every)
+    handler = type("ChatHandler", (Handler,), {"chat": Chat(store, poll_seconds, dashboard)})
     server = ThreadingHTTPServer((HOST, port), handler)
     server.daemon_threads = True
+    dashboard.start()
     return server
 
 
@@ -1281,7 +1393,8 @@ def cmd_up(args, argv: list[str]) -> int:
         if port_busy(args.port):
             return _port_error(args.port, "something already answers there")
         try:
-            server = make_server(args.db, args.port)
+            server = make_server(args.db, args.port, dashboard_cmd=args.dashboard_cmd,
+                                 dashboard_every=args.dashboard_every)
         except OSError as e:
             return _port_error(args.port, str(e))
         url = f"http://{HOST}:{server.server_address[1]}"
@@ -1432,6 +1545,12 @@ def main(argv: list[str] | None = None) -> int:
     for p in (human, up, auto):
         p.add_argument("--env", default=BOT_ENV, metavar="FILE",
                        help="the bots' ZULIP_<ROLE>_EMAIL/_API_KEY file (default bot/.env)")
+    for p in (serve, up):
+        p.add_argument("--dashboard-cmd", metavar="COMMAND",
+                       help="run this every --dashboard-every seconds; its stdout (exit 0) "
+                            "is what GET /api/v1/dashboard returns")
+        p.add_argument("--dashboard-every", type=float, default=DASHBOARD_EVERY,
+                       metavar="SECONDS")
     for p in (serve, boot, human, up, auto):
         p.add_argument("--db", default=DEFAULT_DB)
         p.add_argument("--port", type=int, default=8095)
@@ -1491,7 +1610,8 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_up(args, sys.argv[1:] if argv is None else argv)
     if args.cmd == "autostart":
         return cmd_autostart(args)
-    server = make_server(args.db, args.port, args.poll_seconds, args.seed_ids)
+    server = make_server(args.db, args.port, args.poll_seconds, args.seed_ids,
+                         args.dashboard_cmd, args.dashboard_every)
     print(f"serving http://{HOST}:{server.server_address[1]}/ (page) and /api/v1/ "
           f"db={args.db}", flush=True)
     try:
