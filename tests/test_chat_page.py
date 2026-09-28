@@ -19,6 +19,7 @@ import http.client
 import importlib.util
 import json
 import re
+import shutil
 import subprocess
 import sys
 import urllib.parse
@@ -113,6 +114,52 @@ def _markup(text: str | None = None) -> Markup:
     m = Markup()
     m.feed(text if text is not None else PAGE.read_text(encoding="utf-8"))
     return m
+
+
+def _function(name: str) -> str:
+    """One top-level function of the page's script, as written (braces
+    counted; the helpers run by ``_js`` keep theirs balanced)."""
+    script = _markup().script
+    found = re.search(rf"^(async )?function {name}\(", script, re.M)
+    assert found, name
+    depth, i = 0, script.index("{", script.index(")", found.end()))
+    for j in range(i, len(script)):
+        depth += {"{": 1, "}": -1}.get(script[j], 0)
+        if depth == 0:
+            return script[found.start():j + 1]
+    raise AssertionError(f"unbalanced braces in {name}")
+
+
+# The stand-in for the page's api(): it records each call with the params
+# encoded exactly as the real api() encodes them (strings as-is, the rest
+# JSON), so a test can replay them against the real server.
+API_STUB = """
+const calls = [];
+let FAIL = false;
+async function api(method, path, params) {
+  const enc = {};
+  for (const [k, v] of Object.entries(params || {})) enc[k] = typeof v === "string" ? v : JSON.stringify(v);
+  calls.push([method, path, enc]);
+  if (FAIL) throw new Error("network down");
+  return {};
+}
+"""
+
+
+def _js(names: tuple[str, ...], body: str, prelude: str = ""):
+    """Run the page's own functions ``names`` in node and return what ``body``
+    puts in ``out``. CI guarantees Python only, so no node means a skip."""
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("node is not installed: the page's helpers cannot run here")
+    src = "\n".join([prelude, *(_function(n) for n in names),
+                     "(async () => { const out = {};", body,
+                     "console.log(JSON.stringify(out)); })()"
+                     ".catch((e) => { console.error(e); process.exit(1); });"])
+    run = subprocess.run([node, "-"], input=src, capture_output=True, text=True,
+                         encoding="utf-8", timeout=60)
+    assert run.returncode == 0, run.stderr
+    return json.loads(run.stdout)
 
 
 # -- GET /
@@ -248,9 +295,14 @@ def test_markup_in_a_message_is_stored_and_read_back_as_text(world):
 
 def test_the_page_never_renders_markup_from_a_string():
     script = _markup().script
-    for sink in ("innerHTML", "outerHTML", "insertAdjacentHTML", "document.write", "eval("):
+    for sink in ("innerHTML", "outerHTML", "insertAdjacentHTML", "document.write", "eval(",
+                 "createContextualFragment", "DOMParser", "srcdoc"):
         assert sink not in script, sink
-    assert ".textContent = m.content" in script
+    # Message text, the quote inside it and its code all end in textContent.
+    assert "fillBody(body, m.content)" in script and "fillBody(body, q.rest)" in script
+    assert re.search(r"n\.textContent = code \?", _function("fillBody"))
+    assert "qt.textContent = q.quote" in script
+    assert '.textContent = q.sender' in script and '.textContent = m.sender_full_name' in script
 
 
 def test_the_page_loads_nothing_from_elsewhere():
@@ -317,3 +369,213 @@ def test_every_api_call_the_page_makes_is_a_route_the_server_serves(world):
         status, body = page_api(world["run"], world["human"], method, path,
                                 **({"dont_block": "true"} if path == "events" else {}))
         assert status != 404, (method, path, body)
+
+
+# -- issue #71: direction, quote, reconnect, the stream dialogs
+
+
+def test_the_whole_script_parses():
+    # A syntax error anywhere leaves a blank page and no test would notice.
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("node is not installed: the page's script cannot be parsed here")
+    run = subprocess.run([node, "--check", "-"], input=_markup().script, capture_output=True,
+                         text=True, encoding="utf-8", timeout=60)
+    assert run.returncode == 0, run.stderr
+
+
+def test_the_direction_helper_skips_a_leading_mention():
+    script = _markup().script
+    # Where it is used: every message body, a quote, and the compose box.
+    assert "el.dir = textDir(text)" in script and "qt.dir = textDir(q.quote)" in script
+    assert "box.dir = box.value.trim() ? textDir(box.value)" in script
+    cases = {"@**CTO** שלום": "rtl", "@**CTO** hello": "ltr", "שלום": "rtl", "hello": "ltr",
+             "@**CTO** @**all** שלום": "rtl", "  @**CTO**שלום": "rtl", "12 שלום": "rtl",
+             "@**CTO** 12 hello שלום": "ltr", "": "ltr", "@_**CTO** said:": "ltr"}
+    out = _js(("textDir",), f"const cases = {json.dumps(list(cases))};"
+                            "out.dirs = cases.map(textDir);")
+    assert dict(zip(cases, out["dirs"])) == cases
+
+
+def test_the_quote_helper_splits_sender_quote_and_reply():
+    got = _js(("parseQuote", "quoteBlock"), """
+      out.given = parseQuote("@_**CTO** said:\\n```quote\\nhi\\n```\\nok");
+      out.zulip = parseQuote("@_**CTO|7** [said](#narrow/near/3):\\n```quote\\nשלום\\nשני\\n```\\n");
+      out.round = parseQuote(quoteBlock("COO", "a\\nb") + "reply");
+      out.plain = parseQuote("hi ```quote\\nx\\n```");
+    """)
+    assert got["given"] == {"sender": "CTO", "quote": "hi", "rest": "ok"}
+    assert got["zulip"] == {"sender": "CTO", "quote": "שלום\nשני", "rest": ""}
+    assert got["round"] == {"sender": "COO", "quote": "a\nb", "rest": "reply"}
+    assert got["plain"] is None
+
+
+def test_a_quote_does_not_wake_the_person_quoted(world):
+    run, human = world["run"], world["human"]
+    # What quoteBlock() writes: the silent @_** form, which is not a mention.
+    assert '"@_**" + name + "** said:\\n```quote\\n"' in _function("quoteBlock")
+    text = "@_**CTO** said:\n```quote\nhi\n```\nok"
+    status, body = page_api(run, human, "POST", "messages", type="stream",
+                            to="feature", topic="quote", content=text)
+    assert status == 200, body
+    status, got = page_api(run, world["bots"]["CTO"], "GET", "messages",
+                           anchor=body["id"], num_before=0, num_after=0)
+    assert got["messages"][0]["content"] == text
+    assert "mentioned" not in got["messages"][0]["flags"]
+
+
+def test_a_reconnect_deletes_the_old_queue_before_registering_again():
+    script = _markup().script
+    poll = _function("poll")
+    assert "await reconnect(gen)" in poll and "await connect(gen)" not in poll
+    assert re.search(r"await dropQueue\(\);\s*await connect\(gen\);", _function("reconnect"))
+    assert 'api("DELETE", "events", {queue_id: old})' in _function("dropQueue")
+    assert 'enc.set(k, typeof v === "string" ? v : JSON.stringify(v))' in script
+    stub = API_STUB + """
+      const S = {queue: null};
+      async function connect(gen) { calls.push(["connect", gen]); S.queue = "q2"; }
+    """
+    got = _js(("dropQueue", "reconnect"), """
+      S.queue = "q1"; await reconnect(1); out.ok = calls.splice(0);
+      S.queue = "q2"; FAIL = true; await reconnect(2); out.failed = calls.splice(0);
+      S.queue = null; FAIL = false; await reconnect(3); out.none = calls.splice(0);
+    """, prelude=stub)
+    assert got["ok"] == [["DELETE", "events", {"queue_id": "q1"}], ["connect", 1]]
+    # The old queue being gone (or the network) does not stop the reconnect.
+    assert got["failed"] == [["DELETE", "events", {"queue_id": "q2"}], ["connect", 2]]
+    assert got["none"] == [["connect", 3]]
+
+
+def test_the_queue_delete_the_page_sends_removes_the_queue(world):
+    run, human = world["run"], world["human"]
+    status, reg = page_api(run, human, "POST", "register", event_types='["message"]')
+    assert status == 200, reg
+    status, body = page_api(run, human, "DELETE", "events", queue_id=reg["queue_id"])
+    assert status == 200, body
+    status, body = page_api(run, human, "GET", "events", queue_id=reg["queue_id"],
+                            last_event_id=-1, dont_block="true")
+    assert body["code"] == "BAD_EVENT_QUEUE_ID", body
+
+
+def test_the_stream_dialogs_call_subscriptions_with_principals():
+    script = _markup().script
+    assert re.search(r'api\("POST", "users/me/subscriptions",\s*\{subscriptions: \[\{name: name\}\], '
+                     r'invite_only: isPrivate, principals: emails\}', _function("createStream"))
+    assert re.search(r'api\("POST", "users/me/subscriptions",\s*\{subscriptions: \[\{name: stream\}\], '
+                     r'principals: \[email\]\}', _function("addMember"))
+    assert re.search(r'api\("DELETE", "users/me/subscriptions", \{subscriptions: \[stream\], '
+                     r'principals: \[email\]\}', _function("removeMember"))
+    assert "createStream(name, " in script and "addMember(S.panel.name, email)" in script
+    assert "removeMember(s.name, u.email)" in script
+    # The creator is always a member, or the new stream would vanish from the page.
+    assert "const emails = [S.me.email, " in script
+
+
+def test_create_add_remove_and_private_reach_the_server_as_the_page_sends_them(world):
+    run, human, bots = world["run"], world["human"], world["bots"]
+    cto, coo = bots["CTO"]["email"], bots["COO"]["email"]
+    got = _js(("createStream", "addMember", "removeMember", "setPrivate"), f"""
+      await createStream("tmp", true, {json.dumps([human["email"], cto])});
+      await addMember("tmp", {json.dumps(coo)});
+      await removeMember("tmp", {json.dumps(cto)});
+      await setPrivate(0, false);
+      out.calls = calls;
+    """, prelude=API_STUB)
+    create, add, remove, private = got["calls"]
+    assert create[:2] == ["POST", "users/me/subscriptions"]
+    assert json.loads(create[2]["principals"]) == [human["email"], cto]
+    assert add[:2] == ["POST", "users/me/subscriptions"]
+    assert json.loads(add[2]["principals"]) == [coo]
+    assert remove[:2] == ["DELETE", "users/me/subscriptions"]
+    assert json.loads(remove[2]["principals"]) == [cto]
+    assert private == ["PATCH", "streams/0", {"is_private": "false"}]
+
+    def cto_send():
+        return page_api(run, bots["CTO"], "POST", "messages", type="stream", to="tmp",
+                        topic="t", content="from the CTO")
+
+    status, body = page_api(run, human, create[0], create[1], **create[2])
+    assert status == 200 and set(body["subscribed"]) == {human["email"], cto}, body
+    status, subs = page_api(run, human, "GET", "users/me/subscriptions")
+    [tmp] = [s for s in subs["subscriptions"] if s["name"] == "tmp"]
+    assert tmp["invite_only"] is True
+    assert cto_send()[0] == 200
+    status, body = page_api(run, human, add[0], add[1], **add[2])
+    assert status == 200 and body["subscribed"] == {coo: ["tmp"]}, body
+    status, body = page_api(run, human, remove[0], remove[1], **remove[2])
+    assert status == 200 and body["removed"] == ["tmp"], body
+    status, body = cto_send()
+    assert status == 400 and "tmp" in body["msg"], body
+    status, members = page_api(run, human, "GET", f"streams/{tmp['stream_id']}/members")
+    assert set(members["subscribers"]) == {human["id"], bots["COO"]["id"]}
+    status, body = page_api(run, human, "PATCH", f"streams/{tmp['stream_id']}", **private[2])
+    assert status == 200, body
+    status, subs = page_api(run, human, "GET", "users/me/subscriptions")
+    assert [s["invite_only"] for s in subs["subscriptions"] if s["name"] == "tmp"] == [False]
+
+
+def test_the_private_toggle_never_reports_a_state_it_did_not_read_back():
+    script = _markup().script
+    assert 'say("members-status", privateReport(S.panel.name, want, now))' in script
+    got = _js(("privacy", "privateReport"), """
+      out.read = privateReport("x", false, {stream_id: 1, name: "x", invite_only: true});
+      out.gone = privateReport("x", true, undefined);
+      out.goneOff = privateReport("x", false, undefined);
+    """)
+    # The read-back wins over what was asked for.
+    assert got["read"] == "#x is now private"
+    # Not listed any more (you removed yourself): no "is now", only what was accepted.
+    assert "is now" not in got["gone"] and "is now" not in got["goneOff"]
+    assert got["gone"].startswith("#x set to private (the server accepted it; the page cannot read it back")
+    assert got["goneOff"].startswith("#x set to public (")
+
+
+def test_create_reports_the_privacy_the_server_holds_not_the_checkbox(world):
+    run, human, bots = world["run"], world["human"], world["bots"]
+    cto = bots["CTO"]["email"]
+    script = _markup().script
+    assert 'say("create-status", createReport(name, wantPrivate, r, s))' in script
+    # The stream already exists as public and the human is not a member.
+    status, body = page_api(run, human, "POST", "users/me/subscriptions",
+                            subscriptions=json.dumps([{"name": "old"}]), principals=json.dumps([cto]))
+    assert status == 200 and list(body["subscribed"]) == [cto], body
+    status, r = page_api(run, human, "POST", "users/me/subscriptions",
+                         subscriptions=json.dumps([{"name": "old"}]), invite_only="true",
+                         principals=json.dumps([human["email"], cto]))
+    assert status == 200, r
+    status, subs = page_api(run, human, "GET", "users/me/subscriptions")
+    [old] = [s for s in subs["subscriptions"] if s["name"] == "old"]
+    assert old["invite_only"] is False
+    got = _js(("privacy", "createReport"), f"""
+      const r = {json.dumps(r)}, s = {json.dumps(old)};
+      out.existed = createReport("old", true, r, s);
+      out.asked = createReport("old", false, r, s);
+      out.fresh = createReport("new", true, {{subscribed: {{"a@x": ["new"]}}, already_subscribed: {{}}}},
+                               {{name: "new", invite_only: true}});
+      out.unread = createReport("new", true, {{subscribed: {{"a@x": ["new"]}}, already_subscribed: {{}}}});
+    """)
+    assert got["existed"].startswith("#old (public): 1 added, 1 already members")
+    assert got["existed"].endswith("it already existed as public, so Private was not applied")
+    assert got["asked"] == "#old (public): 1 added, 1 already members (the stream existed)"
+    assert got["fresh"] == "#new (private): 1 added"
+    assert got["unread"] == "#new: 1 added; the page could not read its privacy back"
+
+
+def test_dialogs_are_in_the_page_and_there_is_no_stream_delete_or_unread_count():
+    text = PAGE.read_text(encoding="utf-8")
+    assert not re.search(r"\b(confirm|prompt|alert)\(", _markup().script)
+    assert "showModal()" in text and "<dialog" in text
+    # Both need server work first (#74): no control that reaches nothing.
+    assert 'api("DELETE", "streams' not in text and "messages/flags" not in text
+    assert "unread" not in text.lower()
+
+
+def test_the_theme_follows_the_system_and_a_stored_choice():
+    m = _markup()
+    text = PAGE.read_text(encoding="utf-8")
+    assert "@media (prefers-color-scheme: dark)" in text and ':root[data-theme="dark"]' in text
+    assert "localStorage.setItem(THEME, next)" in m.script
+    assert "applyTheme(localStorage.getItem(THEME))" in m.script
+    # One style block and one script, so the CSP hashes cover all of it.
+    assert text.count("<style>") == 1 and text.count("<script>") == 1
+    assert "@media (max-width: 700px)" in text

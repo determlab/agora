@@ -5,36 +5,123 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Agora chat</title>
 <style>
+:root {
+  color-scheme: light;
+  --bg: #f4f5f7; --panel: #ffffff; --text: #1d2330; --muted: #6b7280; --line: #e2e5ea;
+  --accent: #2f6fed; --accent-text: #ffffff; --accent-soft: #e5edff; --bubble: #ffffff;
+  --mine: #dcebff; --mention: #fff3c4; --mention-line: #d99a00; --error: #b00020;
+  --code: #eef0f3; --shadow: 0 1px 2px rgba(0, 0, 0, .08);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --bg: #14171c; --panel: #1b1f26; --text: #e6e8eb; --muted: #9aa3ad; --line: #2a3039;
+    --accent: #6b9bff; --accent-text: #0d1117; --accent-soft: #243150; --bubble: #232933;
+    --mine: #22385c; --mention: #43391a; --mention-line: #e0b400; --error: #ff7a8e;
+    --code: #10141a; --shadow: none;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #14171c; --panel: #1b1f26; --text: #e6e8eb; --muted: #9aa3ad; --line: #2a3039;
+  --accent: #6b9bff; --accent-text: #0d1117; --accent-soft: #243150; --bubble: #232933;
+  --mine: #22385c; --mention: #43391a; --mention-line: #e0b400; --error: #ff7a8e;
+  --code: #10141a; --shadow: none;
+}
 * { box-sizing: border-box; }
-body { margin: 0; font: 14px/1.4 system-ui, sans-serif; color: #222; background: #fafafa; }
+body { margin: 0; font: 14px/1.45 system-ui, sans-serif; color: var(--text); background: var(--bg); }
 [hidden] { display: none !important; }
-button { font: inherit; cursor: pointer; }
-input, select, textarea { font: inherit; }
-#keys { max-width: 32rem; margin: 4rem auto; padding: 1.5rem; background: #fff; border: 1px solid #ddd; }
+button { font: inherit; cursor: pointer; color: inherit; }
+input, select, textarea { font: inherit; color: var(--text); background: var(--panel);
+  border: 1px solid var(--line); border-radius: 6px; padding: .35rem .5rem; }
+code, pre { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
+.error { color: var(--error); white-space: pre-wrap; }
+.muted { color: var(--muted); font-size: 12px; }
+.btn { border: 1px solid var(--line); background: var(--panel); border-radius: 6px; padding: .3rem .6rem; }
+.btn.primary { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
+.btn:disabled { opacity: .5; cursor: default; }
+.icon { border: 0; background: none; border-radius: 4px; padding: .1rem .4rem; color: var(--muted); }
+.icon:hover { background: var(--accent-soft); color: var(--text); }
+#keys { max-width: 32rem; margin: 4rem auto; padding: 1.5rem; background: var(--panel);
+  border: 1px solid var(--line); border-radius: 10px; }
 #keys label { display: block; margin: .75rem 0 .25rem; }
-#keys input { width: 100%; padding: .4rem; }
-#keys code { background: #f0f0f0; padding: 0 .2rem; }
-.error { color: #b00020; white-space: pre-wrap; }
+#keys input { width: 100%; }
+#keys code { background: var(--code); padding: 0 .2rem; }
 #app { display: grid; grid-template-columns: 16rem 1fr; height: 100vh; }
-#side { border-right: 1px solid #ddd; overflow-y: auto; background: #fff; padding: .5rem; }
+#side { border-inline-end: 1px solid var(--line); overflow-y: auto; background: var(--panel);
+  padding: .75rem .5rem; display: flex; flex-direction: column; gap: .25rem; }
+#who { font-size: 12px; color: var(--muted); overflow-wrap: anywhere; padding: 0 .25rem; }
+#side-tools { display: flex; gap: .25rem; padding: 0 .25rem .5rem; }
+#streams-head { display: flex; align-items: center; justify-content: space-between;
+  font-size: 11px; font-weight: 700; letter-spacing: .08em; color: var(--muted); padding: .25rem; }
 #side ul { list-style: none; margin: 0; padding: 0; }
-#side .stream { font-weight: 600; margin-top: .75rem; }
-#side .topic { display: block; width: 100%; text-align: start; border: 0; background: none; padding: .15rem .5rem; }
-#side .topic.open { background: #e6f0ff; }
-#who { font-size: 12px; color: #666; }
-#main { display: flex; flex-direction: column; min-width: 0; height: 100vh; }
-#title { padding: .5rem 1rem; border-bottom: 1px solid #ddd; background: #fff; font-weight: 600; }
-#live { font-weight: normal; font-size: 12px; color: #666; margin-inline-start: .5rem; }
-#messages { flex: 1; overflow-y: auto; padding: .5rem 1rem; }
-.msg { margin: .5rem 0; }
-.msg .meta { font-size: 12px; color: #666; }
-.msg .sender { font-weight: 600; color: #222; margin-inline-end: .5rem; }
-.msg .body { white-space: pre-wrap; overflow-wrap: anywhere; }
-#write { border-top: 1px solid #ddd; background: #fff; padding: .5rem 1rem; }
-#compose { width: 100%; min-height: 4rem; padding: .4rem; }
-#mentions button { margin-inline-end: .25rem; }
-#newtopic { margin-top: .5rem; }
-#send-status { font-size: 12px; color: #666; }
+.stream-row { display: flex; align-items: center; border-radius: 6px; }
+.stream-row.open { background: var(--accent-soft); }
+.stream-name { flex: 1; text-align: start; border: 0; background: none; padding: .3rem .4rem;
+  font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.stream-row .icon { visibility: hidden; }
+.stream-row:hover .icon, .stream-row.open .icon, .stream-row .icon:focus { visibility: visible; }
+.topic { display: block; width: 100%; text-align: start; border: 0; background: none;
+  padding: .2rem .5rem .2rem 1.4rem; border-radius: 6px; color: var(--muted);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.topic:hover { color: var(--text); }
+.topic.open { background: var(--accent); color: var(--accent-text); }
+#main { display: flex; flex-direction: column; min-width: 0; height: 100vh; position: relative; }
+#top { display: flex; align-items: center; gap: .5rem; padding: .5rem 1rem;
+  border-bottom: 1px solid var(--line); background: var(--panel); }
+#menu-btn { display: none; }
+#topic-title { font-weight: 600; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#live { font-size: 12px; color: var(--muted); }
+#messages { flex: 1; overflow-y: auto; padding: .75rem 1rem; }
+.day { text-align: center; font-size: 12px; color: var(--muted); margin: 1rem 0 .5rem; }
+.msg { display: flex; flex-direction: column; align-items: flex-start; margin: .15rem 0; }
+.msg.first { margin-top: .75rem; }
+.msg .head { font-size: 12px; color: var(--muted); margin: 0 .25rem .15rem; }
+.msg .sender { font-weight: 600; color: var(--text); margin-inline-end: .5rem; }
+.bubble { max-width: min(46rem, 85%); background: var(--bubble); border: 1px solid var(--line);
+  border-radius: 12px; padding: .4rem .7rem; box-shadow: var(--shadow); }
+.msg.mine { align-items: flex-end; }
+.msg.mine .bubble { background: var(--mine); border-color: transparent; }
+.msg.mention .bubble { background: var(--mention); border-inline-start: 3px solid var(--mention-line); }
+.body { white-space: pre-wrap; overflow-wrap: anywhere; }
+.body pre { background: var(--code); border-radius: 6px; padding: .4rem .5rem; margin: .25rem 0;
+  white-space: pre-wrap; text-align: left; }
+.quote { margin: 0 0 .35rem; padding: .25rem .6rem; border-inline-start: 3px solid var(--accent);
+  background: var(--accent-soft); border-radius: 6px; }
+.quote-sender { font-size: 12px; font-weight: 600; }
+.quote-text { white-space: pre-wrap; overflow-wrap: anywhere; }
+.actions { visibility: hidden; font-size: 12px; }
+.msg:hover .actions, .actions:focus-within { visibility: visible; }
+#new-pill { position: absolute; left: 50%; transform: translateX(-50%); bottom: 9rem;
+  border: 0; border-radius: 999px; padding: .3rem .9rem; background: var(--accent);
+  color: var(--accent-text); box-shadow: 0 2px 6px rgba(0, 0, 0, .25); }
+#write { border-top: 1px solid var(--line); background: var(--panel); padding: .5rem 1rem; }
+#mentions { display: flex; flex-wrap: wrap; gap: .25rem; margin-bottom: .35rem; }
+#mentions button { border: 1px solid var(--line); background: var(--bg); border-radius: 999px;
+  padding: .05rem .6rem; font-size: 12px; }
+#compose-row { display: flex; gap: .5rem; align-items: flex-end; }
+#compose { flex: 1; min-height: 2.6rem; max-height: 40vh; resize: none; border-radius: 10px; }
+#send-status { font-size: 12px; color: var(--muted); }
+#newtopic { margin-top: .4rem; font-size: 12px; color: var(--muted); display: flex; flex-wrap: wrap;
+  gap: .35rem; align-items: center; }
+dialog { background: var(--panel); color: var(--text); border: 1px solid var(--line);
+  border-radius: 10px; padding: 1rem 1.25rem; width: min(28rem, 92vw); }
+dialog::backdrop { background: rgba(0, 0, 0, .4); }
+dialog h2 { margin: 0 0 .75rem; font-size: 16px; }
+dialog label { display: block; margin: .5rem 0 .2rem; }
+dialog .row { display: flex; gap: .5rem; align-items: center; margin: .5rem 0; }
+dialog .people { max-height: 14rem; overflow-y: auto; border: 1px solid var(--line);
+  border-radius: 6px; padding: .25rem .5rem; }
+dialog .people label { display: flex; gap: .5rem; align-items: center; margin: .2rem 0; }
+dialog .buttons { display: flex; justify-content: flex-end; gap: .5rem; margin-top: 1rem; }
+#members-list li { display: flex; align-items: center; justify-content: space-between; padding: .2rem 0; }
+@media (max-width: 700px) {
+  #app { grid-template-columns: 1fr; }
+  #side { position: fixed; inset: 0 auto 0 0; width: 16rem; z-index: 5; transform: translateX(-100%);
+    transition: transform .15s; box-shadow: 0 0 12px rgba(0, 0, 0, .3); }
+  #app.side-open #side { transform: none; }
+  #menu-btn { display: inline-block; }
+}
 </style>
 </head>
 <body>
@@ -53,19 +140,30 @@ input, select, textarea { font: inherit; }
     <label for="key-key">API key</label>
     <input id="key-key" type="password" autocomplete="current-password" required>
     <p id="key-error" class="error" hidden></p>
-    <p><button type="submit">Open chat</button></p>
+    <p><button type="submit" class="btn primary">Open chat</button></p>
   </form>
 </section>
 
 <div id="app" hidden>
   <nav id="side">
     <div id="who"></div>
-    <button type="button" id="forget">Forget key</button>
+    <div id="side-tools">
+      <button type="button" id="forget" class="btn">Forget key</button>
+    </div>
+    <div id="streams-head"><span>STREAMS</span>
+      <button type="button" id="new-stream-btn" class="icon" title="Create a stream" aria-label="Create a stream">+</button></div>
     <ul id="streams"></ul>
   </nav>
   <main id="main">
-    <div id="title"><span id="topic-title" dir="auto">Pick a topic</span><span id="live"></span></div>
+    <div id="top">
+      <button type="button" id="menu-btn" class="icon" aria-label="Streams">&#9776;</button>
+      <span id="topic-title" dir="auto">Pick a topic</span>
+      <span id="live"></span>
+      <button type="button" id="members-btn" class="btn" disabled>Members</button>
+      <button type="button" id="theme-btn" class="icon" title="Dark / light" aria-label="Dark / light">&#9681;</button>
+    </div>
     <div id="messages"></div>
+    <button type="button" id="new-pill" hidden>New messages &#8595;</button>
     <div id="write">
       <div id="mentions">
         <button type="button" data-mention="COO">@COO</button>
@@ -74,23 +172,60 @@ input, select, textarea { font: inherit; }
         <button type="button" data-mention="Watchdog">@Watchdog</button>
         <button type="button" data-mention="all">@all</button>
       </div>
-      <textarea id="compose" dir="auto" placeholder="Enter sends, Shift+Enter makes a new line"></textarea>
+      <div id="compose-row">
+        <textarea id="compose" dir="auto" rows="1" placeholder="Enter sends, Shift+Enter makes a new line"></textarea>
+        <button type="button" id="send-btn" class="btn primary">Send</button>
+      </div>
       <div id="send-status"></div>
       <p id="send-error" class="error" hidden></p>
       <form id="newtopic">
         New topic: <select id="new-stream"></select>
         <input id="new-topic" dir="auto" placeholder="topic">
-        <button type="submit">Open</button>
+        <button type="submit" class="btn">Open</button>
         then write it in the box above.
       </form>
     </div>
   </main>
 </div>
 
+<dialog id="create-dlg">
+  <form id="create-form">
+    <h2>Create a stream</h2>
+    <label for="create-name">Name</label>
+    <input id="create-name" dir="auto" maxlength="60" required>
+    <div class="row"><input id="create-private" type="checkbox" checked>
+      <label for="create-private">Private (only members can read it)</label></div>
+    <div>Members (you are always one)</div>
+    <div id="create-people" class="people"></div>
+    <p id="create-status" class="muted"></p>
+    <div class="buttons">
+      <button type="button" id="create-cancel" class="btn">Close</button>
+      <button type="submit" id="create-ok" class="btn primary">Create</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="members-dlg">
+  <h2>Members of <span id="members-title" dir="auto"></span></h2>
+  <div class="row"><input id="members-private" type="checkbox">
+    <label for="members-private">Private (only members can read it)</label></div>
+  <ul id="members-list"></ul>
+  <form id="members-add" class="row">
+    <select id="members-who"></select>
+    <button type="submit" class="btn">Add</button>
+  </form>
+  <p id="members-status" class="muted"></p>
+  <div class="buttons"><button type="button" id="members-close" class="btn">Close</button></div>
+</dialog>
+
 <template id="msg-tpl">
   <div class="msg">
-    <div class="meta"><span class="sender" dir="auto"></span><time class="when"></time></div>
-    <div class="body" dir="auto"></div>
+    <div class="head"><span class="sender" dir="auto"></span><time class="when"></time></div>
+    <div class="bubble">
+      <div class="quote" hidden><div class="quote-sender" dir="auto"></div><div class="quote-text" dir="auto"></div></div>
+      <div class="body" dir="auto"></div>
+    </div>
+    <div class="actions"><button type="button" class="icon quote-btn">quote</button></div>
   </div>
 </template>
 
@@ -101,12 +236,17 @@ input, select, textarea { font: inherit; }
 // one inline script by its hash and nothing else.
 const $ = (id) => document.getElementById(id);
 const STORE = "agora-chat-credentials";
+const THEME = "agora-chat-theme";
 const S = {
-  creds: null, gen: 0, queue: null, lastEvent: -1,
-  streams: [],          // [{stream_id, name}]
+  creds: null, gen: 0, queue: null, lastEvent: -1, me: null, sending: false,
+  streams: [],          // [{stream_id, name, invite_only}]
   topics: new Map(),    // stream name -> Map(topic -> newest message id)
+  collapsed: new Set(), // stream ids whose topics are folded away
+  users: new Map(),     // user id -> user
   open: null,           // {stream_id, stream, topic}
   shown: new Set(),     // message ids in the open topic
+  msgs: [],             // the open topic's messages, oldest first
+  panel: null,          // the stream the members panel is about
 };
 
 class ApiFailure extends Error {
@@ -151,6 +291,94 @@ async function api(method, path, params) {
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+// -- pure helpers (tests/test_chat_page.py runs these on their own)
+
+// The direction of a text is its first strong letter's, skipping leading
+// @**Name** mentions: "@**CTO** שלום" is Hebrew, and the Latin name in front
+// must not turn it left-to-right. No letter at all reads left-to-right.
+function textDir(text) {
+  const rest = String(text).replace(/^\s*(?:@_?\*\*[^*]*\*\*\s*)+/, "");
+  const first = rest.match(/\p{L}/u);
+  return first && /[֐-ࣿיִ-﷿ﹰ-﻿]/.test(first[0]) ? "rtl" : "ltr";
+}
+
+// Zulip's quote: "@_**Name** said:" (or "[said](link):"), a ```quote fence,
+// then the reply. Anything else is not a quote and renders as plain text.
+function parseQuote(text) {
+  const m = /^@_\*\*([^*|]+)(?:\|\d+)?\*\*[^\n]*:\n```quote\n([\s\S]*?)\n```(?:\n|$)([\s\S]*)$/.exec(String(text));
+  return m ? {sender: m[1], quote: m[2], rest: m[3]} : null;
+}
+
+// @_** (silent) so that quoting someone does not wake them.
+function quoteBlock(name, text) {
+  return "@_**" + name + "** said:\n```quote\n" + text + "\n```\n";
+}
+
+// -- the calls the stream dialogs make. A human needs the admin role for
+// principals other than themselves; the server's own refusal is shown.
+
+function createStream(name, isPrivate, emails) {
+  return api("POST", "users/me/subscriptions",
+             {subscriptions: [{name: name}], invite_only: isPrivate, principals: emails});
+}
+
+function addMember(stream, email) {
+  return api("POST", "users/me/subscriptions",
+             {subscriptions: [{name: stream}], principals: [email]});
+}
+
+function removeMember(stream, email) {
+  return api("DELETE", "users/me/subscriptions", {subscriptions: [stream], principals: [email]});
+}
+
+function setPrivate(streamId, isPrivate) {
+  return api("PATCH", "streams/" + streamId, {is_private: isPrivate});
+}
+
+function privacy(s) { return s.invite_only ? "private" : "public"; }
+
+// What the create dialog says. `s` is the stream as the server lists it after
+// the call (undefined if the page could not read it back). The server applies
+// invite_only only when it creates the stream, so an existing one keeps its own.
+function createReport(name, wantPrivate, r, s) {
+  const added = Object.keys(r.subscribed || {});
+  const already = Object.keys(r.already_subscribed || {});
+  let msg = "#" + name + (s ? " (" + privacy(s) + ")" : "") + ": " + added.length + " added"
+      + (already.length ? ", " + already.length + " already members (the stream existed)" : "");
+  if (!s) msg += "; the page could not read its privacy back";
+  else if (!!s.invite_only !== !!wantPrivate) {
+    msg += "; it already existed as " + privacy(s) + ", so " + (wantPrivate ? "Private" : "Public")
+        + " was not applied";
+  }
+  return msg;
+}
+
+// What the private toggle says: the state read back from the server, or, when
+// the page cannot read it (no longer a member, or the reload failed), only
+// what the server accepted.
+function privateReport(name, want, now) {
+  if (now) return "#" + name + " is now " + privacy(now);
+  return "#" + name + " set to " + (want ? "private" : "public")
+      + " (the server accepted it; the page cannot read it back: you are not a member, or the reload failed)";
+}
+
+// The old queue is deleted before a new one is registered, so a reconnect
+// does not leave a queue on the server filling up for nobody. It may already
+// be gone (expired, or the network ate the reply): that is not an error.
+async function dropQueue() {
+  const old = S.queue;
+  S.queue = null;
+  if (!old) return;
+  try { await api("DELETE", "events", {queue_id: old}); } catch (e) { return; }
+}
+
+async function reconnect(gen) {
+  await dropQueue();
+  await connect(gen);
+}
+
+// -- screens
+
 function showKeys(msg) {
   S.gen++;  // stops the poll loop of the old credentials
   S.queue = null;
@@ -173,8 +401,8 @@ async function start() {
   $("app").hidden = false;
   const gen = ++S.gen;
   try {
-    const me = await api("GET", "users/me");
-    $("who").textContent = me.full_name + " <" + me.email + ">";
+    S.me = await api("GET", "users/me");
+    $("who").textContent = S.me.full_name + " <" + S.me.email + ">";
     await connect(gen);
   } catch (e) {
     if (e.status !== 401) setLive("not connected: " + e.message);
@@ -190,8 +418,14 @@ async function connect(gen) {
   if (gen !== S.gen) return;
   S.queue = reg.queue_id;
   S.lastEvent = reg.last_event_id;
+  await loadStreams();
+  if (S.open) await openTopic(S.open.stream_id, S.open.stream, S.open.topic);
+  setLive("live");
+}
+
+async function loadStreams() {
   const subs = (await api("GET", "users/me/subscriptions")).subscriptions;
-  S.streams = subs.map((s) => ({stream_id: s.stream_id, name: s.name}));
+  S.streams = subs.map((s) => ({stream_id: s.stream_id, name: s.name, invite_only: s.invite_only}));
   S.topics = new Map();
   for (const s of S.streams) {
     const got = await api("GET", "messages", {
@@ -201,9 +435,8 @@ async function connect(gen) {
     for (const m of got.messages) topics.set(m.subject, Math.max(topics.get(m.subject) || 0, m.id));
     S.topics.set(s.name, topics);
   }
+  if (S.open && !S.streams.some((s) => s.stream_id === S.open.stream_id)) closeTopic();
   renderStreams();
-  if (S.open) await openTopic(S.open.stream_id, S.open.stream, S.open.topic);
-  setLive("live");
 }
 
 async function poll(gen) {
@@ -219,7 +452,7 @@ async function poll(gen) {
         setLive("not live: " + e.message + " (retrying)");
         await sleep(3000);
       }
-      try { await connect(gen); } catch (e2) { if (e2.status === 401) return; await sleep(3000); }
+      try { await reconnect(gen); } catch (e2) { if (e2.status === 401) return; await sleep(3000); }
       continue;
     }
     if (gen !== S.gen) return;
@@ -239,7 +472,7 @@ function onMessage(m) {
   renderStreams();
   if (S.open && S.open.stream_id === m.stream_id
       && S.open.topic.toLowerCase() === m.subject.toLowerCase()) {
-    addMessage(m);
+    addMessages([m], false);
   }
 }
 
@@ -251,11 +484,30 @@ function renderStreams() {
   select.replaceChildren();
   for (const s of S.streams) {
     const li = document.createElement("li");
-    const head = document.createElement("div");
-    head.className = "stream";
-    head.textContent = "#" + s.name;
-    li.append(head);
+    const row = document.createElement("div");
+    row.className = "stream-row";
+    if (S.open && S.open.stream_id === s.stream_id) row.classList.add("open");
+    const name = document.createElement("button");
+    name.type = "button";
+    name.className = "stream-name";
+    name.dir = "auto";
+    const folded = S.collapsed.has(s.stream_id);
+    name.textContent = (folded ? "▸ #" : "▾ #") + s.name;
+    name.title = s.invite_only ? "private stream" : "public stream";
+    name.addEventListener("click", () => {
+      if (folded) S.collapsed.delete(s.stream_id); else S.collapsed.add(s.stream_id);
+      renderStreams();
+    });
+    const gear = document.createElement("button");
+    gear.type = "button";
+    gear.className = "icon";
+    gear.title = "Members and settings";
+    gear.textContent = "⚙";
+    gear.addEventListener("click", () => openMembers(s));
+    row.append(name, gear);
+    li.append(row);
     const ul = document.createElement("ul");
+    ul.hidden = folded;
     const topics = [...(S.topics.get(s.name) || new Map()).entries()].sort((a, b) => b[1] - a[1]);
     for (const [topic] of topics) {
       const item = document.createElement("li");
@@ -279,11 +531,25 @@ function renderStreams() {
   if (picked) select.value = picked;
 }
 
+function closeTopic() {
+  S.open = null;
+  S.msgs = [];
+  S.shown = new Set();
+  $("messages").replaceChildren();
+  $("topic-title").textContent = "Pick a topic";
+  $("members-btn").disabled = true;
+}
+
 async function openTopic(streamId, stream, topic) {
   S.open = {stream_id: streamId, stream, topic};
   S.shown = new Set();
+  S.msgs = [];
   $("messages").replaceChildren();
+  $("new-pill").hidden = true;
   $("topic-title").textContent = "#" + stream + " › " + topic;
+  $("members-btn").disabled = false;
+  $("app").classList.remove("side-open");
+  S.collapsed.delete(streamId);
   renderStreams();
   let got;
   try {
@@ -295,39 +561,141 @@ async function openTopic(streamId, stream, topic) {
     return;
   }
   if (!S.open || S.open.stream_id !== streamId || S.open.topic !== topic) return;
-  for (const m of got.messages) addMessage(m);
+  addMessages(got.messages, true);
   $("compose").focus();
 }
 
-function addMessage(m) {
-  if (S.shown.has(m.id)) return;
-  S.shown.add(m.id);
-  const node = $("msg-tpl").content.firstElementChild.cloneNode(true);
-  node.querySelector(".sender").textContent = m.sender_full_name;
-  const when = new Date(m.timestamp * 1000);
-  node.querySelector(".when").dateTime = when.toISOString();
-  node.querySelector(".when").textContent = when.toLocaleString();
-  node.querySelector(".body").textContent = m.content;
+// -- messages
+
+function addMessages(list, toEnd) {
   const box = $("messages");
-  // Oldest at the top: insert by id, so a live message never lands above an
-  // older one that a slower fetch returned later.
-  const after = [...box.children].find((c) => Number(c.dataset.id) > m.id);
-  node.dataset.id = String(m.id);
-  box.insertBefore(node, after || null);
-  box.scrollTop = box.scrollHeight;
+  const atEnd = box.scrollHeight - box.scrollTop - box.clientHeight < 60;
+  let added = false;
+  for (const m of list) {
+    if (S.shown.has(m.id)) continue;
+    S.shown.add(m.id);
+    S.msgs.push(m);
+    added = true;
+  }
+  if (!added) return;
+  // Oldest at the top, by id: a live message never lands above an older one
+  // that a slower fetch returned later.
+  S.msgs.sort((a, b) => a.id - b.id);
+  renderMessages();
+  if (toEnd || atEnd) {
+    box.scrollTop = box.scrollHeight;
+  } else {
+    $("new-pill").hidden = false;  // the reader scrolled up: do not yank them down
+  }
 }
+
+function renderMessages() {
+  const box = $("messages");
+  const nodes = [];
+  let prev = null;
+  for (const m of S.msgs) {
+    const when = new Date(m.timestamp * 1000);
+    const day = when.toDateString();
+    const newDay = !prev || new Date(prev.timestamp * 1000).toDateString() !== day;
+    if (newDay) {
+      const sep = document.createElement("div");
+      sep.className = "day";
+      sep.textContent = when.toLocaleDateString([], {weekday: "long", year: "numeric", month: "long", day: "numeric"});
+      nodes.push(sep);
+    }
+    nodes.push(messageNode(m, when, newDay || prev.sender_id !== m.sender_id));
+    prev = m;
+  }
+  box.replaceChildren(...nodes);
+}
+
+function fillBody(el, text) {
+  // Code (``` fences) stays left-to-right inside a right-to-left message.
+  el.dir = textDir(text);
+  const parts = String(text).split("```");
+  el.replaceChildren();
+  parts.forEach((part, i) => {
+    const code = i % 2 === 1 && i < parts.length - 1;
+    const n = document.createElement(code ? "pre" : "span");
+    if (code) n.dir = "ltr";
+    n.textContent = code ? part.replace(/^[^\n]*\n/, "") : (i % 2 ? "```" + part : part);
+    el.append(n);
+  });
+}
+
+function messageNode(m, when, first) {
+  const node = $("msg-tpl").content.firstElementChild.cloneNode(true);
+  node.dataset.id = String(m.id);
+  if (first) node.classList.add("first"); else node.querySelector(".head").hidden = true;
+  if (S.me && m.sender_id === S.me.user_id) node.classList.add("mine");
+  if ((m.flags || []).includes("mentioned")) node.classList.add("mention");
+  node.querySelector(".sender").textContent = m.sender_full_name;
+  const t = node.querySelector(".when");
+  t.dateTime = when.toISOString();
+  t.textContent = when.toLocaleTimeString([], {hour: "2-digit", minute: "2-digit", hourCycle: "h23"});
+  t.title = when.toLocaleString();
+  const q = parseQuote(m.content);
+  const body = node.querySelector(".body");
+  if (q) {
+    node.querySelector(".quote").hidden = false;
+    node.querySelector(".quote-sender").textContent = q.sender;
+    const qt = node.querySelector(".quote-text");
+    qt.dir = textDir(q.quote);
+    qt.textContent = q.quote;
+    fillBody(body, q.rest);
+  } else {
+    fillBody(body, m.content);
+  }
+  node.querySelector(".quote-btn").addEventListener("click", () => {
+    insertText(quoteBlock(m.sender_full_name, q ? q.rest : m.content));
+  });
+  return node;
+}
+
+$("messages").addEventListener("scroll", () => {
+  const box = $("messages");
+  if (box.scrollHeight - box.scrollTop - box.clientHeight < 60) $("new-pill").hidden = true;
+});
+
+$("new-pill").addEventListener("click", () => {
+  const box = $("messages");
+  box.scrollTop = box.scrollHeight;
+  $("new-pill").hidden = true;
+});
+
+// -- compose
 
 function sendError(msg) {
   $("send-error").textContent = msg || "";
   $("send-error").hidden = !msg;
 }
 
+function fitCompose() {
+  const box = $("compose");
+  box.dir = box.value.trim() ? textDir(box.value) : "auto";
+  box.style.height = "auto";
+  box.style.height = box.scrollHeight + 2 + "px";
+}
+
+function insertText(text) {
+  const box = $("compose");
+  const at = box.selectionStart ?? box.value.length;
+  box.setRangeText(text, at, box.selectionEnd ?? at, "end");
+  fitCompose();
+  box.focus();
+}
+
 async function send() {
+  // One send at a time: Enter pressed twice must not post twice.
+  if (S.sending) return;
   const box = $("compose");
   const text = box.value;
   if (!text.trim()) return;
   if (!S.open) { sendError("Open a topic first, or start a new one below."); return; }
   sendError("");
+  S.sending = true;
+  box.disabled = true;
+  $("send-btn").disabled = true;
   $("send-status").textContent = "sending…";
   try {
     const sent = await api("POST", "messages", {
@@ -339,6 +707,12 @@ async function send() {
     // The text stays in the box; the server's own msg says why.
     $("send-status").textContent = "not sent";
     sendError(e.message);
+  } finally {
+    S.sending = false;
+    box.disabled = false;
+    $("send-btn").disabled = false;
+    fitCompose();
+    box.focus();
   }
 }
 
@@ -348,15 +722,11 @@ $("compose").addEventListener("keydown", (e) => {
     send();
   }
 });
+$("compose").addEventListener("input", fitCompose);
+$("send-btn").addEventListener("click", send);
 
 for (const btn of document.querySelectorAll("[data-mention]")) {
-  btn.addEventListener("click", () => {
-    const box = $("compose");
-    const mark = "@**" + btn.dataset.mention + "** ";
-    const at = box.selectionStart ?? box.value.length;
-    box.setRangeText(mark, at, box.selectionEnd ?? at, "end");
-    box.focus();
-  });
+  btn.addEventListener("click", () => insertText("@**" + btn.dataset.mention + "** "));
 }
 
 $("newtopic").addEventListener("submit", (e) => {
@@ -367,6 +737,183 @@ $("newtopic").addEventListener("submit", (e) => {
   sendError("");
   $("new-topic").value = "";
   openTopic(s.stream_id, s.name, topic);
+});
+
+// -- streams: create, members, private
+
+async function loadUsers() {
+  const got = await api("GET", "users");
+  S.users = new Map(got.members.map((u) => [u.user_id, u]));
+}
+
+function userLabel(u) {
+  return u.full_name + (u.is_bot ? " (bot)" : "") + " <" + u.email + ">";
+}
+
+function say(id, text, bad) {
+  $(id).textContent = text;
+  $(id).className = bad ? "error" : "muted";
+}
+
+// What the server says it did, not what was asked: "already a member" and
+// "was not a member" are not reported as done.
+function subscribeReport(r, email) {
+  if ((r.subscribed[email] || []).length) return "added " + email;
+  if ((r.already_subscribed[email] || []).length) return email + " was already a member";
+  return "the server added nobody";
+}
+
+$("new-stream-btn").addEventListener("click", async () => {
+  say("create-status", "");
+  $("create-name").value = "";
+  $("create-people").replaceChildren();
+  $("create-dlg").showModal();
+  try { await loadUsers(); } catch (e) { say("create-status", "could not list people: " + e.message, true); return; }
+  for (const u of S.users.values()) {
+    if (S.me && u.user_id === S.me.user_id) continue;
+    const label = document.createElement("label");
+    const box = document.createElement("input");
+    box.type = "checkbox";
+    box.value = u.email;
+    const name = document.createElement("span");
+    name.dir = "auto";
+    name.textContent = userLabel(u);
+    label.append(box, name);
+    $("create-people").append(label);
+  }
+});
+
+$("create-cancel").addEventListener("click", () => $("create-dlg").close());
+
+$("create-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const name = $("create-name").value.trim().replace(/^#/, "");
+  if (!name) { say("create-status", "Type a name.", true); return; }
+  const emails = [S.me.email, ...[...$("create-people").querySelectorAll("input:checked")].map((b) => b.value)];
+  $("create-ok").disabled = true;
+  say("create-status", "creating…");
+  try {
+    const wantPrivate = $("create-private").checked;
+    const r = await createStream(name, wantPrivate, emails);
+    // Report the privacy the server holds, not the box: a reload failure
+    // must not turn a created stream into "not created".
+    let s;
+    try {
+      await loadStreams();
+      s = S.streams.find((x) => x.name === name);
+    } catch (err) { s = undefined; }
+    say("create-status", createReport(name, wantPrivate, r, s));
+  } catch (err) {
+    say("create-status", "not created: " + err.message, true);
+  } finally {
+    $("create-ok").disabled = false;
+  }
+});
+
+async function openMembers(s) {
+  S.panel = s;
+  $("members-title").textContent = "#" + s.name;
+  $("members-private").checked = !!s.invite_only;
+  say("members-status", "");
+  if (!$("members-dlg").open) $("members-dlg").showModal();
+  await listMembers();
+}
+
+async function listMembers() {
+  const s = S.panel;
+  let ids;
+  try {
+    await loadUsers();
+    ids = new Set((await api("GET", "streams/" + s.stream_id + "/members")).subscribers);
+  } catch (e) {
+    say("members-status", "could not list the members: " + e.message, true);
+    return;
+  }
+  const list = $("members-list");
+  list.replaceChildren();
+  const who = $("members-who");
+  who.replaceChildren();
+  for (const u of S.users.values()) {
+    if (ids.has(u.user_id)) {
+      const li = document.createElement("li");
+      const name = document.createElement("span");
+      name.dir = "auto";
+      name.textContent = userLabel(u);
+      const rm = document.createElement("button");
+      rm.type = "button";
+      rm.className = "icon";
+      rm.textContent = "remove";
+      rm.addEventListener("click", async () => {
+        try {
+          const r = await removeMember(s.name, u.email);
+          say("members-status", r.removed.length ? "removed " + u.email : u.email + " was not a member");
+        } catch (e) { say("members-status", "not removed: " + e.message, true); }
+        await listMembers();
+        await loadStreams();
+      });
+      li.append(name, rm);
+      list.append(li);
+    } else {
+      const opt = document.createElement("option");
+      opt.value = u.email;
+      opt.textContent = userLabel(u);
+      who.append(opt);
+    }
+  }
+}
+
+$("members-add").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const email = $("members-who").value;
+  if (!email || !S.panel) return;
+  try {
+    say("members-status", subscribeReport(await addMember(S.panel.name, email), email));
+  } catch (err) { say("members-status", "not added: " + err.message, true); }
+  await listMembers();
+  await loadStreams();
+});
+
+$("members-private").addEventListener("change", async () => {
+  const want = $("members-private").checked;
+  if (!S.panel) return;
+  try {
+    await setPrivate(S.panel.stream_id, want);
+  } catch (err) {
+    $("members-private").checked = !want;
+    say("members-status", "not changed: " + err.message, true);
+    return;
+  }
+  // Show what the server now has, not what the box was set to. After you
+  // remove yourself the stream is no longer listed: say only what was accepted.
+  let now;
+  try {
+    await loadStreams();
+    now = S.streams.find((x) => x.stream_id === S.panel.stream_id);
+  } catch (err) { now = undefined; }
+  if (now) { S.panel = now; $("members-private").checked = !!now.invite_only; }
+  say("members-status", privateReport(S.panel.name, want, now));
+});
+
+$("members-close").addEventListener("click", () => $("members-dlg").close());
+$("members-btn").addEventListener("click", () => {
+  const s = S.open && S.streams.find((x) => x.stream_id === S.open.stream_id);
+  if (s) openMembers(s);
+});
+
+// -- chrome: sidebar on a narrow screen, theme, keys
+
+$("menu-btn").addEventListener("click", () => $("app").classList.toggle("side-open"));
+
+function applyTheme(theme) {
+  if (theme === "dark" || theme === "light") document.documentElement.dataset.theme = theme;
+  else delete document.documentElement.dataset.theme;
+}
+
+$("theme-btn").addEventListener("click", () => {
+  const dark = getComputedStyle(document.documentElement).colorScheme.trim() === "dark";
+  const next = dark ? "light" : "dark";
+  localStorage.setItem(THEME, next);
+  applyTheme(next);
 });
 
 $("key-form").addEventListener("submit", (e) => {
@@ -381,11 +928,12 @@ $("forget").addEventListener("click", () => {
   if (queue && S.creds) api("DELETE", "events", {queue_id: queue}).catch(() => {});
   localStorage.removeItem(STORE);
   S.creds = null;
-  S.open = null;
+  closeTopic();
   $("key-email").value = "";
   showKeys("");
 });
 
+applyTheme(localStorage.getItem(THEME));
 try { S.creds = JSON.parse(localStorage.getItem(STORE) || "null"); } catch (e) { S.creds = null; }
 if (S.creds && S.creds.email && S.creds.key) start(); else { S.creds = null; showKeys(""); }
 </script>
