@@ -1273,12 +1273,12 @@ def test_page_has_the_panel_and_the_switch():
 DASHBOARD_FIXTURE = json.loads(
     (ROOT / "tests" / "fixtures" / "dashboard-doc.json").read_text(encoding="utf-8"))
 
-CARDS = ("live", "stuck", "roles", "queue", "week", "products", "waiting")
+CARDS = ("live", "stuck", "roles", "queue", "products", "waiting")  # not "week" — see below
 
 
 def _render_cards(doc):
     return _js(("renderLive", "renderStuck", "renderRoles", "renderQueue", "renderWeek",
-                "renderProducts", "renderWaiting", "renderRows", "joinDetail", "stuckRow"), f"""
+                "renderProducts", "renderWaiting", "renderRows", "joinDetail", "stuckRow", "el"), f"""
       const doc = {json.dumps(doc)};
       out.live = dump(renderLive(doc.live));
       out.stuck = dump(renderStuck(doc.stuck));
@@ -1292,10 +1292,14 @@ def _render_cards(doc):
 
 
 def _rows(dumped):
-    # [[label, detail], ...] for a rendered <ul class="dash-list">.
+    # [[label, detail], ...] for a rendered <ul class="dash-list rows">. A
+    # queue row also carries a leading `.chip` (priority) as a 3rd child —
+    # drop it here, so every card's rows read as the same 2-column shape.
     out = []
     for li in dumped["kids"]:
         texts = [k["text"] for k in li["kids"]]
+        if len(texts) > 2:
+            texts = texts[-2:]
         out.append(texts + [""] * (2 - len(texts)))
     return out
 
@@ -1308,8 +1312,10 @@ def test_page_renders_every_card_from_a_fixture_document():
         return [li["kids"][0]["tag"] for li in dumped["kids"]]
 
     live0 = doc["live"][0]
+    # idle_min is clamped to 0 (clock skew can make it read negative,
+    # agora#100) — the fixture's -2 must show as "idle 0m", not "idle -2m".
     assert _rows(got["live"])[0] == [
-        "bricks#48", f"CODER round 1 for issue 48 · round 1 · claimed 14m ago · idle -2m · {live0['last_action']}"]
+        "bricks#48", f"CODER round 1 for issue 48 · round 1 · claimed 14m ago · idle 0m · {live0['last_action']}"]
     assert set(label_tags(got["live"])) == {"a"}  # `ref` links to `url` when the row has one
     assert len(_rows(got["stuck"])) == len(doc["stuck"])
     assert _rows(got["stuck"])[0] == ["adk-lab#12", "NEEDSHUMAN · " + doc["stuck"][0]["text"]]
@@ -1317,10 +1323,12 @@ def test_page_renders_every_card_from_a_fixture_document():
     # `check === "NEEDSHUMAN"` — `who_works` carries no such flag at all.
     assert len(_rows(got["waiting"])) == sum(s["check"] == "NEEDSHUMAN" for s in doc["stuck"])
     assert _rows(got["roles"])[0] == ["CTO", "idle · " + doc["roles"][0]["doing"] + " · ops#52"]
-    assert _rows(got["queue"])[0] == ["#p0 · adk-lab#8", doc["queue"][0]["title"] + " · claimed"]
-    assert _rows(got["queue"])[1] == ["#p0 · ops#57", doc["queue"][1]["title"] + " · needs human"]
-    assert _rows(got["week"]) == [["points closed", "321"], ["vs last week", "0"],
-                                   ["% of company", "52.7%"], ["median time to close", "1.3h"]]
+    # The priority is a `.chip`, not folded into the label text (agora#100:
+    # "#p0 · adk-lab#8" used to scramble under RTL) — `_rows` drops it, so
+    # the label here is the ref alone.
+    assert _rows(got["queue"])[0] == ["adk-lab#8", doc["queue"][0]["title"] + " · claimed"]
+    assert _rows(got["queue"])[1] == ["ops#57", doc["queue"][1]["title"] + " · needs human"]
+    assert got["queue"]["kids"][0]["kids"][0]["cls"] == "chip p0" and got["queue"]["kids"][0]["kids"][0]["text"] == "P0"
     # products: `work` is an object and `checks` a list; both read as text.
     assert _rows(got["products"])[0] == [
         "SHAL", "SHAL 0.3.0 — מוכן למשתמש ראשון · due 2026-10-31 · 129/149 pts (87%) · 6/7 checks"]
@@ -1330,17 +1338,65 @@ def test_page_renders_every_card_from_a_fixture_document():
     assert got["empty"]["kids"][0]["cls"] == "dash-empty muted"
 
 
+def test_week_card_is_one_big_number_not_a_four_row_table():
+    # agora#100: the mockup shows one big number (points closed) plus a
+    # muted line, not a 4-row table with a backwards-reading label.
+    got = _render_cards(DASHBOARD_FIXTURE)
+    week = got["week"]
+    big = week["kids"][0]["kids"][0]
+    assert big["cls"] == "big" and big["text"] == "321"
+    assert "points closed" in week["kids"][0]["text"]
+    assert "last week: 0" in week["kids"][0]["text"]
+    assert "52.7% of company" in week["kids"][1]["text"]
+    assert "1.3h" in week["kids"][1]["text"]
+
+
 def test_no_card_shows_object_object_undefined_or_empty_text_on_the_real_document():
     # The round-2 bug: renderProducts passed `work` (an object) and `checks`
     # (a list) straight to text, so the card read "[object Object]".
     got = _render_cards(DASHBOARD_FIXTURE)
     for name in CARDS:
-        assert got[name]["cls"] == "dash-list" and got[name]["kids"], name
+        cls = got[name]["cls"].split()
+        assert "dash-list" in cls and got[name]["kids"], name
         for label, detail in _rows(got[name]):
             assert label.strip() and label != "—", (name, label, detail)
             for text in (label, detail):
                 assert "[object" not in text and "undefined" not in text and "null" not in text, \
                     (name, text)
+    # week is not a rows list any more (see test_week_card_is_one_big_number...);
+    # still guard it against the same failure shapes, on its own terms.
+    week_text = json.dumps(got["week"])
+    assert "[object" not in week_text and "undefined" not in week_text and "NaNnull" not in week_text
+
+
+def test_panel_css_classes_from_the_mockup_are_present():
+    # agora#100: the panel is ported from the approved mockup
+    # (B8UrALfZEZ34F1sPeJEiNz) — these are the mockup's own class names for
+    # the card grid, a card, a row list, a ref, a priority chip, the pool
+    # card's <dl>, a big number, a percent bar, a role row, its status dot,
+    # the header and the sync pill / button, kept unrenamed on purpose.
+    text = PAGE.read_text(encoding="utf-8")
+    for cls in (".dhead", ".cards", ".card", ".rows", ".ref", ".chip", ".chip.p0",
+                ".live", ".big", ".bar", ".role", ".st", ".sync", ".go"):
+        assert re.search(re.escape(cls) + r"\s*\{", text), cls
+
+
+def test_approvals_card_renders_one_of_next_moves_with_prev_next():
+    # The founder's addition to #100: one pending item at a time, "N of M",
+    # so a skipped item is never dropped — prev/next only move the index.
+    # Display-only: the real send is agora#83.
+    got = _js(("renderApprovals", "el"), """
+      const moves = [
+        {id: "a", q_he: "A?", why_he: "because a", link: "https://x/1"},
+        {id: "b", q_he: "B?", why_he: "because b", link: "https://x/2"},
+      ];
+      out.first = dump(renderApprovals(moves));
+      out.empty = dump(renderApprovals([]));
+    """, prelude=FAKE_DOM + "\nlet approvalsIdx = 0;\n")
+    text = json.dumps(got["first"], ensure_ascii=False)
+    assert "1 מתוך 2" in text and "A?" in text and "because a" in text and "https://x/1" in text
+    assert "[object" not in text and "undefined" not in text
+    assert "אין אישורים ממתינים" in json.dumps(got["empty"], ensure_ascii=False)
 
 
 def test_prs_card_is_grouped_by_type_and_hidden_when_the_section_is_absent():

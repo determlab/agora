@@ -206,14 +206,71 @@ dialog .buttons { display: flex; justify-content: flex-end; gap: .5rem; margin-t
   border-bottom: 1px solid var(--line); background: var(--panel); }
 #view-switch button.active { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
 #dash { overflow: auto; padding: .75rem 1rem; display: flex; flex-direction: column; gap: .75rem; }
-.dash-pill { display: flex; align-items: center; justify-content: space-between; gap: .5rem;
-  padding: .4rem .6rem; border: 1px solid var(--line); border-radius: 8px; font-size: 12px; color: var(--muted); }
+/* agora#100: the panel ported from the approved mockup (B8UrALfZEZ34F1sPeJEiNz).
+   Class names below (dhead/cards/card/rows/ref/chip/live/big/bar/role/st/sync/go)
+   are the mockup's own, kept unrenamed so a side-by-side compare stays legible;
+   .dash-pill/.dash-list/.dash-label/.dash-body/.dash-card stay too, unrenamed,
+   because renderRows/renderPill/mountCard and the existing tests hook them. */
+.dhead { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; margin-bottom: 4px; }
+.dhead h2 { margin: 0; font-size: 18px; }
+.cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(290px, 100%), 1fr));
+  gap: 12px; align-items: start; }
+.card { border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; background: var(--bubble);
+  display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.card.wide { grid-column: 1 / -1; }
+.card h3 { margin: 0; font-size: 12px; letter-spacing: .06em; color: var(--muted); font-weight: 700;
+  display: flex; gap: 8px; align-items: center; }
+.card h3 .cnt { margin-inline-start: auto; font-variant-numeric: tabular-nums; color: var(--text); }
+.rows { display: flex; flex-direction: column; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.rows li { display: flex; gap: 8px; align-items: baseline; font-size: 14px; min-width: 0; }
+.rows li .tx { flex: 1; min-width: 0; overflow-wrap: anywhere; unicode-bidi: plaintext; }
+.ref { font-family: ui-monospace, Consolas, monospace; font-size: 12.5px; direction: ltr;
+  unicode-bidi: isolate; color: var(--accent); white-space: nowrap; }
+.chip { font-size: 11px; font-weight: 700; border-radius: 4px; padding: 0 6px; white-space: nowrap; line-height: 18px; }
+.chip.p0 { background: var(--error); color: #fff; }
+.chip.p1 { background: var(--wait); color: #1b1300; }
+.chip.p2 { background: var(--accent-soft); color: var(--text); }
+.chip.b { background: var(--mention); color: var(--text); }
+.chip.a { background: var(--accent-soft); color: var(--text); }
+.live { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; font-size: 14px; margin: 0; }
+.live dt { color: var(--muted); }
+.live dd { margin: 0; font-variant-numeric: tabular-nums; min-width: 0; overflow-wrap: anywhere; }
+.big { font-size: 22px; font-weight: 700; font-family: ui-monospace, Consolas, monospace;
+  direction: ltr; unicode-bidi: isolate; }
+.bar { height: 6px; background: var(--accent-soft); border-radius: 3px; overflow: hidden; }
+.bar i { display: block; height: 100%; background: var(--accent); }
+.role { display: flex; align-items: center; gap: 10px; font-size: 14px; }
+.role .av { width: 28px; height: 28px; font-size: 13px; border-radius: 8px; display: grid; place-items: center;
+  font-weight: 700; color: #fff; flex: none; background: var(--accent); }
+.role .tx { flex: 1; min-width: 0; }
+.st { font-size: 12px; font-weight: 700; display: flex; align-items: center; gap: 5px; white-space: nowrap; }
+.st::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+.st.busy::before { background: var(--ok); }
+.st.wait::before { background: var(--wait); }
+.go { border: 1px solid var(--line); background: none; border-radius: 6px; font-size: 12px; padding: 0 8px;
+  white-space: nowrap; color: var(--accent); }
+.sync { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--muted);
+  border: 1px solid var(--line); border-radius: 999px; padding: 2px 10px; background: var(--bubble);
+  margin-inline-start: auto; }
+.sync .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--ok); animation: dash-pulse 2.4s ease-in-out infinite; }
+@keyframes dash-pulse { 50% { opacity: .35; } }
+.sync b { color: var(--text); font-weight: 500; }
 /* Amber, not red: a stale dashboard is a document that is still trusted, only old. */
-.dash-pill.stale { color: var(--wait); border-color: var(--wait); }
+.sync.stale, .dash-pill.stale { color: var(--wait); border-color: var(--wait); }
 .dash-card h3 { margin: 0 0 .35rem; font-size: 13px; }
 .dash-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: .2rem; }
 .dash-list li { display: flex; justify-content: space-between; gap: .5rem; font-size: 12.5px; }
 .dash-label { font-weight: 600; }
+/* approvals carousel: one item of doc.next_moves at a time (display-only —
+   the yes/no send action is agora#83; this wires the UI slot and click hook). */
+.appr-head { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); }
+.appr-nav { display: flex; gap: 4px; margin-inline-start: auto; }
+.appr-body { display: flex; flex-direction: column; gap: 6px; }
+.appr-body .q { font-size: 14px; font-weight: 600; }
+.appr-body .why { font-size: 13px; color: var(--muted); }
+.appr-btns { display: flex; gap: 6px; }
+.appr-btns .go.yes { color: var(--ok); border-color: var(--ok); }
+.appr-btns .go.no { color: var(--error); border-color: var(--error); }
 @media (max-width: 1279px) {
   #view-switch { display: flex; }
 }
@@ -292,18 +349,25 @@ dialog .buttons { display: flex; justify-content: flex-end; gap: .5rem; margin-t
     </div>
   </main>
   <aside id="dash" hidden>
-    <div id="dash-pill" class="dash-pill">
-      <span id="dash-pill-text"></span>
-      <button type="button" id="dash-sync" class="btn">רענן עכשיו</button>
+    <div class="dhead">
+      <h2>הלוח של החברה</h2>
+      <div id="dash-pill" class="dash-pill sync">
+        <span class="dot" aria-hidden="true"></span>
+        <span id="dash-pill-text"></span>
+        <button type="button" id="dash-sync" class="go">סנכרן עכשיו</button>
+      </div>
     </div>
-    <section class="dash-card" id="dash-live"><h3></h3><div class="dash-body"></div></section>
-    <section class="dash-card" id="dash-waiting"><h3></h3><div class="dash-body"></div></section>
-    <section class="dash-card" id="dash-roles"><h3></h3><div class="dash-body"></div></section>
-    <section class="dash-card" id="dash-queue"><h3></h3><div class="dash-body"></div></section>
-    <section class="dash-card" id="dash-prs" hidden><h3></h3><div class="dash-body"></div></section>
-    <section class="dash-card" id="dash-week"><h3></h3><div class="dash-body"></div></section>
-    <section class="dash-card" id="dash-products"><h3></h3><div class="dash-body"></div></section>
-    <section class="dash-card" id="dash-stuck"><h3></h3><div class="dash-body"></div></section>
+    <div class="cards">
+      <section class="dash-card card" id="dash-live"><h3></h3><div class="dash-body"></div></section>
+      <section class="dash-card card wide" id="dash-approvals"><h3></h3><div class="dash-body"></div></section>
+      <section class="dash-card card" id="dash-waiting"><h3></h3><div class="dash-body"></div></section>
+      <section class="dash-card card" id="dash-roles"><h3></h3><div class="dash-body"></div></section>
+      <section class="dash-card card" id="dash-queue"><h3></h3><div class="dash-body"></div></section>
+      <section class="dash-card card" id="dash-prs" hidden><h3></h3><div class="dash-body"></div></section>
+      <section class="dash-card card" id="dash-week"><h3></h3><div class="dash-body"></div></section>
+      <section class="dash-card card" id="dash-products"><h3></h3><div class="dash-body"></div></section>
+      <section class="dash-card card" id="dash-stuck"><h3></h3><div class="dash-body"></div></section>
+    </div>
   </aside>
   <aside id="members-panel" class="drawer" aria-labelledby="members-head">
     <div class="drawer-head">
@@ -371,6 +435,14 @@ dialog .buttons { display: flex; justify-content: flex-end; gap: .5rem; margin-t
 // markup: a message is untrusted input. The CSP the server sends allows this
 // one inline script by its hash and nothing else.
 const $ = (id) => document.getElementById(id);
+// Small createElement/textContent helper — no markup-parsing sink, ever: a
+// message is untrusted input, and the CSP allows only this one inline script.
+function el(tag, cls, text) {
+  const e = document.createElement(tag);
+  if (cls) e.className = cls;
+  if (text != null) e.textContent = text;
+  return e;
+}
 const STORE = "agora-chat-credentials";
 const THEME = "agora-chat-theme";
 const SVG = "http://www.w3.org/2000/svg";
@@ -779,17 +851,25 @@ function renderPill(d, now) {
 // built with createElement and textContent, never a markup sink.
 function renderRows(rows) {
   const ul = document.createElement("ul");
-  ul.className = "dash-list";
+  ul.className = "dash-list rows";
   for (const row of rows || []) {
     const li = document.createElement("li");
+    if (row.chip) {
+      const chip = document.createElement("span");
+      chip.className = "chip " + row.chip;
+      chip.textContent = row.chipText || row.chip.toUpperCase();
+      li.append(chip);
+    }
     const label = document.createElement(row.url ? "a" : "span");
     if (row.url) { label.href = row.url; label.target = "_blank"; label.rel = "noopener"; }
-    label.className = "dash-label";
+    // A ref (issue/PR id) is mono/ltr/nowrap, per the mockup's `.ref`; a role
+    // or product name reads like ordinary RTL text, so it gets no `.ref`.
+    label.className = "dash-label" + (row.ref !== false ? " ref" : "");
     label.textContent = row.label || "";
     li.append(label);
     if (row.detail) {
       const detail = document.createElement("span");
-      detail.className = "dash-detail muted";
+      detail.className = "dash-detail muted tx";
       detail.textContent = row.detail;
       li.append(detail);
     }
@@ -819,9 +899,11 @@ function joinDetail(...parts) { return parts.filter((p) => p !== null && p !== u
 function renderLive(rows) {
   return renderRows((rows || []).map((r) => ({
     label: r.ref, url: r.url,
+    // idle_min can read negative (clock skew between the run log and the
+    // server, agora#100) — clamp to 0 rather than show a negative age.
     detail: joinDetail(r.phase, r.round != null ? "round " + r.round : null,
                         r.claimed_min != null ? "claimed " + r.claimed_min + "m ago" : null,
-                        r.idle_min != null ? "idle " + r.idle_min + "m" : null,
+                        r.idle_min != null ? "idle " + Math.max(0, r.idle_min) + "m" : null,
                         r.last_action),
   })));
 }
@@ -848,31 +930,42 @@ function renderWaiting(stuck) {
 // links to whatever it is currently on, when there is one.
 function renderRoles(rows) {
   return renderRows((rows || []).map((r) => ({
-    label: r.role, url: r.url,
+    label: r.role, url: r.url, ref: false,
     detail: joinDetail(r.state, r.doing, r.ref),
   })));
 }
 
-// the queue by priority: `priority` already reads like "p1", so "#" + it is
-// enough — no re-numbering needed. `claimed_now` / `needs_human` are flags,
-// not text, so they only add a word when true.
+// the queue by priority: a colored `.chip` (mockup style) instead of folding
+// the priority into the label text, which used to scramble under RTL
+// ("#p0 · adk-lab#8" read as "p0 · adk-#lab#8", agora#100). `claimed_now` /
+// `needs_human` are flags, not text, so they only add a word when true.
 function renderQueue(rows) {
   return renderRows((rows || []).map((r) => ({
-    label: joinDetail(r.priority != null ? "#" + r.priority : null, r.ref),
-    url: r.url,
+    chip: r.priority ? "p" + String(r.priority).replace(/^p/, "") : null,
+    chipText: r.priority ? String(r.priority).toUpperCase() : null,
+    label: r.ref, url: r.url,
     detail: joinDetail(r.title, r.claimed_now ? "claimed" : null, r.needs_human ? "needs human" : null),
   })));
 }
 
-// the week: not a list of rows at all but four company-wide counters, so
-// the rows are built here rather than passed straight through.
+// the week: not a list of rows at all but one big number (points closed,
+// mockup style) plus a muted line for the rest, rather than a 4-row table.
 function renderWeek(w) {
-  const rows = [];
-  if (w && w.points_closed != null) rows.push({label: "points closed", detail: String(w.points_closed)});
-  if (w && w.points_closed_previous != null) rows.push({label: "vs last week", detail: String(w.points_closed_previous)});
-  if (w && w.percent_of_company != null) rows.push({label: "% of company", detail: w.percent_of_company + "%"});
-  if (w && w.median_go_to_close_h != null) rows.push({label: "median time to close", detail: w.median_go_to_close_h + "h"});
-  return renderRows(rows);
+  const wrap = document.createElement("div");
+  if (!w || w.points_closed == null) {
+    wrap.append(el("span", "muted", "—"));
+    return wrap;
+  }
+  const top = document.createElement("div");
+  top.append(el("span", "big", String(w.points_closed)),
+    document.createTextNode(" points closed" + (w.points_closed_previous != null
+      ? " (last week: " + w.points_closed_previous + ")" : "")));
+  wrap.append(top);
+  const bits = [];
+  if (w.percent_of_company != null) bits.push(w.percent_of_company + "% of company");
+  if (w.median_go_to_close_h != null) bits.push("median time to close: " + w.median_go_to_close_h + "h");
+  if (bits.length) wrap.append(el("div", "muted", bits.join(" · ")));
+  return wrap;
 }
 
 // products: `goal_he` is the product's goal in Hebrew — the one line worth
@@ -887,7 +980,7 @@ function renderProducts(rows) {
       : null;
     const checks = Array.isArray(r.checks) && r.checks.length
       ? r.checks.filter((c) => c.done).length + "/" + r.checks.length + " checks" : null;
-    return {label: r.name,
+    return {label: r.name, ref: false,
             detail: joinDetail(r.goal_he, r.due ? "due " + r.due : null, work, checks)};
   }));
 }
@@ -908,18 +1001,82 @@ function mountCard(id, node) {
   $(id).querySelector(".dash-body").replaceChildren(node);
 }
 
+// Approvals carousel (agora#100 founder addition): one item of doc.next_moves
+// at a time, "N of M", so a skipped item is never dropped — prev/next only
+// move the index, never filter the list. Display-only: the real yes/no send
+// is agora#83; the buttons here are a UI slot with a click hook and log to
+// the console, nothing is sent. `cost` is not a field `next_moves` has today
+// (noted in the PR) — the row is left out rather than shown as "undefined".
+let approvalsIdx = 0;
+function renderApprovals(moves) {
+  moves = moves || [];
+  const wrap = document.createElement("div");
+  if (!moves.length) {
+    wrap.append(el("div", "muted", "אין אישורים ממתינים"));
+    return wrap;
+  }
+  if (approvalsIdx >= moves.length) approvalsIdx = 0;
+  const item = moves[approvalsIdx];
+  const head = el("div", "appr-head");
+  head.append(el("span", null, (approvalsIdx + 1) + " מתוך " + moves.length));
+  const nav = el("div", "appr-nav");
+  const prev = el("button", "go", "‹ הקודם");
+  const next = el("button", "go", "הבא ›");
+  prev.type = "button"; next.type = "button";
+  prev.onclick = () => { approvalsIdx = (approvalsIdx - 1 + moves.length) % moves.length; mountCard("dash-approvals", renderApprovals(moves)); };
+  next.onclick = () => { approvalsIdx = (approvalsIdx + 1) % moves.length; mountCard("dash-approvals", renderApprovals(moves)); };
+  nav.append(prev, next);
+  head.append(nav);
+  wrap.append(head);
+  const body = el("div", "appr-body");
+  body.append(el("div", "q", item.q_he || item.id || ""));
+  if (item.why_he) body.append(el("div", "why", item.why_he));
+  if (item.link) {
+    const a = document.createElement("a");
+    a.className = "ref"; a.href = item.link; a.target = "_blank"; a.rel = "noopener";
+    a.textContent = item.link;
+    body.append(a);
+  }
+  wrap.append(body);
+  const btns = el("div", "appr-btns");
+  const yes = el("button", "go yes", "כן");
+  const no = el("button", "go no", "לא");
+  yes.type = "button"; no.type = "button";
+  // Display-only slot: agora#83 owns the real send. Skipping (either button)
+  // just moves to the next item — the item itself is never removed.
+  yes.onclick = () => { console.log("approve (not sent — agora#83):", item.id); next.onclick(); };
+  no.onclick = () => { console.log("decline (not sent — agora#83):", item.id); next.onclick(); };
+  btns.append(yes, no);
+  wrap.append(btns);
+  return wrap;
+}
+
+function setCount(id, n) {
+  const h3 = $(id).querySelector("h3");
+  let cnt = h3.querySelector(".cnt");
+  if (!cnt) { cnt = el("span", "cnt"); h3.append(cnt); }
+  cnt.textContent = String(n);
+}
+
 function renderDashboard(d) {
   renderPill(d);
   const doc = d.doc || {};
   mountCard("dash-live", renderLive(doc.live));
+  mountCard("dash-approvals", renderApprovals(doc.next_moves));
+  setCount("dash-approvals", (doc.next_moves || []).length);
   mountCard("dash-waiting", renderWaiting(doc.stuck));
   mountCard("dash-roles", renderRoles(doc.roles));
   mountCard("dash-queue", renderQueue(doc.queue));
+  setCount("dash-queue", (doc.queue || []).length);
   mountCard("dash-week", renderWeek(doc.week));
   mountCard("dash-products", renderProducts(doc.products));
   mountCard("dash-stuck", renderStuck(doc.stuck));
+  setCount("dash-stuck", (doc.stuck || []).length);
   $("dash-prs").hidden = !doc.prs;
-  if (doc.prs) mountCard("dash-prs", renderPrs(doc.prs));
+  if (doc.prs) {
+    mountCard("dash-prs", renderPrs(doc.prs));
+    setCount("dash-prs", Object.values(doc.prs).reduce((a, rows) => a + rows.length, 0));
+  }
 }
 
 // The one place GET /api/v1/dashboard is fetched from: on load, on every
@@ -1592,9 +1749,12 @@ $("menu-btn").addEventListener("click", () => $("app").classList.toggle("side-op
 // string on this page that is not static Hebrew chrome goes through
 // textContent from a render function, and these are no exception.
 const DASH_TITLES = {
-  "dash-live": "pool now", "dash-waiting": "waiting for you", "dash-roles": "who works on what",
-  "dash-queue": "the queue by priority", "dash-prs": "open PRs by type", "dash-week": "the week",
-  "dash-products": "products", "dash-stuck": "stuck",
+  // "מחכה לאישור שלך" is the mockup's own title for its approvals card
+  // (DASH.approvals); this app's `stuck`-derived NEEDSHUMAN card is a
+  // different thing (not in the mockup), so it keeps a title of its own.
+  "dash-live": "ה-POOL עכשיו", "dash-approvals": "מחכה לאישור שלך", "dash-waiting": "ריצות שממתינות לך",
+  "dash-roles": "מי עובד על מה", "dash-queue": "התור לפי עדיפות", "dash-prs": "PRs פתוחים",
+  "dash-week": "השבוע", "dash-products": "מוצרים", "dash-stuck": "תקוע",
 };
 for (const [id, title] of Object.entries(DASH_TITLES)) {
   $(id).querySelector("h3").textContent = title;
