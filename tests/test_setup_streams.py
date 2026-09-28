@@ -121,8 +121,9 @@ def test_setup_creates_watchdog_on_status_and_coo_only(capsys):
     wd = _bot(z, "Watchdog")
     assert wd["is_bot"] and wd["email"] == "watchdog-bot@x"
     assert _bot_streams(z, "Watchdog") == {"status", "coo"}
-    # role bots: each in its own stream, plus #feature for CTO and COO (#56)
-    assert _bot_streams(z, "COO") == {"coo", "feature"}
+    # role bots: each in its own stream, plus #feature for CTO and COO (#56),
+    # plus #pool for the COO (#80)
+    assert _bot_streams(z, "COO") == {"coo", "feature", "pool"}
     assert _bot_streams(z, "CTO") == {"cto", "feature"}
     assert _bot_streams(z, "CMO") == {"cmo"}
     capsys.readouterr()
@@ -311,3 +312,59 @@ def test_feature_does_not_open_other_role_streams():
     setup_streams.run_setup(z)
     z.subs[z.streams["coo"]["stream_id"]].add(_bot(z, "CTO")["user_id"])
     assert not setup_streams.run_check(z)
+
+
+# -- issue #80: #pool holds the founder, the COO bot and the Pool bot
+
+
+def test_setup_creates_private_pool_with_founder_coo_and_pool_bot(capsys):
+    z = FakeZulip()
+    setup_streams.run_setup(z)
+    assert z.streams["pool"]["invite_only"]
+    assert _members(z, "pool") == {"Admin", "COO", "Pool"}
+    assert _bot(z, "Pool")["email"] == "pool-bot@x"
+    assert _bot_streams(z, "Pool") == {"pool"}
+    capsys.readouterr()
+    assert setup_streams.run_check(z)
+    assert "#pool: OK" in capsys.readouterr().out
+
+
+def test_setup_creates_the_pool_bot_once():
+    z = FakeZulip()
+    setup_streams.run_setup(z)
+    setup_streams.run_setup(z)
+    assert sum(1 for u in z.users if u["full_name"] == "Pool") == 1
+
+
+def test_check_fails_when_the_pool_bot_is_missing(capsys):
+    z = FakeZulip()
+    setup_streams.run_setup(z)
+    pool = _bot(z, "Pool")
+    z.users.remove(pool)
+    for subs in z.subs.values():
+        subs.discard(pool["user_id"])
+    capsys.readouterr()
+    assert not setup_streams.run_check(z)
+    assert "bot Pool: MISSING" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("stray", ["CTO", "CMO", "Watchdog"])
+def test_check_fails_on_another_bot_in_pool(capsys, stray):
+    z = FakeZulip()
+    setup_streams.run_setup(z)
+    z.subs[z.streams["pool"]["stream_id"]].add(_bot(z, stray)["user_id"])
+    capsys.readouterr()
+    assert not setup_streams.run_check(z)
+    assert f"#pool: FAIL — bots that must not be subscribed: ['{stray}']" in capsys.readouterr().out
+
+
+def test_check_fails_when_the_pool_bot_is_elsewhere_or_the_founder_is_not_in_pool(capsys):
+    z = FakeZulip()
+    setup_streams.run_setup(z)
+    z.subs[z.streams["coo"]["stream_id"]].add(_bot(z, "Pool")["user_id"])
+    assert not setup_streams.run_check(z)
+    z.subs[z.streams["coo"]["stream_id"]].discard(_bot(z, "Pool")["user_id"])
+    z.subs[z.streams["pool"]["stream_id"]].discard(1)
+    capsys.readouterr()
+    assert not setup_streams.run_check(z)
+    assert "#pool: FAIL — the founder is not subscribed" in capsys.readouterr().out

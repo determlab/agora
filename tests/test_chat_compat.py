@@ -29,7 +29,7 @@ from test_chat_setup import HUMAN, cli_env
 ZULIP_CLI = ROOT / "bot" / "zulip.py"
 SETUP = ROOT / "bot" / "setup_streams.py"
 HOOK = ROOT / "hooks" / "agora_hook.py"
-ROLES = ("CTO", "CMO", "COO", "WATCHDOG")
+ROLES = ("CTO", "CMO", "COO", "WATCHDOG", "POOL")
 
 
 def _free_port() -> int:
@@ -150,6 +150,25 @@ def test_watchdog_posts_to_status(world):
     sent = _ok(zulip(world, "--as", "WATCHDOG", "send", "--stream", "status", "--topic",
                      "status", "--text", "all green"), "zulip.py --as WATCHDOG send #status")
     assert "sent #status" in sent.stdout
+
+
+def test_pool_reads_the_founders_commands_as_json_lines_since_an_id(world):
+    """Issue #80: bootstrap's #pool, and the daemon's own read of it."""
+    founder = _client(world)
+    first = founder.send_message("pool", "status", topic="pool control")["id"]
+    founder.send_message("pool", "pause shal", topic="pool control")
+    _ok(zulip(world, "--as", "COO", "send", "--stream", "pool", "--topic", "pool control",
+              "--text", "resume aos"), "zulip.py --as COO send #pool")
+    read = _ok(zulip(world, "--as", "POOL", "read", "--stream", "pool", "--since", str(first),
+                     "--json"), "zulip.py --as POOL read --json")
+    rows = [json.loads(line) for line in read.stdout.splitlines()]
+    assert [r["content"] for r in rows] == ["pause shal", "resume aos"]
+    assert all(r["id"] > first and r["stream"] == "pool" and r["topic"] == "pool control"
+               for r in rows)
+    assert [r["sender_email"] for r in rows] == [HUMAN, "coo-bot@chat.localhost"]
+    sent = _ok(zulip(world, "--as", "POOL", "send", "--stream", "pool", "--topic",
+                     "pool control", "--text", "paused shal"), "zulip.py --as POOL send #pool")
+    assert "sent #pool" in sent.stdout
 
 
 def test_an_edit_and_a_reaction_through_zulip_client(world):

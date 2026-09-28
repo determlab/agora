@@ -177,3 +177,61 @@ def test_bootstrap_from_env_keeps_todays_emails_and_keys(tmp_path, capsys):
     assert chat.main(["bootstrap", "--json", "--from-env", str(env_file), "--db", db]) == 0
     assert {b["action"] for b in json.loads(capsys.readouterr().out)["bots"]} == \
         {"already exists"}
+
+
+def _pool_members(db: str) -> dict:
+    store = chat.Store(db)
+    try:
+        [stream] = store.q("SELECT * FROM streams WHERE name='pool'")
+        assert stream["invite_only"] == 1
+        return {r["email"]: r["full_name"] for r in store.q(
+            "SELECT u.* FROM users u JOIN subscriptions x ON x.user_id=u.id "
+            "WHERE x.stream_id=?", (stream["stream_id"],))}
+    finally:
+        store.db.close()
+
+
+def test_bootstrap_creates_the_pool_bot_and_private_pool_with_founder_and_coo(
+        tmp_path, capsys):
+    """Issue #80: the pool daemon's bot and stream, for ops#85's pool control."""
+    db, env_file = str(tmp_path / "chat.sqlite3"), tmp_path / "bot.env"
+    env_file.write_text("ZULIP_COO_EMAIL=coo-bot@zulip.localhost\n"
+                        "ZULIP_COO_API_KEY=coo-key\n", encoding="utf-8")
+    assert add_human(db).returncode == 0  # the founder, before bootstrap
+    assert chat.main(["bootstrap", "--json", "--from-env", str(env_file), "--db", db]) == 0
+    pool = json.loads(capsys.readouterr().out)["pool"]
+    assert pool["email"] == "pool-bot@chat.localhost" and pool["api_key"]
+    assert pool["stream"] == "pool" and pool["missing"] == []
+    members = _pool_members(db)
+    assert members == {"pool-bot@chat.localhost": "Pool", "coo-bot@zulip.localhost": "COO",
+                       HUMAN: "Test Human"}
+    assert sorted(pool["members"]) == sorted(members)
+    store = chat.Store(db)
+    try:
+        # The key printed is the key that works: `--as POOL` uses exactly it.
+        row = store.one("SELECT * FROM users WHERE email=?", (pool["email"],))
+        assert row["api_key"] == pool["api_key"] and row["is_bot"] == 1
+    finally:
+        store.db.close()
+
+    # Run twice: the same bot and key, nothing new.
+    assert chat.main(["bootstrap", "--json", "--from-env", str(env_file), "--db", db]) == 0
+    again = json.loads(capsys.readouterr().out)["pool"]
+    assert (again["email"], again["api_key"]) == (pool["email"], pool["api_key"])
+    assert _pool_members(db) == members
+
+
+def test_bootstrap_uses_the_env_pool_pair_and_names_who_is_not_in_pool_yet(
+        tmp_path, capsys):
+    """No founder and no COO yet: #pool says so rather than listing them; the
+    founder's add-human later joins him, and ZULIP_POOL_* is the Pool bot."""
+    db, env_file = str(tmp_path / "chat.sqlite3"), tmp_path / "bot.env"
+    env_file.write_text("ZULIP_POOL_EMAIL=pool-bot@zulip.localhost\n"
+                        "ZULIP_POOL_API_KEY=pool-key\n", encoding="utf-8")
+    assert chat.main(["bootstrap", "--from-env", str(env_file), "--db", db]) == 0
+    out = capsys.readouterr().out
+    assert "ZULIP_POOL_EMAIL=pool-bot@zulip.localhost\nZULIP_POOL_API_KEY=pool-key" in out
+    assert "# #pool: no COO yet" in out and "# #pool: no founder yet" in out
+    assert _pool_members(db) == {"pool-bot@zulip.localhost": "Pool"}
+    assert add_human(db).returncode == 0
+    assert _pool_members(db)[HUMAN] == "Test Human"

@@ -8,6 +8,7 @@ Usage:
   python bot/zulip.py send --stream coo --topic "#141 record shape" --text "..."
   python bot/zulip.py read --stream coo --topic "#141 record shape" [--since ID]
   python bot/zulip.py read --mentions [--since ID]
+  python bot/zulip.py --as POOL read --stream pool --since ID --json
   python bot/zulip.py wait [--session KEY] [--seconds N]
 
 Posts and reads as the bot named by ``ZULIP_BOT_EMAIL`` / ``ZULIP_BOT_API_KEY``,
@@ -25,6 +26,7 @@ from __future__ import annotations
 
 import argparse
 import importlib.util
+import json
 import os
 import re
 import sys
@@ -130,8 +132,21 @@ def _line(msg: dict[str, Any]) -> str:
             f"{msg.get('content', '')}")
 
 
+def _json_line(msg: dict[str, Any]) -> str:
+    """One message as one JSON object on one line (issue #80): what a daemon
+    parses, where ``_line`` is what a session reads. The same fields."""
+    stream = msg.get("type") == "stream"
+    return json.dumps({
+        "id": msg["id"], "timestamp": msg.get("timestamp", 0),
+        "sender_full_name": msg.get("sender_full_name"),
+        "sender_email": msg.get("sender_email"),
+        "stream": msg.get("display_recipient") if stream else None,
+        "topic": msg.get("subject", "") if stream else None,
+        "content": msg.get("content", "")}, ensure_ascii=False)
+
+
 def cmd_read(client: ZulipClient, stream: str | None, topic: str | None,
-             mentions: bool, since: int | None) -> int:
+             mentions: bool, since: int | None, as_json: bool = False) -> int:
     if mentions:
         narrow = [{"operator": "is", "operand": "mentioned"}]
     else:
@@ -145,6 +160,9 @@ def cmd_read(client: ZulipClient, stream: str | None, topic: str | None,
             narrow.append({"operator": "topic", "operand": topic})
     messages = _fetch(client, narrow, since)
     for msg in messages:
+        if as_json:
+            print(_json_line(msg))
+            continue
         print(_line(msg))
         print()
     if not messages:
@@ -188,6 +206,8 @@ def main(argv: list[str] | None = None) -> int:
                        help="everything that mentioned this bot, across streams")
     read.add_argument("--topic")
     read.add_argument("--since", type=int, help="only messages after this id")
+    read.add_argument("--json", action="store_true",
+                      help="one JSON object per message per line (JSON Lines)")
     wait = sub.add_parser("wait", help="park until this bot is mentioned or DMed")
     wait.add_argument("--session", help="lock and queue key (default: cli-<bot>)")
     wait.add_argument("--seconds", type=float, help="give up after this long")
@@ -199,7 +219,8 @@ def main(argv: list[str] | None = None) -> int:
             return cmd_send(client, args.stream, args.topic, args.text)
         if args.cmd == "wait":
             return cmd_wait(client, args.as_name, args.session, args.seconds)
-        return cmd_read(client, args.stream, args.topic, args.mentions, args.since)
+        return cmd_read(client, args.stream, args.topic, args.mentions, args.since,
+                        args.json)
     except ZulipError as exc:
         print(f"refused by Zulip: {exc}", file=sys.stderr)
         return 1
