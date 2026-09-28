@@ -63,8 +63,8 @@ code, pre { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
 #keys input { width: 100%; }
 #keys code { background: var(--code); padding: 0 .2rem; }
 /* The frame: the app sits in a rounded card on the page background. */
-#app { display: grid; grid-template-columns: 16rem 1fr; height: calc(100vh - 2rem);
-  position: relative; overflow: hidden; background: var(--panel);
+#app { display: grid; grid-template-columns: 16rem 1fr; grid-template-rows: auto 1fr;
+  height: calc(100vh - 2rem); position: relative; overflow: hidden; background: var(--panel);
   border: 1px solid var(--line); border-radius: 14px; box-shadow: var(--shadow); }
 #side { border-inline-end: 1px solid var(--line); overflow-y: auto; background: var(--panel);
   padding: .75rem .5rem; display: flex; flex-direction: column; gap: .25rem; }
@@ -198,14 +198,21 @@ dialog .buttons { display: flex; justify-content: flex-end; gap: .5rem; margin-t
   #app.side-open #side { transform: none; }
   #menu-btn { display: inline-block; }
 }
-/* A2 (#82): #dash is the human view of GET /api/v1/dashboard, side by side
-   with chat at 1280px and up (the founder's side-by-side rule). Below that,
-   #view-switch (spanning the grid's full width, so it survives either pane
-   being hidden) shows one of #main / #dash at a time. */
-#view-switch { grid-column: 1 / -1; display: none; gap: .25rem; padding: .4rem .75rem;
-  border-bottom: 1px solid var(--line); background: var(--panel); }
-#view-switch button.active { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
-#dash { overflow: auto; padding: .75rem 1rem; display: flex; flex-direction: column; gap: .75rem; }
+/* A2 (#82), revised by the founder on agora#100: #dash (the human view of
+   GET /api/v1/dashboard) and chat are never shown together. #view-switch
+   (the mockup's own `.seg` pill, always visible, spanning the grid's full
+   width) picks one; the other's pane is `hidden`. #dash spans both grid
+   columns so it gets the whole width the sidebar+chat pair used together. */
+#view-switch { grid-column: 1 / -1; grid-row: 1; display: inline-flex; width: fit-content;
+  border: 1px solid var(--line); border-radius: 999px; background: var(--panel); padding: 2px;
+  margin: .5rem .75rem 0; }
+#view-switch button { border: 0; background: none; border-radius: 999px; padding: 3px 16px;
+  font-size: 14px; font-weight: 500; }
+#view-switch button.active { background: var(--text); color: var(--panel); }
+#side { grid-row: 2; }
+#main { grid-row: 2; }
+#dash { grid-row: 2; grid-column: 1 / -1; overflow: auto; padding: .75rem 1rem;
+  display: flex; flex-direction: column; gap: .75rem; }
 /* agora#100: the panel ported from the approved mockup (B8UrALfZEZ34F1sPeJEiNz).
    Class names below (dhead/cards/card/rows/ref/chip/live/big/bar/role/st/sync/go)
    are the mockup's own, kept unrenamed so a side-by-side compare stays legible;
@@ -271,14 +278,6 @@ dialog .buttons { display: flex; justify-content: flex-end; gap: .5rem; margin-t
 .appr-btns { display: flex; gap: 6px; }
 .appr-btns .go.yes { color: var(--ok); border-color: var(--ok); }
 .appr-btns .go.no { color: var(--error); border-color: var(--error); }
-@media (max-width: 1279px) {
-  #view-switch { display: flex; }
-}
-@media (min-width: 1280px) {
-  #app { grid-template-columns: 16rem 1fr 1fr; }
-  /* Side by side: the switch's choice of pane only matters below 1280px. */
-  #main[hidden], #dash[hidden] { display: flex !important; }
-}
 </style>
 </head>
 <body>
@@ -1760,9 +1759,11 @@ for (const [id, title] of Object.entries(DASH_TITLES)) {
   $(id).querySelector("h3").textContent = title;
 }
 
-// Below 1280px only one of #main / #dash shows; the media query in the
-// stylesheet forces both visible at 1280px and up regardless of this.
+// Chat and the board are never shown together (founder's ruling on agora#100):
+// the switch hides the channel list and chat and gives the board the full
+// width, at every viewport size.
 function setView(view) {
+  $("side").hidden = view !== "chat";
   $("main").hidden = view !== "chat";
   $("dash").hidden = view !== "dash";
   $("view-chat").classList.toggle("active", view === "chat");
