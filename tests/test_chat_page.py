@@ -1399,22 +1399,168 @@ def test_panel_css_classes_from_the_mockup_are_present():
         assert re.search(re.escape(cls) + r"\s*\{", text), cls
 
 
-def test_approvals_card_renders_one_of_next_moves_with_prev_next():
-    # The founder's addition to #100: one pending item at a time, "N of M",
-    # so a skipped item is never dropped — prev/next only move the index.
-    # Display-only: the real send is agora#83.
+def test_approvals_card_renders_cost_note_field_and_prev_next():
+    # ops#176: one pending item at a time, "N of M", so a skipped item is
+    # never dropped — prev/next only move the index. cost_he shows when the
+    # card has one; the note input is always there (optional on any answer).
     got = _js(("renderApprovals", "el"), """
       const moves = [
-        {id: "a", q_he: "A?", why_he: "because a", link: "https://x/1"},
+        {id: "a", q_he: "A?", why_he: "because a", cost_he: "0.1M", link: "https://x/1"},
         {id: "b", q_he: "B?", why_he: "because b", link: "https://x/2"},
       ];
       out.first = dump(renderApprovals(moves));
       out.empty = dump(renderApprovals([]));
-    """, prelude=FAKE_DOM + "\nlet approvalsIdx = 0;\n")
+    """, prelude=FAKE_DOM + "\nlet approvalsIdx = 0;\nlet approvalsPending = null;\n")
     text = json.dumps(got["first"], ensure_ascii=False)
     assert "1 מתוך 2" in text and "A?" in text and "because a" in text and "https://x/1" in text
+    assert "0.1M" in text
+    assert '"cls": "appr-note"' in text
     assert "[object" not in text and "undefined" not in text
     assert "אין אישורים ממתינים" in json.dumps(got["empty"], ensure_ascii=False)
+
+
+# The prelude every ops#176 approvals-flow test below shares: module-level
+# state renderApprovals reads/writes (approvalsIdx, approvalsPending), a
+# mountCard stand-in that records the mounted node instead of touching a real
+# DOM (renderApprovals's own onclick handlers re-mount themselves on every
+# click), and a setTimeout/clearTimeout stand-in that queues callbacks
+# instead of actually waiting 10s, so a test can fire or cancel one by hand.
+APPR_PRELUDE = FAKE_DOM + """
+let approvalsIdx = 0;
+let approvalsPending = null;
+const ANSWER_HE = {yes: "אושר", no: "נדחה", later: "לאחר כך"};
+let mounted = null;
+function mountCard(id, node) { mounted = {id, node}; }
+const timers = [];
+function setTimeout(fn, ms) { const t = {fn, ms, cancelled: false}; timers.push(t); return timers.length; }
+function clearTimeout(id) { const t = timers[id - 1]; if (t) t.cancelled = true; }
+"""
+
+
+def test_yes_no_later_open_a_ten_second_undo_window_before_sending():
+    # The founder's Undo answer on #176: a click never sends right away.
+    got = _js(("renderApprovals", "el", "clearApprovalsPending"), """
+      const moves = [{id: "a", q_he: "A?", why_he: "because a", link: "https://x/1"}];
+      const first = renderApprovals(moves);
+      first.querySelector(".appr-note").value = "not today";
+      const noBtn = [...first.querySelectorAll("button")].find((b) => b.textContent === "לא");
+      noBtn.onclick();
+      out.pending = {id: approvalsPending.id, answer: approvalsPending.answer,
+                     note: approvalsPending.note};
+      out.timerMs = timers[timers.length - 1].ms;
+      out.mountedId = mounted.id;
+      out.undo = dump(mounted.node);
+    """, prelude=APPR_PRELUDE)
+    assert got["pending"] == {"id": "a", "answer": "no", "note": "not today"}
+    assert got["timerMs"] == 10000
+    assert got["mountedId"] == "dash-approvals"
+    text = json.dumps(got["undo"], ensure_ascii=False)
+    assert "נדחה" in text and "A?" in text and "בטל" in text
+
+
+def test_undo_clears_the_pending_decision_and_nothing_is_sent():
+    got = _js(("renderApprovals", "el", "clearApprovalsPending"), """
+      const moves = [{id: "a", q_he: "A?", why_he: "because a", link: "https://x/1"}];
+      const first = renderApprovals(moves);
+      const yesBtn = [...first.querySelectorAll("button")].find((b) => b.textContent === "כן");
+      yesBtn.onclick();
+      mounted.node.querySelector("button").onclick();  // the undo bar's one button
+      out.pendingAfterUndo = approvalsPending;
+      out.cancelled = timers[timers.length - 1].cancelled;
+      out.backToNormal = dump(mounted.node);
+    """, prelude=APPR_PRELUDE)
+    assert got["pendingAfterUndo"] is None
+    assert got["cancelled"] is True
+    assert "מתוך" in json.dumps(got["backToNormal"], ensure_ascii=False)  # the "N of M" view, not the undo bar
+
+
+def test_later_defers_without_sending_until_the_window_elapses():
+    got = _js(("renderApprovals", "el", "clearApprovalsPending"), """
+      const moves = [{id: "a", q_he: "A?", why_he: "because a", link: "https://x/1"}];
+      const first = renderApprovals(moves);
+      const laterBtn = [...first.querySelectorAll("button")].find((b) => b.textContent === "אחר כך");
+      laterBtn.onclick();
+      out.answer = approvalsPending.answer;
+    """, prelude=APPR_PRELUDE)
+    assert got["answer"] == "later"
+
+
+def test_commit_approval_posts_id_answer_and_note_then_reloads():
+    # commitApproval is what a fired (un-undone) timer calls — tested
+    # directly here, against the real page function, not the fake timer.
+    got = _js(("commitApproval",), """
+      await commitApproval("a", "no", "not today");
+      out.calls = calls;
+      out.loaded = loaded;
+    """, prelude=API_STUB + "\nlet loaded = false;\nasync function loadDashboard() { loaded = true; }\n")
+    assert got["calls"] == [["POST", "dashboard/approve", {"id": "a", "answer": "no", "note": "not today"}]]
+    assert got["loaded"] is True
+
+
+def test_commit_approval_toasts_on_failure_but_still_reloads():
+    got = _js(("commitApproval",), """
+      FAIL = true;
+      await commitApproval("a", "yes", "");
+      out.toasts = toasts;
+      out.loaded = loaded;
+    """, prelude=API_STUB + FAKE_DOM
+       + "\nlet loaded = false;\nasync function loadDashboard() { loaded = true; }\n")
+    assert got["toasts"] and got["toasts"][0][1] is True  # a bad (red) toast
+    assert got["loaded"] is True
+
+
+def test_progress_card_renders_stages_milestone_bars_chain_and_blocker():
+    got = _js(("renderProgress", "el", "renderRows", "joinDetail"), """
+      out.full = dump(renderProgress({
+        stages: [{he: "1. הוכח", current: false}, {he: "2. בשימוש", current: true}],
+        milestones: [{repo: "shal", title: "v0.4.0", closed: 3, total: 4, percent: 75,
+                      url: "https://x/m1"}],
+        chain: [{ref: "bricks#50", title: "psu", done: true, url: "https://x/50"},
+                {ref: "shal#253", title: "pack", done: false, url: "https://x/253"}],
+        blocker: {ref: "bricks#50", title: "psu", url: "https://x/50"},
+      }));
+      out.empty = dump(renderProgress(null));
+    """, prelude=FAKE_DOM)
+    text = json.dumps(got["full"], ensure_ascii=False)
+    assert "1. הוכח" in text and "2. בשימוש" in text
+    assert "shal" in text and "v0.4.0" in text and "3/4" in text and "75%" in text
+    assert "bricks#50" in text and "shal#253" in text
+    assert "חוסם" in text
+    assert "[object" not in text and "undefined" not in text
+    empty = got["empty"]
+    assert empty["kids"][0]["text"] == "—" and empty["kids"][0]["cls"] == "muted"
+
+
+def test_tokens_card_renders_per_role_use_and_the_last_limit():
+    got = _js(("renderTokens", "el", "renderRows"), """
+      out.full = dump(renderTokens({
+        agents: {COO: {"5h": {weighted: 12345}}, CTO: {"5h": {weighted: 200}}},
+        pool: {"5h": {weighted: 999}},
+        cloud: {"5h": {weighted: 0}},
+        last_limit: {what: "5h limit", reset: "2026-09-29T18:00:00Z", active: true},
+      }));
+      out.empty = dump(renderTokens(null));
+      out.inactiveLimit = dump(renderTokens({agents: {}, last_limit: {active: false}}));
+    """, prelude=FAKE_DOM)
+    text = json.dumps(got["full"], ensure_ascii=False)
+    assert "COO" in text and "CTO" in text and "Pool" in text and "Cloud" in text
+    assert "12345" in text.replace(",", "")
+    assert "5h limit" in text and "2026-09-29T18:00:00Z" in text
+    assert "[object" not in text and "undefined" not in text
+    empty = got["empty"]
+    assert empty["kids"][0]["text"] == "—" and empty["kids"][0]["cls"] == "muted"
+    assert "מגבלה" not in json.dumps(got["inactiveLimit"], ensure_ascii=False)
+
+
+def test_progress_and_tokens_cards_render_cleanly_from_the_real_fixture():
+    got = _js(("renderProgress", "renderTokens", "renderRows", "joinDetail", "el"), f"""
+      const doc = {json.dumps(DASHBOARD_FIXTURE)};
+      out.progress = dump(renderProgress(doc.progress));
+      out.tokens = dump(renderTokens(doc.tokens));
+    """, prelude=FAKE_DOM)
+    for name in ("progress", "tokens"):
+        text = json.dumps(got[name], ensure_ascii=False)
+        assert "[object" not in text and "undefined" not in text and "NaN" not in text
 
 
 def test_prs_card_is_grouped_by_type_and_hidden_when_the_section_is_absent():
