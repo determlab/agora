@@ -151,6 +151,8 @@ CREATE TABLE IF NOT EXISTS archived_topics (
 CREATE TABLE IF NOT EXISTS read_messages (
     user_id INTEGER NOT NULL, message_id INTEGER NOT NULL,
     PRIMARY KEY (user_id, message_id));
+CREATE TABLE IF NOT EXISTS read_floor (
+    user_id INTEGER PRIMARY KEY, floor_id INTEGER NOT NULL);
 """
 
 
@@ -197,12 +199,33 @@ class Store:
     def migrate(self) -> None:
         """Bring a database made by an older server up to SCHEMA without
         touching its rows. ``CREATE TABLE IF NOT EXISTS`` adds a new table;
-        a new column on an existing table needs its own ``ALTER TABLE``."""
+        a new column on an existing table needs its own ``ALTER TABLE``.
+
+        A database that already had a ``users`` table before ``read_floor``
+        existed predates per-user read state: every message in it is "old",
+        so each of its users gets a floor at the current newest message id
+        rather than an unread pile of history nobody ever marked read. A
+        brand-new database has no ``users`` table yet here (SCHEMA has not
+        run), so it never gets a floor — nothing in it is old."""
         with self.lock:
             cols = {r[1] for r in self.db.execute("PRAGMA table_info(streams)")}
             if cols and "is_archived" not in cols:
                 self.db.execute("ALTER TABLE streams ADD COLUMN is_archived "
                                 "INTEGER NOT NULL DEFAULT 0")
+            had_users = bool(self.db.execute("PRAGMA table_info(users)").fetchall())
+            had_read_floor = bool(self.db.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='read_floor'"
+            ).fetchall())
+            if had_users and not had_read_floor:
+                # One transaction: a crash between CREATE and INSERT must not
+                # leave an empty read_floor that no later start backfills.
+                self.db.execute("BEGIN IMMEDIATE")
+                self.db.execute("CREATE TABLE read_floor (user_id INTEGER PRIMARY KEY, "
+                                "floor_id INTEGER NOT NULL)")
+                floor = self.db.execute("SELECT COALESCE(MAX(id), 0) FROM messages").fetchone()[0]
+                self.db.execute("INSERT INTO read_floor (user_id, floor_id) "
+                                "SELECT id, ? FROM users", (floor,))
+                self.db.execute("COMMIT")
 
     @contextlib.contextmanager
     def tx(self):
@@ -290,6 +313,12 @@ class Store:
     def subscribed(self, uid: int) -> set[int]:
         return {r[0] for r in self.q("SELECT stream_id FROM subscriptions WHERE user_id=?",
                                      (uid,))}
+
+    def read_floor(self, uid: int) -> int:
+        """Every message at or below this id is read for ``uid`` (the migration
+        below), whatever ``read_messages`` says or does not say about it."""
+        row = self.one("SELECT floor_id FROM read_floor WHERE user_id=?", (uid,))
+        return row[0] if row else 0
 
     def stream_by_ref(self, ref):
         ref = str(ref).lstrip("#")
@@ -623,9 +652,9 @@ class Chat:
 
     def flags(self, row, me: dict) -> list[str]:
         flags = []
-        if row["sender_id"] == me["id"] or self.s.one(
-                "SELECT 1 FROM read_messages WHERE user_id=? AND message_id=?",
-                (me["id"], row["id"])):
+        if row["sender_id"] == me["id"] or row["id"] <= self.s.read_floor(me["id"]) \
+                or self.s.one("SELECT 1 FROM read_messages WHERE user_id=? AND message_id=?",
+                              (me["id"], row["id"])):
             flags.append("read")
         if _mentions(row["content"], me):
             flags.append("mentioned")
@@ -1009,17 +1038,23 @@ class Chat:
     # `unread_msgs`; this server hands it back on its own so a client can
     # refresh counts without re-registering a queue. A message this user sent
     # is never unread for them, so it is excluded here rather than tracked as
-    # read — no write on send, and nothing to backfill for old messages.
+    # read. Messages at or below the caller's read_floor (the migration
+    # below) are old history, read for everyone by definition. An
+    # archived stream or an archived topic never contributes: it is hidden
+    # from the lists, so a bubble for it could never clear.
     def unread(self, me: dict, p: dict | None = None) -> dict:
         streams: dict[int, dict] = {}
         for row in self.s.q(
                 "SELECT s.stream_id AS stream_id, s.name AS name, m.subject AS topic, "
                 "COUNT(*) AS n FROM messages m JOIN streams s ON s.stream_id=m.stream_id "
-                "WHERE m.type='stream' AND m.sender_id != ? AND s.stream_id IN "
-                "(SELECT stream_id FROM subscriptions WHERE user_id=?) AND NOT EXISTS "
+                "WHERE m.type='stream' AND m.sender_id != ? AND s.is_archived=0 "
+                "AND s.stream_id IN (SELECT stream_id FROM subscriptions WHERE user_id=?) "
+                "AND m.id > ? AND NOT EXISTS "
                 "(SELECT 1 FROM read_messages r WHERE r.user_id=? AND r.message_id=m.id) "
+                "AND NOT EXISTS (SELECT 1 FROM archived_topics a WHERE a.stream_id=m.stream_id "
+                "AND a.topic=m.subject) "
                 "GROUP BY s.stream_id, m.subject COLLATE NOCASE",
-                (me["id"], me["id"], me["id"])):
+                (me["id"], me["id"], self.s.read_floor(me["id"]), me["id"])):
             entry = streams.setdefault(row["stream_id"], {
                 "stream_id": row["stream_id"], "name": row["name"], "unread": 0, "topics": []})
             entry["topics"].append({"name": row["topic"], "unread": row["n"]})
@@ -1039,6 +1074,20 @@ class Chat:
             for row in self.s.q(
                     "SELECT id FROM messages WHERE type='stream' AND stream_id=? "
                     "AND subject=? COLLATE NOCASE AND sender_id != ?", (sid, topic, me["id"])):
+                self.s.x("INSERT OR IGNORE INTO read_messages (user_id, message_id) "
+                         "VALUES (?,?)", (me["id"], row["id"]))
+        return {}
+
+    # POST /mark_stream_as_read: Zulip's own endpoint and
+    # argument name. Every message in the stream not sent by `me`, in any
+    # topic, becomes read for `me` — the "mark all as read" next to a stream.
+    def mark_stream_as_read(self, me: dict, p: dict) -> dict:
+        sid = _int(p, "stream_id")
+        self.s.visible_stream(me, sid)
+        with self.s.tx():
+            for row in self.s.q(
+                    "SELECT id FROM messages WHERE type='stream' AND stream_id=? "
+                    "AND sender_id != ?", (sid, me["id"])):
                 self.s.x("INSERT OR IGNORE INTO read_messages (user_id, message_id) "
                          "VALUES (?,?)", (me["id"], row["id"]))
         return {}
@@ -1211,6 +1260,8 @@ class Chat:
             return self.unread(me, p)
         if path == "mark_topic_as_read" and method == "POST":
             return self.mark_topic_as_read(me, p)
+        if path == "mark_stream_as_read" and method == "POST":
+            return self.mark_stream_as_read(me, p)
         if path == "bots" and method == "POST":
             return self.create_bot(me, p)
         if path == "dashboard" and method == "GET":

@@ -158,6 +158,55 @@ def test_a_non_member_cannot_touch_a_private_streams_topics(arc):
     assert status == 400 and body["code"] == "STREAM_DOES_NOT_EXIST"
 
 
+# -- unread bubbles never count an archived room
+
+
+def test_an_archived_streams_messages_never_count_toward_its_bubble(arc):
+    admin, cto, sid = arc["admin"], arc["cto"], arc["sid"]
+    assert _send(cto, "t1", "one")[0] == 200
+    assert admin("GET", "unread")[1]["streams"][0]["unread"] == 1
+    assert admin("DELETE", f"streams/{sid}")[0] == 200
+    # Archived: hidden from the lists, so its bubble must be gone too, not
+    # stuck forever on a room nobody can open to clear it.
+    assert admin("GET", "unread")[1]["streams"] == []
+    assert admin("PATCH", f"streams/{sid}", is_archived="false")[0] == 200
+    assert admin("GET", "unread")[1]["streams"][0]["unread"] == 1
+
+
+def test_an_archived_topics_messages_never_count_toward_the_stream_bubble(arc):
+    admin, cto, sid = arc["admin"], arc["cto"], arc["sid"]
+    assert _send(cto, "t1", "one")[0] == 200
+    assert _send(cto, "t2", "two")[0] == 200
+    assert admin("POST", f"streams/{sid}/archived_topics", topic="t1")[0] == 200
+    status, unread = admin("GET", "unread")
+    [feature] = unread["streams"]
+    assert feature["unread"] == 1 and [t["name"] for t in feature["topics"]] == ["t2"]
+    # A new message un-archives the topic: it was never marked read, so
+    # restoring it brings its old unread messages back too, not just the new one.
+    assert _send(cto, "T1", "back")[0] == 200
+    assert admin("GET", "unread")[1]["streams"][0]["unread"] == 3
+
+
+def test_mark_stream_as_read_clears_every_topics_bubble_at_once(arc):
+    admin, cto, sid = arc["admin"], arc["cto"], arc["sid"]
+    _send(cto, "t1", "one")
+    _send(cto, "t1", "two")
+    _send(cto, "t2", "three")
+    status, body = admin("POST", "mark_stream_as_read", stream_id=sid)
+    assert status == 200 and body == {"result": "success", "msg": ""}
+    assert admin("GET", "unread")[1]["streams"] == []
+    # Idempotent, and the caller's own message stays excluded regardless.
+    _send(admin, "t1", "mine")
+    assert admin("GET", "unread")[1]["streams"] == []
+    _send(cto, "t2", "new")
+    assert admin("GET", "unread")[1]["streams"][0]["unread"] == 1
+
+
+def test_mark_stream_as_read_needs_a_visible_stream(arc):
+    status, body = arc["admin"]("POST", "mark_stream_as_read", stream_id=999999)
+    assert status == 400 and body["code"] == "STREAM_DOES_NOT_EXIST"
+
+
 # -- the migration
 
 
@@ -185,6 +234,66 @@ def test_an_old_database_gains_the_archive_columns_and_keeps_its_rows(tmp_path):
     assert store.q("SELECT * FROM archived_topics") == []
     store.db.close()
     chat.Store(path).db.close()  # a second start does not migrate twice
+
+
+def test_a_pre_existing_database_marks_every_message_read_for_every_user(tmp_path):
+    """A database that already had users (and messages) before ``read_floor``
+    existed predates per-user read state entirely — every message in it must
+    be read for every user already there, not an unread pile of history
+    nobody ever marked read."""
+    path = str(tmp_path / "old.sqlite3")
+    db = sqlite3.connect(path)
+    db.executescript("""
+        CREATE TABLE users (
+            id INTEGER PRIMARY KEY, email TEXT UNIQUE NOT NULL, full_name TEXT NOT NULL,
+            is_bot INTEGER NOT NULL, api_key TEXT NOT NULL, role INTEGER NOT NULL,
+            date_joined INTEGER NOT NULL);
+        CREATE TABLE streams (
+            stream_id INTEGER PRIMARY KEY, name TEXT UNIQUE COLLATE NOCASE NOT NULL,
+            invite_only INTEGER NOT NULL, description TEXT NOT NULL DEFAULT '',
+            is_archived INTEGER NOT NULL DEFAULT 0);
+        CREATE TABLE subscriptions (
+            user_id INTEGER NOT NULL, stream_id INTEGER NOT NULL,
+            PRIMARY KEY (user_id, stream_id));
+        CREATE TABLE messages (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, sender_id INTEGER NOT NULL,
+            type TEXT NOT NULL, stream_id INTEGER, subject TEXT NOT NULL DEFAULT '',
+            content TEXT NOT NULL, timestamp INTEGER NOT NULL, last_edit_timestamp INTEGER);
+        INSERT INTO users VALUES (1, 'cto-bot@chat.localhost', 'CTO', 1, 'k1', 400, 1);
+        INSERT INTO users VALUES (2, 'coo-bot@chat.localhost', 'COO', 1, 'k2', 400, 1);
+        INSERT INTO streams VALUES (7, 'feature', 1, '', 0);
+        INSERT INTO subscriptions VALUES (1, 7);
+        INSERT INTO subscriptions VALUES (2, 7);
+        INSERT INTO messages (sender_id, type, stream_id, subject, content, timestamp)
+            VALUES (1, 'stream', 7, 't', 'already here before read state existed', 1);
+    """)
+    db.commit()
+    db.close()
+
+    store = chat.Store(path)
+    old_id = store.one("SELECT id FROM messages")[0]
+    assert store.read_floor(1) == old_id and store.read_floor(2) == old_id
+    assert store.q("SELECT * FROM read_messages") == []  # a floor, not a mountain of rows
+    store.db.close()
+    chat.Store(path).db.close()  # a second start does not re-migrate or crash
+
+    server = chat.make_server(path, port=0)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    base = f"http://127.0.0.1:{server.server_address[1]}"
+    cto, coo = Api(base, "cto-bot@chat.localhost", "k1"), Api(base, "coo-bot@chat.localhost", "k2")
+    try:
+        # The pre-existing message is read for COO with no mark_topic_as_read call.
+        assert coo("GET", "unread")[1]["streams"] == []
+        # A message sent after the migration is unread as normal.
+        assert cto("POST", "messages", type="stream", to="feature", topic="t2",
+                   content="new")[0] == 200
+        assert coo("GET", "unread")[1]["streams"][0]["unread"] == 1
+        # A reload (another GET, the way loadUnread() on the page does it) sees
+        # exactly the same thing: server state, not a client-side guess.
+        assert coo("GET", "unread")[1]["streams"][0]["unread"] == 1
+    finally:
+        server.shutdown()
+        server.server_close()
 
 
 # -- the agent path: bot/zulip.py archive|unarchive --json

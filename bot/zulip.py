@@ -13,6 +13,7 @@ Usage:
   python bot/zulip.py archive|unarchive --stream coo [--topic "old"] [--json]
   python bot/zulip.py unread [--json]
   python bot/zulip.py mark-read --stream coo --topic "#141 record shape" [--json]
+  python bot/zulip.py mark-read --stream coo [--json]   # every topic in the stream
 
 Posts and reads as the bot named by ``ZULIP_BOT_EMAIL`` / ``ZULIP_BOT_API_KEY``,
 or with ``--as COO`` as the bot in ``ZULIP_COO_EMAIL`` / ``ZULIP_COO_API_KEY``.
@@ -213,16 +214,21 @@ def cmd_unread(client: ZulipClient, as_json: bool = False) -> int:
     return 0
 
 
-def cmd_mark_read(client: ZulipClient, stream: str, topic: str, as_json: bool = False) -> int:
-    """Mark every message in one topic read, the way opening it in the page
-    does (issue #168)."""
+def cmd_mark_read(client: ZulipClient, stream: str, topic: str | None,
+                  as_json: bool = False) -> int:
+    """Mark read: one topic (the way opening it in the page does, issue #168),
+    or the whole stream without ``--topic`` (the sidebar's "mark all as
+    read") — both only messages not sent by ``client`` itself."""
     stream = stream.lstrip("#")
     sid = client._request("GET", "get_stream_id", {"stream": stream})["stream_id"]
-    client._request("POST", "mark_topic_as_read", {"stream_id": sid, "topic_name": topic})
+    if topic:
+        client._request("POST", "mark_topic_as_read", {"stream_id": sid, "topic_name": topic})
+    else:
+        client._request("POST", "mark_stream_as_read", {"stream_id": sid})
     if as_json:
         print(json.dumps({"ok": True, "stream": stream, "topic": topic}, ensure_ascii=False))
     else:
-        print(f"marked read: #{stream} › {topic}")
+        print(f"marked read: #{stream}" + (f" › {topic}" if topic else " (all topics)"))
     return 0
 
 
@@ -276,9 +282,9 @@ def main(argv: list[str] | None = None) -> int:
         arc.add_argument("--json", action="store_true", help="one JSON object on stdout")
     unread = sub.add_parser("unread", help="print unread counts per stream and topic")
     unread.add_argument("--json", action="store_true", help="one JSON object on stdout")
-    mark = sub.add_parser("mark-read", help="mark every message in a topic read")
+    mark = sub.add_parser("mark-read", help="mark a topic, or a whole stream, read")
     mark.add_argument("--stream", required=True)
-    mark.add_argument("--topic", required=True)
+    mark.add_argument("--topic", help="only this topic; every topic in the stream without it")
     mark.add_argument("--json", action="store_true", help="one JSON object on stdout")
     args = parser.parse_args(argv)
 

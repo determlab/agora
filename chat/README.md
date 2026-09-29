@@ -88,20 +88,30 @@ a shell: `python bot/zulip.py archive|unarchive --stream S [--topic T] --json`.
 
 Read state is per user, stored in the `read_messages` table (never touched by
 sending: a sender's own messages are simply excluded from their own unread
-count, not written as read). `GET /api/v1/unread` returns unread counts per
-stream and per topic for the caller:
+count, not written as read). A message at or below a user's `read_floor` (its
+own table, one row per user) is read regardless of `read_messages`: a
+database that already had users before `read_floor` existed gets one
+migrated in, at that moment's newest message id, so every message from
+before per-user read state existed is read for everyone rather than an
+unread pile of old history. `GET /api/v1/unread` returns unread counts per
+stream and per topic for the caller, never counting an archived
+stream (`is_archived`) or an archived topic — both are hidden from the
+lists, so a bubble for one could never clear:
 ```json
 {"streams": [{"stream_id": 3, "name": "feature", "unread": 4,
               "topics": [{"name": "ops#44 routes", "unread": 4}]}]}
 ```
 `POST /api/v1/mark_topic_as_read` with `stream_id` and `topic_name` (Zulip's
 own endpoint and argument names) marks every message in that topic, not sent
-by the caller, read. The page shows a small round bubble next to each stream
-and topic with unread messages (hidden at 0), starts every stream's topic
-list collapsed on load, marks a topic read when it is opened (and when a
-message arrives while it is already open), and shows the total in the tab
-title as `(N) Agora`. From a shell: `python bot/zulip.py unread --json` and
-`python bot/zulip.py mark-read --stream S --topic T`.
+by the caller, read; `POST /api/v1/mark_stream_as_read` with `stream_id` does
+the same for every topic in the stream — the sidebar's "mark all as read".
+The page shows a small round bubble next to each stream and topic with
+unread messages (hidden at 0), starts every stream's topic list collapsed on
+load, marks a topic read when it is opened (and when a message arrives while
+it is already open), loads every count from the server on page load so a
+reload never disagrees with what was on screen, and shows the total in the
+tab title as `(N) Agora`. From a shell: `python bot/zulip.py unread --json`
+and `python bot/zulip.py mark-read --stream S [--topic T]`.
 
 ## Accounts, by hand
 

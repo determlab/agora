@@ -238,10 +238,13 @@ A stream the bot is not subscribed to, or one that does not exist, is named
 on stderr and exits 2; nothing is sent.
 
 `python bot/zulip.py unread [--json]` prints unread counts per stream and
-topic (issue #168); `python bot/zulip.py mark-read --stream S --topic T
-[--json]` marks every message in that topic read, the same thing opening it
-in `chat/page.html` does. A message the bot itself sent is never unread for
-it.
+topic (issue #168), never counting an archived stream or topic, or history
+from before per-user read state existed (a migration handles that).
+`python bot/zulip.py mark-read --stream S --topic T [--json]` marks every
+message in that topic read, the same thing opening it in `chat/page.html`
+does; without `--topic` it marks the whole stream read, the same as the
+sidebar's "mark all as read". A message the bot itself sent is never unread
+for it.
 
 ## Memory limits (issue #57)
 

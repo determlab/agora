@@ -1634,7 +1634,7 @@ def test_pill_states():
 
 def test_168_unread_bubbles_render_next_to_streams_and_topics_hidden_when_zero():
     prelude = FAKE_DOM + """
-      const CARET = "c", GEAR = "g", SVG = "http://www.w3.org/2000/svg";
+      const CARET = "c", GEAR = "g", CHECK = "k", SVG = "http://www.w3.org/2000/svg";
       const S = {streams: [{stream_id: 1, name: "feature", invite_only: true},
                            {stream_id: 2, name: "quiet", invite_only: false}],
                  topics: new Map([["feature", new Map([["a", 5], ["b", 9]])],
@@ -1760,3 +1760,76 @@ def test_168_the_tab_title_shows_the_total_unread_count():
     """, prelude="const document = {}; const S = {unread: new Map()};")
     assert got["empty"] == "agora · צ'אט"
     assert got["some"] == "(3) Agora"
+
+
+# -- reload consistency and mark-stream-read
+
+
+def test_load_unread_replaces_local_state_with_exactly_what_the_server_says():
+    # A reload starts with stale local counts (or none at all); loadUnread()
+    # must throw them away and take the server's answer as-is, so a reload
+    # never shows a count that disagrees with what mark_topic_as_read already
+    # persisted server-side.
+    prelude = """
+      async function api(method, path) {
+        if (path === "unread") return {streams: [{stream_id: 1, name: "feature", unread: 2,
+          topics: [{name: "a", unread: 2}]}]};
+        return {};
+      }
+      const S = {unread: new Map([[1, {unread: 99, topics: new Map([["stale", 99]])}],
+                                  [2, {unread: 5, topics: new Map()}]])};
+      function renderStreams() {}
+      function updateTitle() {}
+    """
+    got = _js(("loadUnread",), """
+      await loadUnread();
+      out.streamIds = [...S.unread.keys()];
+      out.feature = {unread: S.unread.get(1).unread, topics: [...S.unread.get(1).topics.entries()]};
+    """, prelude=prelude)
+    assert got["streamIds"] == [1]
+    assert got["feature"] == {"unread": 2, "topics": [["a", 2]]}
+
+
+def test_mark_read_button_shows_only_with_unread_and_clears_the_bubble_locally():
+    prelude = FAKE_DOM + """
+      const CARET = "c", GEAR = "g", CHECK = "k", SVG = "http://www.w3.org/2000/svg";
+      const S = {streams: [{stream_id: 1, name: "feature", invite_only: true},
+                           {stream_id: 2, name: "quiet", invite_only: false}],
+                 topics: new Map([["feature", new Map([["a", 5]])], ["quiet", new Map()]]),
+                 unread: new Map([[1, {unread: 3, topics: new Map([["a", 3]])}]]),
+                 collapsed: new Set(), open: null, adding: null};
+      let markedStream = null;
+      async function api(method, path, params) {
+        markedStream = [method, path, params];
+        return {};
+      }
+      function updateTitle() {}
+    """
+    got = _js(("svgIcon", "renderStreams", "newTopicItem", "el", "markStreamRead"), """
+      renderStreams();
+      const rows = $("streams").querySelectorAll(".stream-row");
+      out.hasButton = rows.map((r) => !!r.querySelector(".mark-read"));
+      await $("streams").querySelectorAll(".mark-read")[0].on.click();
+      out.markedStream = markedStream;
+      const entry = S.unread.get(1);
+      out.entryAfter = {unread: entry.unread, topics: [...entry.topics.entries()]};
+    """, prelude=prelude)
+    assert got["hasButton"] == [True, False]
+    assert got["markedStream"] == ["POST", "mark_stream_as_read", {"stream_id": 1}]
+    assert got["entryAfter"] == {"unread": 0, "topics": []}
+
+
+def test_mark_stream_read_tells_the_server_even_with_nothing_local_to_zero():
+    prelude = API_STUB + """
+      const S = {unread: new Map()};
+      let renders = 0;
+      function renderStreams() { renders += 1; }
+      function updateTitle() {}
+    """
+    got = _js(("markStreamRead",), """
+      await markStreamRead(7);
+      out.calls = calls;
+      out.renders = renders;
+    """, prelude=prelude)
+    assert got["calls"] == [["POST", "mark_stream_as_read", {"stream_id": "7"}]]
+    assert got["renders"] == 0  # nothing local to clear: no local entry, no re-render
