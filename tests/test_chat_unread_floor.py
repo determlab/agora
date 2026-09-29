@@ -8,6 +8,8 @@ from __future__ import annotations
 import sqlite3
 import threading
 
+import pytest
+
 from test_chat_messages import Api, chat, env  # noqa: F401  (fixture)
 
 
@@ -115,3 +117,88 @@ def test_migration_keeps_todays_per_user_floor_for_every_stream_the_user_was_alr
     finally:
         server.shutdown()
         server.server_close()
+
+
+def test_a_crash_mid_migration_leaves_the_db_unchanged(tmp_path, monkeypatch):
+    """CTO review of #111: the rename branch (old per-user ``read_floor`` ->
+    per-user-and-stream) runs RENAME, CREATE, INSERT, DROP inside one
+    transaction, the same way #109's fix (``ca2f2fe``) wraps its own
+    CREATE+INSERT. A crash right after the CREATE and before the INSERT
+    must roll back the whole thing: no ``read_floor_old`` left behind, and
+    no empty ``read_floor`` that a later start mistakes for "already
+    migrated" and skips — the exact bug #109 fixed, reintroduced."""
+    path = str(tmp_path / "crash_floor.sqlite3")
+    db = sqlite3.connect(path)
+    db.executescript("""
+        CREATE TABLE users (
+            id INTEGER PRIMARY KEY, email TEXT UNIQUE NOT NULL, full_name TEXT NOT NULL,
+            is_bot INTEGER NOT NULL, api_key TEXT NOT NULL, role INTEGER NOT NULL,
+            date_joined INTEGER NOT NULL);
+        CREATE TABLE streams (
+            stream_id INTEGER PRIMARY KEY, name TEXT UNIQUE COLLATE NOCASE NOT NULL,
+            invite_only INTEGER NOT NULL, description TEXT NOT NULL DEFAULT '',
+            is_archived INTEGER NOT NULL DEFAULT 0);
+        CREATE TABLE subscriptions (
+            user_id INTEGER NOT NULL, stream_id INTEGER NOT NULL,
+            PRIMARY KEY (user_id, stream_id));
+        CREATE TABLE messages (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, sender_id INTEGER NOT NULL,
+            type TEXT NOT NULL, stream_id INTEGER, subject TEXT NOT NULL DEFAULT '',
+            content TEXT NOT NULL, timestamp INTEGER NOT NULL, last_edit_timestamp INTEGER);
+        CREATE TABLE read_floor (user_id INTEGER PRIMARY KEY, floor_id INTEGER NOT NULL);
+        INSERT INTO users VALUES (1, 'cto-bot@chat.localhost', 'CTO', 1, 'k1', 400, 1);
+        INSERT INTO streams VALUES (7, 'alpha', 1, '', 0);
+        INSERT INTO streams VALUES (8, 'beta', 1, '', 0);
+        INSERT INTO subscriptions VALUES (1, 7);
+        INSERT INTO subscriptions VALUES (1, 8);
+        INSERT INTO messages (sender_id, type, stream_id, subject, content, timestamp)
+            VALUES (1, 'stream', 7, 't', 'pre-crash message', 1);
+        INSERT INTO read_floor VALUES (1, 42);
+    """)
+    db.commit()
+    db.close()
+
+    def snapshot():
+        conn = sqlite3.connect(path)
+        tables = {r[0] for r in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'")}
+        floor_cols = {r[1] for r in conn.execute("PRAGMA table_info(read_floor)")}
+        floor_rows = set(conn.execute("SELECT * FROM read_floor").fetchall())
+        conn.close()
+        return tables, floor_cols, floor_rows
+
+    before = snapshot()
+
+    class CrashingConnection(sqlite3.Connection):
+        def execute(self, sql, *a):
+            if sql.startswith("CREATE TABLE read_floor"):
+                super().execute(sql, *a)
+                raise sqlite3.OperationalError("simulated crash mid-migration")
+            return super().execute(sql, *a)
+
+    real_connect = sqlite3.connect
+    opened = []
+
+    def crash_after_create(*args, **kwargs):
+        kwargs["factory"] = CrashingConnection
+        conn = real_connect(*args, **kwargs)
+        opened.append(conn)
+        return conn
+
+    monkeypatch.setattr(sqlite3, "connect", crash_after_create)
+    with pytest.raises(sqlite3.OperationalError):
+        chat.Store(path)
+    monkeypatch.undo()
+    # A real crash never reaches COMMIT either; closing the connection here
+    # (instead of an abrupt process death) rolls back the same way.
+    opened[0].close()
+
+    assert snapshot() == before
+
+    # A clean retry must still migrate correctly: the rollback did not
+    # leave read_floor in a half-migrated state that fools the next start.
+    store = chat.Store(path)
+    assert store.read_floor(1, 7) == 42 and store.read_floor(1, 8) == 42
+    assert {(r["user_id"], r["stream_id"], r["floor_id"])
+            for r in store.q("SELECT * FROM read_floor")} == {(1, 7, 42), (1, 8, 42)}
+    store.db.close()
