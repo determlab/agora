@@ -297,6 +297,7 @@ dialog .buttons { display: flex; justify-content: flex-end; gap: .5rem; margin-t
 .appr-btns .go.yes { color: var(--ok); border-color: var(--ok); }
 .appr-btns .go.no { color: var(--error); border-color: var(--error); }
 .appr-btns .go.later { color: var(--wait); border-color: var(--wait); }
+.prog-chain { margin-top: 14px; }
 .appr-undo { display: flex; align-items: center; gap: 10px; font-size: 13px; }
 /* ops#176 founder answer: the new-card count reads as a bubble, the same
    look as the chat unread badges (.badge), not the plain muted .cnt other
@@ -1235,8 +1236,16 @@ function renderTokens(t) {
   }
   const lim = t && t.last_limit;
   if (lim && lim.active) {
-    wrap.append(el("div", "muted", "מגבלה אחרונה: " + (lim.what || "") +
-      (lim.reset ? " · מתאפס ב-" + lim.reset : "")));
+    // The limit text and the reset time are English/ISO inside a Hebrew
+    // line: each goes in its own <bdi> so the RTL order cannot garble it
+    // ("hour limit reached-5", QA on PR 112).
+    const line = el("div", "muted", "מגבלה אחרונה: ");
+    line.append(el("bdi", "", lim.what || ""));
+    if (lim.reset) {
+      line.append(document.createTextNode(" · מתאפס ב-"));
+      line.append(el("bdi", "", lim.reset));
+    }
+    wrap.append(line);
   }
   return wrap;
 }
@@ -1277,9 +1286,11 @@ function renderProgress(p) {
   }
   const chain = Array.isArray(p.chain) ? p.chain : [];
   if (chain.length) {
-    wrap.append(renderRows(chain.map((c) => ({
+    const rows = renderRows(chain.map((c) => ({
       label: c.ref, url: c.url, detail: joinDetail(c.title, c.done ? "בוצע" : "פתוח"),
-    }))));
+    })));
+    rows.classList.add("prog-chain");   // a gap under the milestone bars (QA on PR 112/192)
+    wrap.append(rows);
   }
   if (p.blocker) {
     const b = el("div", "muted");

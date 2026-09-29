@@ -1552,6 +1552,28 @@ def test_tokens_card_renders_per_role_use_and_the_last_limit():
     assert "מגבלה" not in json.dumps(got["inactiveLimit"], ensure_ascii=False)
 
 
+def test_tokens_limit_line_isolates_the_english_parts_in_bdi():
+    """QA on PR 112: "5-hour limit reached" inside the Hebrew line rendered as
+    "hour limit reached-5". The limit text and the reset each sit in a <bdi>."""
+    got = _js(("renderTokens", "el", "renderRows"), """
+      out.t = dump(renderTokens({agents: {},
+        last_limit: {what: "5-hour limit reached", reset: "2099-01-01T00:00:00Z", active: true}}));
+    """, prelude=FAKE_DOM)
+    line = got["t"]["kids"][-1]
+    bdis = [k for k in line["kids"] if k.get("tag") == "bdi"]
+    assert [b["text"] for b in bdis] == ["5-hour limit reached", "2099-01-01T00:00:00Z"]
+
+
+def test_progress_chain_rows_have_a_gap_under_the_milestone_bars():
+    got = _js(("renderProgress", "renderRows", "joinDetail", "el"), """
+      out.p = dump(renderProgress({milestones: [{repo: "shal", title: "v0.4.0", closed: 1, total: 2, percent: 50}],
+                                   chain: [{ref: "ops#63", url: "u", title: "t", done: true}]}));
+    """, prelude=FAKE_DOM)
+    kids = got["p"]["kids"]
+    assert "prog-chain" in kids[1]["cls"] and "prog-chain" not in kids[0]["cls"]
+    assert ".prog-chain { margin-top:" in PAGE.read_text(encoding="utf-8")
+
+
 def test_progress_and_tokens_cards_render_cleanly_from_the_real_fixture():
     got = _js(("renderProgress", "renderTokens", "renderRows", "joinDetail", "el"), f"""
       const doc = {json.dumps(DASHBOARD_FIXTURE)};
