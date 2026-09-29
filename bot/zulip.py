@@ -10,6 +10,7 @@ Usage:
   python bot/zulip.py read --mentions [--since ID]
   python bot/zulip.py --as POOL read --stream pool --since ID --json
   python bot/zulip.py wait [--session KEY] [--seconds N]
+  python bot/zulip.py archive|unarchive --stream coo [--topic "old"] [--json]
 
 Posts and reads as the bot named by ``ZULIP_BOT_EMAIL`` / ``ZULIP_BOT_API_KEY``,
 or with ``--as COO`` as the bot in ``ZULIP_COO_EMAIL`` / ``ZULIP_COO_API_KEY``.
@@ -170,6 +171,29 @@ def cmd_read(client: ZulipClient, stream: str | None, topic: str | None,
     return 0
 
 
+def cmd_archive(client: ZulipClient, stream: str, topic: str | None, archive: bool,
+                as_json: bool = False) -> int:
+    """Hide a stream or one topic from the lists, or bring it back. Messages
+    are never deleted. Side effect: changes what every member's list shows."""
+    stream = stream.lstrip("#")
+    sid = client._request("GET", "get_stream_id", {"stream": stream})["stream_id"]
+    if topic:
+        client._request("POST" if archive else "DELETE",
+                        f"streams/{sid}/archived_topics", {"topic": topic})
+    elif archive:
+        client._request("DELETE", f"streams/{sid}")
+    else:
+        client._request("PATCH", f"streams/{sid}", {"is_archived": "false"})
+    action = "archived" if archive else "restored"
+    if as_json:
+        print(json.dumps({"ok": True, "action": "archive" if archive else "unarchive",
+                          "stream": stream, "stream_id": sid, "topic": topic},
+                         ensure_ascii=False))
+    else:
+        print(f"{action} #{stream}" + (f" › {topic}" if topic else ""))
+    return 0
+
+
 def _hook():
     """hooks/agora_hook.py, loaded by path: ``wait`` runs the hook's own code
     (issue #47), never a copy of it."""
@@ -211,10 +235,25 @@ def main(argv: list[str] | None = None) -> int:
     wait = sub.add_parser("wait", help="park until this bot is mentioned or DMed")
     wait.add_argument("--session", help="lock and queue key (default: cli-<bot>)")
     wait.add_argument("--seconds", type=float, help="give up after this long")
+    for name, what in (("archive", "hide a stream, or one topic with --topic, from the "
+                                   "lists (messages are kept)"),
+                       ("unarchive", "bring an archived stream or topic back")):
+        arc = sub.add_parser(name, help=what)
+        arc.add_argument("--stream", required=True)
+        arc.add_argument("--topic", help="only this topic, not the whole stream")
+        arc.add_argument("--json", action="store_true", help="one JSON object on stdout")
     args = parser.parse_args(argv)
 
     client = load_client(args.as_name)
     try:
+        if args.cmd in ("archive", "unarchive"):
+            try:
+                return cmd_archive(client, args.stream, args.topic,
+                                   args.cmd == "archive", args.json)
+            except ZulipError as exc:
+                if args.json:
+                    print(json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False))
+                raise
         if args.cmd == "send":
             return cmd_send(client, args.stream, args.topic, args.text)
         if args.cmd == "wait":

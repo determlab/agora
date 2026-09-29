@@ -58,6 +58,20 @@ how old it is. A failed run stores nothing: the previous document stays and
 --json`. A queue registered with `dashboard` in its `event_types` gets
 `{"type":"dashboard","last_sync":…}` after each good sync.
 
+## Archive a stream or a topic
+
+Archive hides a room from the lists; no message is deleted. A stream: `DELETE
+/api/v1/streams/{id}` (Zulip's "archive a channel"; admins only), and `PATCH
+/api/v1/streams/{id}` with `is_archived=false` brings it back. Posting to an
+archived stream is refused with `STREAM_ARCHIVED`. A topic: `POST` / `DELETE
+/api/v1/streams/{id}/archived_topics` with `topic=…` (any member of the
+stream); `GET` there lists the archived ones. `GET
+/api/v1/users/me/subscriptions`, `GET /api/v1/streams` and `GET
+/api/v1/users/me/{id}/topics` leave archived rooms out, unless asked with
+`include_archived=true` (`exclude_archived=false` for `/streams`); each row
+carries `is_archived`. A new message to an archived topic un-archives it. From
+a shell: `python bot/zulip.py archive|unarchive --stream S [--topic T] --json`.
+
 ## Accounts, by hand
 
     python chat/server.py bootstrap --json                      # an admin bot
