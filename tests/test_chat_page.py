@@ -1516,6 +1516,42 @@ def test_queue_and_prs_carry_chips():
     assert chips == ["type B", "type A", "שינויים", "לא נבדק"]
     assert "טיוטה · a" in _text(got["p"])
     assert "GitHub לא נקרא" in got["pNull"]["text"]
+    assert "type A: ממתין למיזוג" in got["p"]["text"] and "auto-merge" not in got["p"]["text"]   # the founder merges
+
+
+def test_prs_say_when_the_list_is_cut():
+    # CTO on agora#113: dashboard.py asks GitHub for the first 50 open PRs only.
+    got = _dash("""
+      const p = [{ref: "ops#2", url: "u", title: "b", type: "B", verdict: "RECOMMEND", draft: false}];
+      out.cut = renderPrs(p, 73).textContent;
+      out.whole = renderPrs(p, 1).textContent;
+      out.noTotal = renderPrs(p).textContent;
+    """)
+    assert "מוצגים 1 מתוך 73" in got["cut"]
+    assert "מתוך" not in got["whole"] and "מתוך" not in got["noTotal"]
+
+
+def test_overlapping_runs_get_their_own_rows_and_short_bars_no_text():
+    # QA on ops#220: four parallel pool runs drew on top of each other, and
+    # a 5-minute bar showed one cut letter of its ref.
+    got = _dash("""
+      const now = new Date(2026, 8, 29, 12, 0).getTime();
+      const iso = (h, m) => new Date(2026, 8, 29, h, m).toISOString();
+      const t = {runs: [{ref: "shal#1", round: 1, start: iso(4, 0), end: iso(6, 0), live: false, url: "u"},
+                        {ref: "shal#2", round: 1, start: iso(4, 30), end: iso(4, 40), live: false, url: "u"},
+                        {ref: "shal#3", round: 1, start: iso(8, 0), end: iso(8, 10), live: false, url: "u"}],
+                 merges: [], decisions: [], notes: {}};
+      const tl = renderTimeline(t, now);
+      const runs = [];
+      const walk = (n) => { if ((n.className || "").split(" ").includes("run")) runs.push(n); (n.childNodes || []).forEach(walk); };
+      walk(tl);
+      out.runs = runs.map((r) => ({text: r.textContent, top: r.style.top || "", title: r.title}));
+    """)
+    runs = got["runs"]
+    assert [r["text"] for r in runs] == ["shal#1", "", ""]             # 2 h is wide enough, 10 min is not
+    assert runs[0]["top"] != runs[1]["top"]                            # overlapping: two rows
+    assert runs[2]["top"] == runs[0]["top"]                            # after shal#1 ended: back to row one
+    assert all(r["title"].startswith(r["title"].split(" ")[0]) and "shal#" in r["title"] for r in runs)
 
 
 def test_tokens_card_today_week_toggle_role_and_pool_bars_and_plan():

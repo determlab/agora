@@ -330,7 +330,7 @@ a.ref:hover { text-decoration: underline; }
 /* approvals carousel (ops#176), mockup look: one card at a time, N of M. */
 .appr-head { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); }
 .appr-nav { display: flex; gap: 4px; margin-inline-start: auto; }
-.appr-nav .go { padding: 0 8px; font-size: 14px; }
+.appr-nav .go { padding: 0 8px; font-size: 14px; direction: ltr; unicode-bidi: isolate; }  /* no bidi mirroring: prev points right, next left (QA ops#220) */
 .appr-body { display: flex; flex-direction: column; gap: 4px; border-inline-start: 3px solid var(--accent);
   padding-inline-start: 10px; }
 .appr-body .q, .appr-body .why { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden; }
@@ -370,14 +370,17 @@ a.ref:hover { text-decoration: underline; }
 /* today's timeline: three lanes, hour axis, red "now" line, event list under it */
 .tl { overflow-x: auto; padding: 16px 18px 4px; }
 .tlin { min-width: 640px; display: grid; grid-template-columns: 96px 1fr; row-gap: 6px; font-size: 12px; }
-.tlin .ln { color: var(--muted); align-self: center; }
+.tlin .ln { color: var(--muted); align-self: stretch; display: flex; align-items: center;
+  position: sticky; inset-inline-start: 0; z-index: 3; background: var(--bubble);
+  box-shadow: 18px 0 0 var(--bubble); }  /* the shadow covers .tl's padding strip (RTL); stays in view while the lanes scroll (QA ops#220) */
 .lane { position: relative; height: 26px; background: var(--panel); border: 1px solid var(--line); border-radius: 4px; }
 .axis { position: relative; height: 18px; color: var(--muted); font-family: ui-monospace, Consolas, monospace; font-size: 11px; }
 .axis span { position: absolute; transform: translateX(50%); unicode-bidi: isolate; }
 .ev { position: absolute; top: 50%; border: 0; padding: 0; }
 .ev.run { height: 16px; margin-top: -8px; border-radius: 4px; background: var(--accent); color: var(--accent-text);
   font-size: 11px; overflow: hidden; white-space: nowrap; padding: 0 4px; line-height: 16px;
-  font-family: ui-monospace, Consolas, monospace; unicode-bidi: plaintext; min-width: 4px; }
+  font-family: ui-monospace, Consolas, monospace; unicode-bidi: plaintext; min-width: 4px; box-sizing: border-box; }
+.ev.run:empty { padding: 0; }
 .ev.run.live { background-image: repeating-linear-gradient(45deg, transparent 0 6px, rgba(255, 255, 255, .25) 6px 12px); }
 .ev.run.unk { background: var(--muted); opacity: .6; }
 .ev.mg { width: 12px; height: 12px; margin-top: -6px; margin-inline-start: -6px; border-radius: 50%;
@@ -386,10 +389,10 @@ a.ref:hover { text-decoration: underline; }
   transform: rotate(45deg); border: 2px solid var(--bubble); }
 .now { position: absolute; top: -4px; bottom: -4px; width: 2px; background: var(--error); z-index: 2; }
 .now span { position: absolute; top: -16px; transform: translateX(50%); font-size: 11px; color: var(--error);
-  white-space: nowrap; font-weight: 700; }
+  white-space: nowrap; font-weight: 700; background: var(--bubble); padding: 0 3px; }
 .future { position: absolute; top: 0; bottom: 0; inset-inline-end: 0; background: var(--bubble); opacity: .55; border-radius: 4px; }
 .evlist { display: flex; flex-direction: column; gap: 4px; margin: 0; padding: 0; list-style: none; font-size: 13px; }
-.evlist.all { max-height: 320px; overflow-y: auto; }
+.evlist.all, .tbars.all { max-height: 320px; overflow-y: auto; }
 .evlist li { display: flex; gap: 8px; align-items: center; min-width: 0; }
 .evlist time { font-family: ui-monospace, Consolas, monospace; font-size: 12px; color: var(--muted); direction: ltr; flex: none; }
 .mk { width: 10px; height: 10px; flex: none; border-radius: 2px; background: var(--accent); }
@@ -398,7 +401,7 @@ a.ref:hover { text-decoration: underline; }
 .mk.unk { background: var(--muted); }
 .stage-row { display: flex; flex-wrap: wrap; gap: 6px; flex-direction: row !important; }
 .stage-row .chip.cur { background: var(--accent); color: var(--accent-text); }
-.prog-chain { margin-top: 6px; }
+.prog-chain { margin-top: 14px; }
 @media (max-width: 700px) {
   #dash { padding: .5rem; }
   .sync { margin-inline-start: 0; flex-basis: 100%; }
@@ -1235,7 +1238,10 @@ function renderTimeline(t, now) {
   g.append(el("span"));
   const ax = el("div", "axis");
   const step = span > 12 * 3600e3 ? 2 * 3600e3 : 3600e3;
-  for (let h = from; h <= to; h += step) { const s = el("span", null, hhmm(h)); s.style.insetInlineStart = pct(h); ax.append(s); }
+  for (let h = from; h <= to; h += step) {
+    if (Math.abs(h - now) < span * 0.1) continue;  // the red "now" label sits there (QA ops#220)
+    const s = el("span", null, hhmm(h)); s.style.insetInlineStart = pct(h); ax.append(s);
+  }
   g.append(ax);
   let first = true;
   const lane = (label, fill) => {
@@ -1251,10 +1257,29 @@ function renderTimeline(t, now) {
     g.append(l);
   };
   const runText = (r) => "סבב " + r.round + " · " + (r.live ? "רץ עכשיו" : r.b != null ? "עד " + hhmm(r.b) : "סוף לא ידוע");
+  // Runs that overlap in time go on separate rows (QA ops#220: four pool
+  // runs at once drew on top of each other). A bar too short for its ref
+  // shows no text; the ref stays in its tooltip and the event list.
+  const rowEnds = [];
+  const rowOf = new Map();
+  [...runs].sort((x, y) => x.a - y.a).forEach((r) => {
+    let i = rowEnds.findIndex((end) => end + span * 0.003 <= r.a);
+    if (i < 0) { i = rowEnds.length; rowEnds.push(0); }
+    rowEnds[i] = Math.max(r.e, r.a + span * 0.004);
+    rowOf.set(r, i);
+  });
   lane("ריצות", (l) => runs.forEach((r) => {
-    const e = el("span", "ev run" + (r.live ? " live" : "") + (r.b == null && !r.live ? " unk" : ""), r.ref);
+    const w = (Math.min(r.e, to) - Math.max(r.a, from)) / span * 100;
+    const e = el("span", "ev run" + (r.live ? " live" : "") + (r.b == null && !r.live ? " unk" : ""), w >= 5 ? r.ref : "");
+    if (rowEnds.length > 1) {
+      l.style.height = (rowEnds.length * 14 + 8) + "px";
+      e.style.top = (4 + rowOf.get(r) * 14) + "px";
+      e.style.marginTop = "0";
+      e.style.height = "12px";
+      e.style.lineHeight = "12px";
+    }
     e.style.insetInlineStart = pct(r.a);
-    e.style.width = ((Math.min(r.e, to) - Math.max(r.a, from)) / span * 100).toFixed(2) + "%";
+    e.style.width = w.toFixed(2) + "%";
     e.title = r.ref + " · " + hhmm(r.a) + "–" + (r.live ? "עכשיו" : r.b != null ? hhmm(r.b) : "?") + " · " + runText(r)
       + (r.outcome ? " · " + r.outcome : "");
     l.append(e);
@@ -1407,7 +1432,7 @@ function renderQueue(rows) {
 
 // open PRs: the CTO's last verdict type as a chip (type B comes to the
 // founder); "לא נבדק" until the CTO wrote one. `null` = GitHub unreadable.
-function renderPrs(list) {
+function renderPrs(list, total) {
   const wrap = el("div");
   if (list === undefined) { wrap.append(el("div", "muted", "אין נתון במסמך: צריך dashboard.py עדכני (ops#220)")); return wrap; }
   if (list === null) { wrap.append(el("div", "muted", "GitHub לא נקרא בסנכרון האחרון")); return wrap; }
@@ -1416,7 +1441,9 @@ function renderPrs(list) {
     label: p.ref, url: p.url, detail: (p.draft ? "טיוטה · " : "") + (p.title || ""),
     meta: p.verdict === "CHANGES" ? "שינויים" : null, metaCls: "warn",
   })), "dash-prs", "אין PRs פתוחים"));
-  wrap.append(el("div", "muted", "type B מגיע אליך. type A: auto-merge אחרי review."));
+  if (typeof total === "number" && total > list.length)
+    wrap.append(el("div", "muted", "מוצגים " + list.length + " מתוך " + total + " (" + list.length + "+)"));
+  wrap.append(el("div", "muted", "type B מגיע אליך. type A: ממתין למיזוג."));
   return wrap;
 }
 
@@ -1773,7 +1800,7 @@ function renderDashboard(d) {
   mountCard("dash-roles", renderRoles(doc.roles));
   mountCard("dash-queue", renderQueue(doc.queue));
   setCount("dash-queue", (doc.queue || []).length);
-  mountCard("dash-prs", renderPrs(doc.open_prs));
+  mountCard("dash-prs", renderPrs(doc.open_prs, doc.open_prs_total));
   setCount("dash-prs", Array.isArray(doc.open_prs) ? doc.open_prs.length : null);
   mountCard("dash-week", renderWeek(doc.week));
   mountCard("dash-products", renderProducts(doc.products));
