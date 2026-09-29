@@ -272,7 +272,7 @@ def test_a_pre_existing_database_marks_every_message_read_for_every_user(tmp_pat
 
     store = chat.Store(path)
     old_id = store.one("SELECT id FROM messages")[0]
-    assert store.read_floor(1) == old_id and store.read_floor(2) == old_id
+    assert store.read_floor(1, 7) == old_id and store.read_floor(2, 7) == old_id
     assert store.q("SELECT * FROM read_messages") == []  # a floor, not a mountain of rows
     store.db.close()
     chat.Store(path).db.close()  # a second start does not re-migrate or crash
