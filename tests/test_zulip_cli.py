@@ -69,6 +69,8 @@ class FakeZulip:
             return {"result": "success", "streams": self.unread}
         if path == "mark_topic_as_read" and method == "POST":
             return {"result": "success"}
+        if path == "mark_stream_as_read" and method == "POST":
+            return {"result": "success"}
         raise AssertionError(f"unexpected call {method} {path}")
 
 
@@ -248,6 +250,22 @@ def test_mark_read_of_a_stream_that_does_not_exist_is_refused(cli, monkeypatch, 
     _stub(monkeypatch, cli, FakeZulip())
     assert cli.main(["mark-read", "--stream", "nosuch", "--topic", "t"]) == 1
     assert "refused by Zulip" in capsys.readouterr().err
+
+
+def test_mark_read_without_a_topic_marks_the_whole_stream(cli, monkeypatch, capsys):
+    # No --topic calls mark_stream_as_read, never mark_topic_as_read.
+    fake = _stub(monkeypatch, cli, FakeZulip())
+    assert cli.main(["mark-read", "--stream", "coo"]) == 0
+    assert "marked read: #coo (all topics)" in capsys.readouterr().out
+    method, path, params = fake.calls[-1]
+    assert (method, path) == ("POST", "mark_stream_as_read")
+    assert params == {"stream_id": 1}
+
+
+def test_mark_read_without_a_topic_json_prints_a_null_topic(cli, monkeypatch, capsys):
+    _stub(monkeypatch, cli, FakeZulip())
+    assert cli.main(["mark-read", "--stream", "coo", "--json"]) == 0
+    assert json.loads(capsys.readouterr().out) == {"ok": True, "stream": "coo", "topic": None}
 
 
 def _run(args, env_extra, tmp_path, prelude=""):
