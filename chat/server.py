@@ -9,10 +9,11 @@ tools read them.
 
 Usage:
   python chat/server.py up [--json] [--no-serve] [--no-update] [--env bot/.env] [--port 8095]
-                           [--dashboard-cmd "COMMAND"] [--dashboard-every 300]
+                           [--dashboard-cmd "COMMAND"] [--dashboard-every 300] [--approve-cmd "COMMAND"]
   python chat/server.py add-human --email E --name N [--write-env] [--json] [--db PATH]
   python chat/server.py autostart install|remove|status [--json] [--startup-dir DIR]
   python chat/server.py serve --port 8095 [--db PATH] [--seed-ids N] [--dashboard-cmd "COMMAND"]
+                              [--approve-cmd "COMMAND"]
   python chat/server.py bootstrap --json [--from-env bot/.env] [--db PATH]
 
 ``up`` (issue #72) is the one command: it seeds ids above Zulip's, makes
@@ -87,6 +88,9 @@ DASHBOARD_TIMEOUT = 300.0  # a run past this stores nothing (dashboard.py --json
 DASHBOARD_STALE = 7200  # a document older than this is `stale`
 DASHBOARD_KEEP = 24 * 3600  # rows older than this go on the next good sync
 NO_DASHBOARD = "no dashboard command configured: start the server with --dashboard-cmd"
+APPROVE_TIMEOUT = 30.0  # ops#176: a local, gh-free write — nowhere near dashboard.py's own timeout
+NO_APPROVE = "no approve command configured: start the server with --approve-cmd"
+ANSWERS = ("yes", "no", "later")
 
 
 def default_dashboard_cmd() -> str:
@@ -99,6 +103,15 @@ def default_dashboard_cmd() -> str:
     (e.g. `Program Files`)."""
     dash_py = sys.executable.replace("\\", "/")
     return f'"{dash_py}" C:/PlayGround/ops/tools/dashboard.py --json --no-tokens'
+
+
+def default_approve_cmd() -> str:
+    """ops#176: the CLI that records a founder decision on an approvals card
+    (`tools/approve.py`, ops PR 184) — same repo, same machine, same
+    convention as `default_dashboard_cmd()`. The card id, answer, an
+    optional `--note` and `--json` are appended per call by `Dashboard.approve()`."""
+    py = sys.executable.replace("\\", "/")
+    return f'"{py}" C:/PlayGround/ops/tools/approve.py'
 
 
 SCHEMA = """
@@ -393,9 +406,11 @@ class Dashboard:
     a two-minute ``gh`` call must not stall every request."""
 
     def __init__(self, store: Store, cmd: str | None = None, every: float = DASHBOARD_EVERY,
-                 clock=time.time):
+                 clock=time.time, approve_cmd: str | None = None):
         self.s, self.cmd, self.every, self.clock = store, cmd, every, clock
         self.timeout = DASHBOARD_TIMEOUT
+        self.approve_cmd = approve_cmd
+        self.approve_timeout = APPROVE_TIMEOUT
         self.last_error: str | None = None
         self.running = threading.Lock()  # one run at a time, thread or POST
         self.stop = threading.Event()
@@ -479,6 +494,91 @@ class Dashboard:
         return {"doc": doc, "last_sync": last,
                 "stale": last is None or self.clock() - last > DASHBOARD_STALE,
                 "last_error": last_error}
+
+    def approve(self, card_id: str | None, answer: str | None, note: str | None) -> dict:
+        """ops#176: what the approvals carousel's Yes/No/Later buttons send.
+        Shells out to ``tools/approve.py`` (``--approve-cmd``, same
+        convention as ``--dashboard-cmd``) so the record it writes is the
+        one format ``approve.approve()`` already owns — never a second one
+        built here. On success, patches the cached document's
+        ``next_moves`` in place, so a reload shows the card gone without
+        waiting for the next full (``gh``-backed) sync."""
+        if not card_id:
+            raise ApiError("Missing 'id': which card", "REQUEST_VARIABLE_MISSING")
+        if answer not in ANSWERS:
+            raise ApiError(f"Invalid 'answer' {answer!r}: use one of {', '.join(ANSWERS)}")
+        if not self.approve_cmd:
+            raise ApiError(NO_APPROVE, "APPROVE_NOT_CONFIGURED")
+        cmd = shlex.split(self.approve_cmd) + [card_id, answer]
+        if note:
+            cmd += ["--note", note]
+        cmd += ["--json"]
+        try:
+            done = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8",
+                                  errors="replace", timeout=self.approve_timeout)
+        except subprocess.TimeoutExpired:
+            raise ApiError(f"timed out after {self.approve_timeout:g}s: {self.approve_cmd}",
+                           "APPROVE_TIMEOUT", 502)
+        except (OSError, ValueError) as e:
+            raise ApiError(f"could not run {self.approve_cmd!r}: {e}", "APPROVE_FAILED", 502)
+        try:
+            out = json.loads(done.stdout) if done.stdout else None
+        except ValueError:
+            out = None
+        if done.returncode != 0:
+            # approve.py's own validation failures (a bad id, an already-
+            # answered card) always exit non-zero with a well-formed --json
+            # {"error", "fix"} — a client mistake, 400. Anything else (a
+            # crash, a traceback, no parseable JSON) is this command's own
+            # infra failure, 502, the same split `dashboard/sync` makes.
+            if isinstance(out, dict) and "error" in out:
+                err = out["error"]
+                fix = out.get("fix")
+                raise ApiError(f"{err}. Fix: {fix}" if fix else err, "APPROVE_REJECTED")
+            err = (done.stderr or "").strip() or (
+                f"exited {done.returncode} with nothing on stderr: {self.approve_cmd}")
+            raise ApiError(err, "APPROVE_FAILED", 502)
+        if not isinstance(out, dict) or not out.get("ok"):
+            raise ApiError(f"approve exited 0 but its --json output was not understood: "
+                           f"{done.stdout!r}", "APPROVE_FAILED", 502)
+        self._patch_next_moves(card_id, answer)
+        return {"id": out.get("id", card_id), "answer": out.get("answer", answer),
+                "note": out.get("note"), "at": out.get("at")}
+
+    def _patch_next_moves(self, card_id: str, answer: str) -> None:
+        """The fast, local half of a decision: `next_moves` needs no `gh`
+        call (only roadmap.md's questions and the decisions file, which
+        `approve.py` just wrote to), so a full resync is not worth the wait —
+        patch the one field a Yes/No/Later actually changes, in the latest
+        cached document, and wake anyone watching the same way a real sync
+        does. A `later` card moves to the end, marked deferred, exactly as
+        `next_moves()` (ops's `tools/dashboard.py`) itself would order it."""
+        with self.s.tx():
+            row = self.s.one("SELECT ts, doc FROM dashboard ORDER BY ts DESC LIMIT 1")
+            if row is None:
+                return
+            try:
+                doc = json.loads(row["doc"])
+            except (ValueError, TypeError):
+                return
+            moves = doc.get("next_moves")
+            if not isinstance(moves, list):
+                return
+            kept, moved = [], None
+            for card in moves:
+                if card.get("id") == card_id:
+                    if answer == "later":
+                        moved = {**card, "deferred": True}
+                    continue
+                kept.append(card)
+            if moved is not None:
+                kept.append(moved)
+            doc["next_moves"] = kept
+            self.s.x("UPDATE dashboard SET doc=? WHERE ts=?", (json.dumps(doc), row["ts"]))
+            for q in self.s.q("SELECT queue_id, event_types FROM queues"):
+                if q["event_types"] and "dashboard" in json.loads(q["event_types"]):
+                    self.s.x("INSERT INTO events (queue_id, body) VALUES (?,?)",
+                             (q["queue_id"], json.dumps({"type": "dashboard", "last_sync": row["ts"]})))
 
 
 class Chat:
@@ -1123,6 +1223,8 @@ class Chat:
                 raise ApiError(out, "DASHBOARD_NOT_CONFIGURED", last_error=out)
             raise ApiError(f"dashboard sync failed, nothing stored: {out}",
                            "DASHBOARD_SYNC_FAILED", 502, last_error=self.dashboard.last_error)
+        if path == "dashboard/approve" and method == "POST":
+            return self.dashboard.approve(p.get("id"), p.get("answer"), p.get("note"))
         raise ApiError(f"Endpoint not found: {method} /api/v1/{path} is not served by this "
                        f"chat server (see chat/README.md for what it serves)",
                        "BAD_REQUEST", 404)
@@ -1251,13 +1353,17 @@ class Handler(BaseHTTPRequestHandler):
 
 def make_server(db: str, port: int = 8095, poll_seconds: float = POLL_SECONDS,
                 seed_ids: int | None = None, dashboard_cmd: str | None = None,
-                dashboard_every: float = DASHBOARD_EVERY) -> ThreadingHTTPServer:
+                dashboard_every: float = DASHBOARD_EVERY,
+                approve_cmd: str | None = None) -> ThreadingHTTPServer:
     """A server bound to 127.0.0.1 only; ``port=0`` picks a free one. With
-    ``dashboard_cmd`` its sync thread starts too (first run at once)."""
+    ``dashboard_cmd`` its sync thread starts too (first run at once). With
+    ``approve_cmd`` (ops#176), POST /dashboard/approve is served; without it,
+    the same 400 ``--approve-cmd`` message ``dashboard/sync`` gives for a
+    missing ``--dashboard-cmd``."""
     store = Store(db)
     if seed_ids is not None:
         store.seed_ids(seed_ids)
-    dashboard = Dashboard(store, dashboard_cmd, dashboard_every)
+    dashboard = Dashboard(store, dashboard_cmd, dashboard_every, approve_cmd=approve_cmd)
     handler = type("ChatHandler", (Handler,), {"chat": Chat(store, poll_seconds, dashboard)})
     server = ThreadingHTTPServer((HOST, port), handler)
     server.daemon_threads = True
@@ -1589,7 +1695,7 @@ def cmd_up(args, argv: list[str]) -> int:
             return _port_error(args.port, "something already answers there")
         try:
             server = make_server(args.db, args.port, dashboard_cmd=args.dashboard_cmd,
-                                 dashboard_every=args.dashboard_every)
+                                 dashboard_every=args.dashboard_every, approve_cmd=args.approve_cmd)
         except OSError as e:
             return _port_error(args.port, str(e))
         url = f"http://{HOST}:{server.server_address[1]}"
@@ -1665,6 +1771,10 @@ def startup_script(args) -> str:
     # the same way run.cmd's static text spells it out by hand.
     escaped_dashboard_cmd = default_dashboard_cmd().replace('"', '\\"')
     extra += f' --dashboard-cmd "{escaped_dashboard_cmd}"'
+    # Same reasoning, ops#176: without --approve-cmd the carousel's Yes/No/
+    # Later would 400 with NO_APPROVE at every login-started server.
+    escaped_approve_cmd = default_approve_cmd().replace('"', '\\"')
+    extra += f' --approve-cmd "{escaped_approve_cmd}"'
     return ("@echo off\r\n"
             "REM Agora chat server at login (issue #72). Remove with:\r\n"
             f'REM   python "{os.path.abspath(__file__)}" autostart remove\r\n'
@@ -1756,6 +1866,9 @@ def main(argv: list[str] | None = None) -> int:
                             "is what GET /api/v1/dashboard returns")
         p.add_argument("--dashboard-every", type=float, default=DASHBOARD_EVERY,
                        metavar="SECONDS")
+        p.add_argument("--approve-cmd", metavar="COMMAND",
+                       help="ops#176: run this (plus id, answer, --note, --json) for POST "
+                            "/api/v1/dashboard/approve — the approvals carousel's Yes/No/Later")
     for p in (serve, boot, human, up, auto):
         p.add_argument("--db", default=DEFAULT_DB)
         p.add_argument("--port", type=int, default=8095)
@@ -1825,7 +1938,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == "autostart":
         return cmd_autostart(args)
     server = make_server(args.db, args.port, args.poll_seconds, args.seed_ids,
-                         args.dashboard_cmd, args.dashboard_every)
+                         args.dashboard_cmd, args.dashboard_every, approve_cmd=args.approve_cmd)
     print(f"serving http://{HOST}:{server.server_address[1]}/ (page) and /api/v1/ "
           f"db={args.db}", flush=True)
     try:

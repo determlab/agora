@@ -731,7 +731,8 @@
       "id": "sim-rigs",
       "q_he": "לאשר לבנות את 3 ה-rigs המדומים?",
       "why_he": "מתוכננים (שבב, סוף-קו, קושחה). כן = מתחילים מבדיקת השבב.",
-      "link": "https://github.com/determlab/ops/blob/main/projects/shal/specs/adk.md"
+      "link": "https://github.com/determlab/ops/blob/main/projects/shal/specs/adk.md",
+      "cost_he": "0.1M טוקנים"
     },
     {
       "id": "pool-perm-2",
@@ -769,5 +770,58 @@
       "why_he": "שתי לחיצות בהגדרות. הערוצים עדיין ציבוריים, והודעת #status לא מתעדכנת אחרי 10 דקות.",
       "link": "http://127.0.0.1:8090"
     }
-  ]
+  ],
+  "progress": {
+    "stages": [
+      {
+        "he": "1. הוכח",
+        "current": false
+      },
+      {
+        "he": "2. בשימוש",
+        "current": true
+      },
+      {
+        "he": "3. גדילה",
+        "current": false
+      }
+    ],
+    "milestones": [
+      {
+        "repo": "shal",
+        "title": "v0.4.0",
+        "closed": 3,
+        "total": 4,
+        "percent": 75,
+        "url": "https://github.com/determlab/shal/milestone/1"
+      },
+      {
+        "repo": "bricks",
+        "title": "v0.5.0",
+        "closed": 0,
+        "total": 2,
+        "percent": 0,
+        "url": "https://github.com/determlab/bricks/milestone/2"
+      }
+    ],
+    "chain": [
+      {
+        "ref": "bricks#50",
+        "title": "psu_limits.yaml test blueprint",
+        "done": true,
+        "url": "https://github.com/determlab/bricks/issues/50"
+      },
+      {
+        "ref": "shal#253",
+        "title": "shal.bricks pack",
+        "done": false,
+        "url": "https://github.com/determlab/shal/issues/253"
+      }
+    ],
+    "blocker": {
+      "ref": "bricks#50",
+      "title": "psu_limits.yaml test blueprint",
+      "url": "https://github.com/determlab/bricks/issues/50"
+    }
+  }
 }

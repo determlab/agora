@@ -258,7 +258,8 @@ dialog .buttons { display: flex; justify-content: flex-end; gap: .5rem; margin-t
 .live dd { margin: 0; font-variant-numeric: tabular-nums; min-width: 0; overflow-wrap: anywhere; }
 .big { font-size: 22px; font-weight: 700; font-family: ui-monospace, Consolas, monospace;
   direction: ltr; unicode-bidi: isolate; }
-.bar { height: 6px; background: var(--accent-soft); border-radius: 3px; overflow: hidden; }
+.bar { flex: none; width: 64px; height: 6px; background: var(--accent-soft); border-radius: 3px;
+  overflow: hidden; }
 .bar i { display: block; height: 100%; background: var(--accent); }
 .role { display: flex; align-items: center; gap: 10px; font-size: 14px; }
 .role .av { width: 28px; height: 28px; font-size: 13px; border-radius: 8px; display: grid; place-items: center;
@@ -282,16 +283,32 @@ dialog .buttons { display: flex; justify-content: flex-end; gap: .5rem; margin-t
 .dash-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: .2rem; }
 .dash-list li { display: flex; justify-content: space-between; gap: .5rem; font-size: 12.5px; }
 .dash-label { font-weight: 600; }
-/* approvals carousel: one item of doc.next_moves at a time (display-only —
-   the yes/no send action is agora#83; this wires the UI slot and click hook). */
+/* approvals carousel (ops#176): one item of doc.next_moves at a time; Yes/No/
+   Later open a 10s Undo window (renderApprovals's .appr-undo) before the
+   decision is actually sent. */
 .appr-head { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); }
 .appr-nav { display: flex; gap: 4px; margin-inline-start: auto; }
 .appr-body { display: flex; flex-direction: column; gap: 6px; }
 .appr-body .q { font-size: 14px; font-weight: 600; }
-.appr-body .why { font-size: 13px; color: var(--muted); }
+.appr-body .why, .appr-body .cost { font-size: 13px; color: var(--muted); }
+.appr-note { font: inherit; padding: 4px 8px; border: 1px solid var(--line); border-radius: 6px;
+  background: var(--panel); color: var(--text); }
 .appr-btns { display: flex; gap: 6px; }
 .appr-btns .go.yes { color: var(--ok); border-color: var(--ok); }
 .appr-btns .go.no { color: var(--error); border-color: var(--error); }
+.appr-btns .go.later { color: var(--wait); border-color: var(--wait); }
+.prog-chain { margin-top: 14px; }
+.appr-undo { display: flex; align-items: center; gap: 10px; font-size: 13px; }
+/* ops#176 founder answer: the new-card count reads as a bubble, the same
+   look as the chat unread badges (.badge), not the plain muted .cnt other
+   cards use. */
+#dash-approvals h3 .cnt { flex: none; min-width: 1.1rem; height: 1.1rem; margin-inline-start: auto;
+  padding: 0 .3rem; border-radius: 999px; background: var(--accent); color: var(--accent-text);
+  font-size: 10px; font-weight: 700; line-height: 1.1rem; text-align: center; }
+/* big-picture progress (ops#171): a stage chip row above the milestone bars
+   and the v1 chain (both `.dash-list rows`, the mockup's own list style). */
+.stage-row { display: flex; flex-wrap: wrap; gap: 6px; }
+.stage-row .chip.cur { background: var(--accent); color: var(--accent-text); }
 </style>
 </head>
 <body>
@@ -376,8 +393,10 @@ dialog .buttons { display: flex; justify-content: flex-end; gap: .5rem; margin-t
       </div>
     </div>
     <div class="cards">
+      <section class="dash-card card wide" id="dash-progress"><h3></h3><div class="dash-body"></div></section>
       <section class="dash-card card" id="dash-live"><h3></h3><div class="dash-body"></div></section>
       <section class="dash-card card wide" id="dash-approvals"><h3></h3><div class="dash-body"></div></section>
+      <section class="dash-card card" id="dash-tokens"><h3></h3><div class="dash-body"></div></section>
       <section class="dash-card card" id="dash-waiting"><h3></h3><div class="dash-body"></div></section>
       <section class="dash-card card" id="dash-roles"><h3></h3><div class="dash-body"></div></section>
       <section class="dash-card card" id="dash-queue"><h3></h3><div class="dash-body"></div></section>
@@ -1102,16 +1121,42 @@ function mountCard(id, node) {
   $(id).querySelector(".dash-body").replaceChildren(node);
 }
 
-// Approvals carousel (agora#100 founder addition): one item of doc.next_moves
-// at a time, "N of M", so a skipped item is never dropped — prev/next only
-// move the index, never filter the list. Display-only: the real yes/no send
-// is agora#83; the buttons here are a UI slot with a click hook and log to
-// the console, nothing is sent. `cost` is not a field `next_moves` has today
-// (noted in the PR) — the row is left out rather than shown as "undefined".
+// Approvals carousel (agora#100, wired for real in ops#176): one item of
+// doc.next_moves at a time, "N of M", so a skipped item is never dropped —
+// prev/next only move the index, never filter the list. Yes/No/Later open a
+// 10s Undo window (the founder's answer on #176) before POST
+// /api/v1/dashboard/approve actually sends the decision; Undo cancels the
+// timer and nothing is sent. cost_he shows next to why_he when the card has
+// one.
+const ANSWER_HE = {yes: "אושר", no: "נדחה", later: "לאחר כך"};
 let approvalsIdx = 0;
+let approvalsPending = null;  // {id, answer, note, q_he, timer} during the Undo window
+
+function clearApprovalsPending() {
+  if (approvalsPending) clearTimeout(approvalsPending.timer);
+  approvalsPending = null;
+}
+
+async function commitApproval(id, answer, note) {
+  try { await api("POST", "dashboard/approve", {id, answer, note: note || ""}); }
+  catch (e) { toast("לא נשלח: " + e.message, true); }
+  finally { await loadDashboard(); }
+}
+
 function renderApprovals(moves) {
   moves = moves || [];
   const wrap = document.createElement("div");
+  if (approvalsPending) {
+    const p = approvalsPending;
+    const bar = el("div", "appr-undo");
+    bar.append(el("span", null, (ANSWER_HE[p.answer] || p.answer) + ": " + (p.q_he || p.id)));
+    const undo = el("button", "go", "בטל");
+    undo.type = "button";
+    undo.onclick = () => { clearApprovalsPending(); mountCard("dash-approvals", renderApprovals(moves)); };
+    bar.append(undo);
+    wrap.append(bar);
+    return wrap;
+  }
   if (!moves.length) {
     wrap.append(el("div", "muted", "אין אישורים ממתינים"));
     return wrap;
@@ -1132,6 +1177,7 @@ function renderApprovals(moves) {
   const body = el("div", "appr-body");
   body.append(el("div", "q", item.q_he || item.id || ""));
   if (item.why_he) body.append(el("div", "why", item.why_he));
+  if (item.cost_he) body.append(el("div", "cost muted", "עלות: " + item.cost_he));
   if (item.link) {
     const a = document.createElement("a");
     a.className = "ref"; a.href = item.link; a.target = "_blank"; a.rel = "noopener";
@@ -1139,16 +1185,122 @@ function renderApprovals(moves) {
     body.append(a);
   }
   wrap.append(body);
+  const note = el("input", "appr-note");
+  note.type = "text";
+  note.placeholder = "הערה קצרה (לא חובה)";
+  wrap.append(note);
   const btns = el("div", "appr-btns");
   const yes = el("button", "go yes", "כן");
   const no = el("button", "go no", "לא");
-  yes.type = "button"; no.type = "button";
-  // Display-only slot: agora#83 owns the real send. Skipping (either button)
-  // just moves to the next item — the item itself is never removed.
-  yes.onclick = () => { console.log("approve (not sent — agora#83):", item.id); next.onclick(); };
-  no.onclick = () => { console.log("decline (not sent — agora#83):", item.id); next.onclick(); };
-  btns.append(yes, no);
+  const later = el("button", "go later", "אחר כך");
+  yes.type = "button"; no.type = "button"; later.type = "button";
+  // The founder's Undo answer (#176): the click opens a 10s window, shown by
+  // re-rendering into the pending state above; only the timer firing (Undo
+  // not clicked) actually calls the server.
+  const startPending = (answer) => {
+    const pending = {id: item.id, answer, note: note.value.trim(), q_he: item.q_he};
+    pending.timer = setTimeout(() => {
+      approvalsPending = null;
+      commitApproval(pending.id, pending.answer, pending.note);
+    }, 10000);
+    approvalsPending = pending;
+    mountCard("dash-approvals", renderApprovals(moves));
+  };
+  yes.onclick = () => startPending("yes");
+  no.onclick = () => startPending("no");
+  later.onclick = () => startPending("later");
+  btns.append(yes, no, later);
   wrap.append(btns);
+  return wrap;
+}
+
+// Tokens (ops#176 Scope B): today's use per role/session (the 5h window,
+// the one Claude's own usage limit is measured over) and the last limit hit,
+// if any, with when it resets. Reuses doc.tokens — the hourly tokens.json
+// dashboard.py already merges in (ops#155) — so no new heavy scan runs here.
+// Roles are read from doc.tokens.agents rather than hardcoded, so a role ops
+// adds later (e.g. PM) shows up without a page change.
+function renderTokens(t) {
+  const wrap = document.createElement("div");
+  const rows = Object.entries((t && t.agents) || {}).map(([name, w]) => ({name, w}));
+  if (t && t.pool) rows.push({name: "Pool", w: t.pool});
+  if (t && t.cloud) rows.push({name: "Cloud", w: t.cloud});
+  const withUse = rows.filter((r) => r.w && r.w["5h"] && r.w["5h"].weighted != null);
+  if (withUse.length) {
+    wrap.append(renderRows(withUse.map((r) => ({
+      label: r.name, ref: false,
+      detail: r.w["5h"].weighted.toLocaleString() + " טוקנים (5h)",
+    }))));
+  } else {
+    wrap.append(el("div", "muted", "—"));
+  }
+  const lim = t && t.last_limit;
+  if (lim && lim.active) {
+    // The limit text and the reset time are English/ISO inside a Hebrew
+    // line: each goes in its own <bdi> so the RTL order cannot garble it
+    // ("hour limit reached-5", QA on PR 112).
+    const line = el("div", "muted", "מגבלה אחרונה: ");
+    line.append(el("bdi", "", lim.what || ""));
+    if (lim.reset) {
+      line.append(document.createTextNode(" · מתאפס ב-"));
+      line.append(el("bdi", "", lim.reset));
+    }
+    wrap.append(line);
+  }
+  return wrap;
+}
+
+// Big-picture progress (ops#171): stages, v1 milestone bars, the v1 chain in
+// order, and its one blocker — read straight from doc.progress. Each piece
+// shows only when present, so a roadmap.md not yet carrying `stages` (or a
+// document from before this PR, with no `progress` key at all) still renders
+// whatever the rest of the card has, never "undefined" or a crash.
+function renderProgress(p) {
+  const wrap = document.createElement("div");
+  p = p || {};
+  const stages = Array.isArray(p.stages) ? p.stages : [];
+  if (stages.length) {
+    const row = el("div", "stage-row");
+    for (const s of stages) row.append(el("span", "chip" + (s.current ? " cur" : " a"), s.he || s.name || ""));
+    wrap.append(row);
+  }
+  const milestones = Array.isArray(p.milestones) ? p.milestones : [];
+  if (milestones.length) {
+    const list = el("ul", "dash-list rows");
+    for (const m of milestones) {
+      const li = document.createElement("li");
+      li.append(el("span", "dash-label", joinDetail(m.repo, m.title)));
+      if (m.total != null) {
+        const bar = el("div", "bar");
+        const i = document.createElement("i");
+        i.style.width = (m.percent || 0) + "%";
+        bar.append(i);
+        li.append(bar);
+        li.append(el("span", "dash-detail muted tx", m.closed + "/" + m.total + " (" + (m.percent ?? 0) + "%)"));
+      } else {
+        li.append(el("span", "dash-detail muted tx", "—"));
+      }
+      list.append(li);
+    }
+    wrap.append(list);
+  }
+  const chain = Array.isArray(p.chain) ? p.chain : [];
+  if (chain.length) {
+    const rows = renderRows(chain.map((c) => ({
+      label: c.ref, url: c.url, detail: joinDetail(c.title, c.done ? "בוצע" : "פתוח"),
+    })));
+    rows.classList.add("prog-chain");   // a gap under the milestone bars (QA on PR 112/192)
+    wrap.append(rows);
+  }
+  if (p.blocker) {
+    const b = el("div", "muted");
+    const a = document.createElement("a");
+    a.className = "ref"; a.href = p.blocker.url; a.target = "_blank"; a.rel = "noopener";
+    a.textContent = p.blocker.ref;
+    b.append(document.createTextNode("חוסם: "), a, document.createTextNode(" — " + (p.blocker.title || "")));
+    wrap.append(b);
+  }
+  if (!stages.length && !milestones.length && !chain.length && !p.blocker) wrap.append(el("div", "muted", "—"));
   return wrap;
 }
 
@@ -1162,9 +1314,11 @@ function setCount(id, n) {
 function renderDashboard(d) {
   renderPill(d);
   const doc = d.doc || {};
+  mountCard("dash-progress", renderProgress(doc.progress));
   mountCard("dash-live", renderLive(doc.live));
   mountCard("dash-approvals", renderApprovals(doc.next_moves));
   setCount("dash-approvals", (doc.next_moves || []).length);
+  mountCard("dash-tokens", renderTokens(doc.tokens));
   mountCard("dash-waiting", renderWaiting(doc.stuck));
   mountCard("dash-roles", renderRoles(doc.roles));
   mountCard("dash-queue", renderQueue(doc.queue));
@@ -1941,6 +2095,8 @@ const DASH_TITLES = {
   "dash-live": "ה-POOL עכשיו", "dash-approvals": "מחכה לאישור שלך", "dash-waiting": "ריצות שממתינות לך",
   "dash-roles": "מי עובד על מה", "dash-queue": "התור לפי עדיפות", "dash-prs": "PRs פתוחים",
   "dash-week": "השבוע", "dash-products": "מוצרים", "dash-stuck": "תקוע",
+  // ops#171: the big-picture block, first on the board. ops#176 Scope B: tokens.
+  "dash-progress": "התמונה הגדולה", "dash-tokens": "טוקנים",
 };
 for (const [id, title] of Object.entries(DASH_TITLES)) {
   $(id).querySelector("h3").textContent = title;
