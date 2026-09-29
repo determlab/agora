@@ -48,6 +48,12 @@ Phone access (ops#222): `--allow-host NAME` (repeatable; `chat\run.cmd` reads it
 `AGORA_ALLOW_HOST`) also accepts Host `NAME` and Origin `https://NAME`, e.g. the name
 `tailscale serve` proxies to 127.0.0.1:8095. Every other name is still refused; no wildcard.
 
+Setup: run `tailscale serve --bg 8095`, then `set AGORA_ALLOW_HOST=<pc>.<tailnet>.ts.net`
+and `chat\run.cmd`.
+
+**Warning: use `tailscale serve`, never `tailscale funnel`.** Funnel puts agora on the public
+internet, where the API key is the only lock and there is no rate limit on key guesses.
+
 ## The dashboard
 
 Start `up` (or `serve`) with `--dashboard-cmd "<command>"` and the server runs
