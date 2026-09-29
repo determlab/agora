@@ -1353,6 +1353,7 @@ class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     server_version = "AgoraChat/0.1"
     chat: Chat  # set by make_server
+    allow_hosts: tuple[str, ...] = ()  # set by make_server (--allow-host, ops#222)
 
     def log_message(self, *a):  # quiet: tests and agents read stdout
         pass
@@ -1374,8 +1375,19 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(data)
 
     def _local(self) -> set[str]:
+        """Every Host this server answers as: its two local names, and each
+        --allow-host name bare or on 443 (ops#222: `tailscale serve` proxies
+        https://NAME to here). No wildcard: any other name stays refused."""
         port = self.server.server_address[1]
-        return {f"127.0.0.1:{port}", f"localhost:{port}"}
+        hosts = {f"127.0.0.1:{port}", f"localhost:{port}"}
+        for name in self.allow_hosts:
+            hosts |= {name, f"{name}:443"}
+        return hosts
+
+    def _origins(self) -> set[str]:
+        port = self.server.server_address[1]
+        return ({f"http://127.0.0.1:{port}", f"http://localhost:{port}"}
+                | {f"https://{name}" for name in self.allow_hosts})
 
     def _check_origin(self) -> None:
         """A browser names the page that sent a request in ``Origin``: one
@@ -1383,7 +1395,7 @@ class Handler(BaseHTTPRequestHandler):
         API through the founder's browser. No ``Origin`` at all is how the
         bots, the hook and curl call, and stays allowed."""
         origin = self.headers.get("Origin")
-        if origin is not None and origin.lower() not in {f"http://{h}" for h in self._local()}:
+        if origin is not None and origin.lower() not in self._origins():
             raise ApiError(f"Forbidden: a request from origin {origin!r}. This server "
                            f"answers only its own page, http://127.0.0.1:"
                            f"{self.server.server_address[1]}/", "FORBIDDEN", 403)
@@ -1453,21 +1465,40 @@ class Handler(BaseHTTPRequestHandler):
 def make_server(db: str, port: int = 8095, poll_seconds: float = POLL_SECONDS,
                 seed_ids: int | None = None, dashboard_cmd: str | None = None,
                 dashboard_every: float = DASHBOARD_EVERY,
-                approve_cmd: str | None = None) -> ThreadingHTTPServer:
+                approve_cmd: str | None = None,
+                allow_hosts: tuple[str, ...] | list[str] = ()) -> ThreadingHTTPServer:
     """A server bound to 127.0.0.1 only; ``port=0`` picks a free one. With
     ``dashboard_cmd`` its sync thread starts too (first run at once). With
     ``approve_cmd`` (ops#176), POST /dashboard/approve is served; without it,
     the same 400 ``--approve-cmd`` message ``dashboard/sync`` gives for a
-    missing ``--dashboard-cmd``."""
+    missing ``--dashboard-cmd``. ``allow_hosts`` (ops#222) are extra names
+    the page and API answer as, over https only (``tailscale serve``)."""
     store = Store(db)
     if seed_ids is not None:
         store.seed_ids(seed_ids)
     dashboard = Dashboard(store, dashboard_cmd, dashboard_every, approve_cmd=approve_cmd)
-    handler = type("ChatHandler", (Handler,), {"chat": Chat(store, poll_seconds, dashboard)})
+    handler = type("ChatHandler", (Handler,), {
+        "chat": Chat(store, poll_seconds, dashboard),
+        "allow_hosts": tuple(allow_host(h) for h in allow_hosts)})
     server = ThreadingHTTPServer((HOST, port), handler)
     server.daemon_threads = True
     dashboard.start()
     return server
+
+
+_LABEL = r"[a-z0-9]([a-z0-9-]*[a-z0-9])?"
+_HOSTNAME = re.compile(rf"(?=.{{1,253}}$){_LABEL}(\.{_LABEL})*")
+
+
+def allow_host(name: str) -> str:
+    """One --allow-host value: a plain DNS name, lowercased. No port, no
+    scheme, no wildcard: each allowed name is spelled out in full."""
+    host = name.strip().lower().rstrip(".")
+    if not _HOSTNAME.fullmatch(host):
+        raise argparse.ArgumentTypeError(
+            f"--allow-host {name!r} is not a plain host name: pass the full name only, "
+            f"e.g. --allow-host mypc.tail1234.ts.net (no scheme, port or '*')")
+    return host
 
 
 def bootstrap(store: Store) -> dict:
@@ -1794,7 +1825,8 @@ def cmd_up(args, argv: list[str]) -> int:
             return _port_error(args.port, "something already answers there")
         try:
             server = make_server(args.db, args.port, dashboard_cmd=args.dashboard_cmd,
-                                 dashboard_every=args.dashboard_every, approve_cmd=args.approve_cmd)
+                                 dashboard_every=args.dashboard_every, approve_cmd=args.approve_cmd,
+                                 allow_hosts=args.allow_host)
         except OSError as e:
             return _port_error(args.port, str(e))
         url = f"http://{HOST}:{server.server_address[1]}"
@@ -1968,6 +2000,10 @@ def main(argv: list[str] | None = None) -> int:
         p.add_argument("--approve-cmd", metavar="COMMAND",
                        help="ops#176: run this (plus id, answer, --note, --json) for POST "
                             "/api/v1/dashboard/approve — the approvals carousel's Yes/No/Later")
+        p.add_argument("--allow-host", action="append", default=[], type=allow_host,
+                       metavar="NAME",
+                       help="ops#222: also answer as https://NAME (e.g. a `tailscale serve` "
+                            "name); repeatable, no wildcard")
     for p in (serve, boot, human, up, auto):
         p.add_argument("--db", default=DEFAULT_DB)
         p.add_argument("--port", type=int, default=8095)
@@ -2037,7 +2073,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == "autostart":
         return cmd_autostart(args)
     server = make_server(args.db, args.port, args.poll_seconds, args.seed_ids,
-                         args.dashboard_cmd, args.dashboard_every, approve_cmd=args.approve_cmd)
+                         args.dashboard_cmd, args.dashboard_every, approve_cmd=args.approve_cmd,
+                         allow_hosts=args.allow_host)
     print(f"serving http://{HOST}:{server.server_address[1]}/ (page) and /api/v1/ "
           f"db={args.db}", flush=True)
     try:
