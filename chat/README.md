@@ -44,6 +44,10 @@ off. For agents: `up --no-serve --json` (set up, one JSON line, exit 0) and
 
 `serve --port 8095 --seed-ids 600` still serves without any setup.
 
+Phone access (ops#222): `--allow-host NAME` (repeatable; `chat\run.cmd` reads it from
+`AGORA_ALLOW_HOST`) also accepts Host `NAME` and Origin `https://NAME`, e.g. the name
+`tailscale serve` proxies to 127.0.0.1:8095. Every other name is still refused; no wildcard.
+
 ## The dashboard
 
 Start `up` (or `serve`) with `--dashboard-cmd "<command>"` and the server runs

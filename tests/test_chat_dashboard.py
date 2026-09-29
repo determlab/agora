@@ -393,7 +393,7 @@ def test_cli_takes_the_flags():
              "--approve-cmd", "y --json"]
     parsed = {}
 
-    def fake(db, port, poll, seed, cmd, every, approve_cmd=None):
+    def fake(db, port, poll, seed, cmd, every, approve_cmd=None, allow_hosts=()):
         parsed.update(cmd=cmd, every=every, approve_cmd=approve_cmd)
         raise SystemExit(0)
     real, chat.make_server = chat.make_server, fake
