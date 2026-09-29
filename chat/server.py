@@ -204,11 +204,15 @@ class Store:
                 "SELECT 1 FROM sqlite_master WHERE type='table' AND name='read_floor'"
             ).fetchall())
             if had_users and not had_read_floor:
+                # One transaction: a crash between CREATE and INSERT must not
+                # leave an empty read_floor that no later start backfills.
+                self.db.execute("BEGIN IMMEDIATE")
                 self.db.execute("CREATE TABLE read_floor (user_id INTEGER PRIMARY KEY, "
                                 "floor_id INTEGER NOT NULL)")
                 floor = self.db.execute("SELECT COALESCE(MAX(id), 0) FROM messages").fetchone()[0]
                 self.db.execute("INSERT INTO read_floor (user_id, floor_id) "
                                 "SELECT id, ? FROM users", (floor,))
+                self.db.execute("COMMIT")
 
     @contextlib.contextmanager
     def tx(self):
