@@ -211,6 +211,9 @@ class Store:
                 self.db.execute("PRAGMA table_info(subscriptions)").fetchall())
             floor_cols = {r[1] for r in self.db.execute("PRAGMA table_info(read_floor)")}
             if had_users and not floor_cols and had_subscriptions:
+                # One transaction: a crash between CREATE and INSERT must not
+                # leave an empty read_floor that no later start backfills.
+                self.db.execute("BEGIN IMMEDIATE")
                 self.db.execute(
                     "CREATE TABLE read_floor (user_id INTEGER NOT NULL, "
                     "stream_id INTEGER NOT NULL, floor_id INTEGER NOT NULL, "
@@ -219,7 +222,12 @@ class Store:
                 self.db.execute(
                     "INSERT INTO read_floor (user_id, stream_id, floor_id) "
                     "SELECT user_id, stream_id, ? FROM subscriptions", (floor,))
+                self.db.execute("COMMIT")
             elif floor_cols and "stream_id" not in floor_cols:
+                # One transaction: a crash mid-rename must not leave
+                # read_floor_old behind or an empty read_floor that a later
+                # start mistakes for "nothing to backfill".
+                self.db.execute("BEGIN IMMEDIATE")
                 self.db.execute("ALTER TABLE read_floor RENAME TO read_floor_old")
                 self.db.execute(
                     "CREATE TABLE read_floor (user_id INTEGER NOT NULL, "
@@ -230,6 +238,7 @@ class Store:
                     "SELECT o.user_id, s.stream_id, o.floor_id FROM read_floor_old o "
                     "JOIN subscriptions s ON s.user_id=o.user_id")
                 self.db.execute("DROP TABLE read_floor_old")
+                self.db.execute("COMMIT")
 
     @contextlib.contextmanager
     def tx(self):
