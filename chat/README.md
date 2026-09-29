@@ -76,15 +76,21 @@ a shell: `python bot/zulip.py archive|unarchive --stream S [--topic T] --json`.
 
 Read state is per user, stored in the `read_messages` table (never touched by
 sending: a sender's own messages are simply excluded from their own unread
-count, not written as read). A message at or below a user's `read_floor` (its
-own table, one row per user) is read regardless of `read_messages`: a
-database that already had users before `read_floor` existed gets one
-migrated in, at that moment's newest message id, so every message from
-before per-user read state existed is read for everyone rather than an
-unread pile of old history. `GET /api/v1/unread` returns unread counts per
-stream and per topic for the caller, never counting an archived
-stream (`is_archived`) or an archived topic — both are hidden from the
-lists, so a bubble for one could never clear:
+count, not written as read). A message at or below a user's `read_floor` for
+that stream (its own table, one row per user *and* stream) is read
+regardless of `read_messages`. The floor covers two kinds of "before I could
+read this": a database that already had users before `read_floor` existed
+gets one migrated in for every stream a user was already subscribed to, at
+that moment's newest message id, so every message from before per-user read
+state existed is read for everyone rather than an unread pile of old
+history; and joining a stream (`POST /api/v1/users/me/subscriptions`, or a
+new user's first subscription) sets that stream's floor to its newest
+message id right away, so the stream's history from before the join is read,
+not an unread pile, and only a message sent after the join counts. `GET
+/api/v1/unread` returns unread counts per stream and per topic for the
+caller, never counting an archived stream (`is_archived`) or an archived
+topic — both are hidden from the lists, so a bubble for one could never
+clear:
 ```json
 {"streams": [{"stream_id": 3, "name": "feature", "unread": 4,
               "topics": [{"name": "ops#44 routes", "unread": 4}]}]}

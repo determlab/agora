@@ -139,7 +139,8 @@ CREATE TABLE IF NOT EXISTS read_messages (
     user_id INTEGER NOT NULL, message_id INTEGER NOT NULL,
     PRIMARY KEY (user_id, message_id));
 CREATE TABLE IF NOT EXISTS read_floor (
-    user_id INTEGER PRIMARY KEY, floor_id INTEGER NOT NULL);
+    user_id INTEGER NOT NULL, stream_id INTEGER NOT NULL, floor_id INTEGER NOT NULL,
+    PRIMARY KEY (user_id, stream_id));
 """
 
 
@@ -189,26 +190,46 @@ class Store:
         a new column on an existing table needs its own ``ALTER TABLE``.
 
         A database that already had a ``users`` table before ``read_floor``
-        existed predates per-user read state: every message in it is "old",
-        so each of its users gets a floor at the current newest message id
-        rather than an unread pile of history nobody ever marked read. A
-        brand-new database has no ``users`` table yet here (SCHEMA has not
-        run), so it never gets a floor — nothing in it is old."""
+        existed predates per-user read state entirely: every message in
+        every stream is "old", so each user already subscribed to a stream
+        gets that stream's floor at the current newest message id, rather
+        than an unread pile of history nobody ever marked read. A brand-new
+        database has no ``users`` table yet here (SCHEMA has not run), so it
+        never gets a floor — nothing in it is old.
+
+        A database written by the per-user-only ``read_floor`` (one row per
+        user, issue #109) has its floor moved to every stream the user is
+        already subscribed to, at the same value — read state earned before
+        streams had their own floor survives becoming per-stream."""
         with self.lock:
             cols = {r[1] for r in self.db.execute("PRAGMA table_info(streams)")}
             if cols and "is_archived" not in cols:
                 self.db.execute("ALTER TABLE streams ADD COLUMN is_archived "
                                 "INTEGER NOT NULL DEFAULT 0")
             had_users = bool(self.db.execute("PRAGMA table_info(users)").fetchall())
-            had_read_floor = bool(self.db.execute(
-                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='read_floor'"
-            ).fetchall())
-            if had_users and not had_read_floor:
-                self.db.execute("CREATE TABLE read_floor (user_id INTEGER PRIMARY KEY, "
-                                "floor_id INTEGER NOT NULL)")
+            had_subscriptions = bool(
+                self.db.execute("PRAGMA table_info(subscriptions)").fetchall())
+            floor_cols = {r[1] for r in self.db.execute("PRAGMA table_info(read_floor)")}
+            if had_users and not floor_cols and had_subscriptions:
+                self.db.execute(
+                    "CREATE TABLE read_floor (user_id INTEGER NOT NULL, "
+                    "stream_id INTEGER NOT NULL, floor_id INTEGER NOT NULL, "
+                    "PRIMARY KEY (user_id, stream_id))")
                 floor = self.db.execute("SELECT COALESCE(MAX(id), 0) FROM messages").fetchone()[0]
-                self.db.execute("INSERT INTO read_floor (user_id, floor_id) "
-                                "SELECT id, ? FROM users", (floor,))
+                self.db.execute(
+                    "INSERT INTO read_floor (user_id, stream_id, floor_id) "
+                    "SELECT user_id, stream_id, ? FROM subscriptions", (floor,))
+            elif floor_cols and "stream_id" not in floor_cols:
+                self.db.execute("ALTER TABLE read_floor RENAME TO read_floor_old")
+                self.db.execute(
+                    "CREATE TABLE read_floor (user_id INTEGER NOT NULL, "
+                    "stream_id INTEGER NOT NULL, floor_id INTEGER NOT NULL, "
+                    "PRIMARY KEY (user_id, stream_id))")
+                self.db.execute(
+                    "INSERT INTO read_floor (user_id, stream_id, floor_id) "
+                    "SELECT o.user_id, s.stream_id, o.floor_id FROM read_floor_old o "
+                    "JOIN subscriptions s ON s.user_id=o.user_id")
+                self.db.execute("DROP TABLE read_floor_old")
 
     @contextlib.contextmanager
     def tx(self):
@@ -270,9 +291,24 @@ class Store:
                       (name, int(invite_only)))
 
     def subscribe(self, user_id: int, stream_id: int) -> bool:
+        """Joining a stream must not make its earlier history unread: a new
+        subscription gets a floor at that stream's newest message id right
+        away, so only a message sent after the join counts. ``OR REPLACE``
+        also covers a user who left and rejoined: an unsubscribe leaves the
+        old floor row behind, and rejoining should reset it to now, not the
+        stale value from the earlier membership."""
         with self.tx():
-            return self.db.execute("INSERT OR IGNORE INTO subscriptions VALUES (?,?)",
-                                   (user_id, stream_id)).rowcount > 0
+            new = self.db.execute("INSERT OR IGNORE INTO subscriptions VALUES (?,?)",
+                                  (user_id, stream_id)).rowcount > 0
+            if new:
+                self._set_floor_to_newest(user_id, stream_id)
+            return new
+
+    def _set_floor_to_newest(self, user_id: int, stream_id: int) -> None:
+        floor = self.one("SELECT COALESCE(MAX(id), 0) FROM messages WHERE stream_id=?",
+                         (stream_id,))[0]
+        self.db.execute("INSERT OR REPLACE INTO read_floor (user_id, stream_id, floor_id) "
+                        "VALUES (?,?,?)", (user_id, stream_id, floor))
 
     def user(self, uid: int) -> dict:
         return dict(self.one("SELECT * FROM users WHERE id=?", (uid,)))
@@ -297,10 +333,12 @@ class Store:
         return {r[0] for r in self.q("SELECT stream_id FROM subscriptions WHERE user_id=?",
                                      (uid,))}
 
-    def read_floor(self, uid: int) -> int:
-        """Every message at or below this id is read for ``uid`` (the migration
-        below), whatever ``read_messages`` says or does not say about it."""
-        row = self.one("SELECT floor_id FROM read_floor WHERE user_id=?", (uid,))
+    def read_floor(self, uid: int, stream_id: int) -> int:
+        """Every message in ``stream_id`` at or below this id is read for
+        ``uid`` (the migration above, and a join in ``subscribe()``),
+        whatever ``read_messages`` says or does not say about it."""
+        row = self.one("SELECT floor_id FROM read_floor WHERE user_id=? AND stream_id=?",
+                       (uid, stream_id))
         return row[0] if row else 0
 
     def stream_by_ref(self, ref):
@@ -548,7 +586,9 @@ class Chat:
 
     def flags(self, row, me: dict) -> list[str]:
         flags = []
-        if row["sender_id"] == me["id"] or row["id"] <= self.s.read_floor(me["id"]) \
+        at_floor = row["type"] == "stream" \
+            and row["id"] <= self.s.read_floor(me["id"], row["stream_id"])
+        if row["sender_id"] == me["id"] or at_floor \
                 or self.s.one("SELECT 1 FROM read_messages WHERE user_id=? AND message_id=?",
                               (me["id"], row["id"])):
             flags.append("read")
@@ -934,23 +974,26 @@ class Chat:
     # `unread_msgs`; this server hands it back on its own so a client can
     # refresh counts without re-registering a queue. A message this user sent
     # is never unread for them, so it is excluded here rather than tracked as
-    # read. Messages at or below the caller's read_floor (the migration
-    # below) are old history, read for everyone by definition. An
-    # archived stream or an archived topic never contributes: it is hidden
-    # from the lists, so a bubble for it could never clear.
+    # read. Messages at or below the caller's read_floor *for that stream*
+    # (the migration and ``subscribe()`` above) are old history — from
+    # before per-user read state existed, or from before this user joined
+    # that stream — read for everyone by definition. An archived stream or
+    # an archived topic never contributes: it is hidden from the lists, so a
+    # bubble for it could never clear.
     def unread(self, me: dict, p: dict | None = None) -> dict:
         streams: dict[int, dict] = {}
         for row in self.s.q(
                 "SELECT s.stream_id AS stream_id, s.name AS name, m.subject AS topic, "
                 "COUNT(*) AS n FROM messages m JOIN streams s ON s.stream_id=m.stream_id "
+                "LEFT JOIN read_floor f ON f.user_id=? AND f.stream_id=m.stream_id "
                 "WHERE m.type='stream' AND m.sender_id != ? AND s.is_archived=0 "
                 "AND s.stream_id IN (SELECT stream_id FROM subscriptions WHERE user_id=?) "
-                "AND m.id > ? AND NOT EXISTS "
+                "AND m.id > COALESCE(f.floor_id, 0) AND NOT EXISTS "
                 "(SELECT 1 FROM read_messages r WHERE r.user_id=? AND r.message_id=m.id) "
                 "AND NOT EXISTS (SELECT 1 FROM archived_topics a WHERE a.stream_id=m.stream_id "
                 "AND a.topic=m.subject) "
                 "GROUP BY s.stream_id, m.subject COLLATE NOCASE",
-                (me["id"], me["id"], self.s.read_floor(me["id"]), me["id"])):
+                (me["id"], me["id"], me["id"], me["id"])):
             entry = streams.setdefault(row["stream_id"], {
                 "stream_id": row["stream_id"], "name": row["name"], "unread": 0, "topics": []})
             entry["topics"].append({"name": row["topic"], "unread": row["n"]})
