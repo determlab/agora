@@ -58,6 +58,18 @@ how old it is. A failed run stores nothing: the previous document stays and
 --json`. A queue registered with `dashboard` in its `event_types` gets
 `{"type":"dashboard","last_sync":…}` after each good sync.
 
+**Approvals (ops#176).** Start `up` (or `serve`) with `--approve-cmd
+"<command>"` and `POST /api/v1/dashboard/approve` with `id`, `answer`
+(`yes`/`no`/`later`) and an optional `note` runs `<command> <id> <answer>
+[--note NOTE] --json` — `chat\run.cmd` passes this PC's `ops/tools/approve.py`,
+the same CLI the agent path (issue #176) uses, so the page and an agent write
+the exact same decision record. Success returns `{"id","answer","note","at"}`
+and patches the cached `dashboard` document's `next_moves` in place (a `yes`/
+`no` drops the card, a `later` moves it to the end marked `"deferred": true`),
+so `GET /api/v1/dashboard` reads it gone without waiting for the next full
+sync; every queue watching `dashboard` events gets one, same as a sync. No
+`--approve-cmd` answers `APPROVE_NOT_CONFIGURED` (400).
+
 ## Archive a stream or a topic
 
 Archive hides a room from the lists; no message is deleted. A stream: `DELETE

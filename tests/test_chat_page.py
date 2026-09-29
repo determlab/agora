@@ -1291,13 +1291,71 @@ def test_the_board_view_hides_the_sidebar_and_chat_not_just_chat():
 DASHBOARD_FIXTURE = json.loads(
     (ROOT / "tests" / "fixtures" / "dashboard-doc.json").read_text(encoding="utf-8"))
 
-CARDS = ("live", "stuck", "roles", "queue", "products", "waiting")  # not "week" — see below
+CARDS = ("live", "stuck", "roles", "queue", "products", "waiting", "week", "tokens", "timeline",
+         "prs", "progress", "approvals", "kpis")
+
+# The newer document (ops#220): `python tools/dashboard.py --json --no-tokens`
+# on 2026-09-29 with timeline, plan, open_prs and tokens.pool_runs.
+DASHBOARD_FIXTURE_220 = json.loads(
+    (ROOT / "tests" / "fixtures" / "dashboard-doc-220.json").read_text(encoding="utf-8"))
+
+DASH_FUNCS = ("el", "minsAgo", "agoText", "pillText", "renderPill", "joinDetail", "cutList", "link",
+              "rowItem", "renderRows", "localMidnight", "hhmm", "renderKpis", "timelineWindow",
+              "renderTimeline", "renderLive", "stuckRow", "renderStuck", "renderWaiting", "renderRoles",
+              "renderQueue", "renderPrs", "renderWeek", "renderProducts", "fmtTok", "resetText",
+              "renderPlan", "renderTokens", "renderProgress", "shortRef", "renderApprovals",
+              "clearApprovalsPending")
 
 
-def _render_cards(doc):
-    return _js(("renderLive", "renderStuck", "renderRoles", "renderQueue", "renderWeek",
-                "renderProducts", "renderWaiting", "renderRows", "joinDetail", "stuckRow", "el"), f"""
+def _consts(*names: str) -> str:
+    """The page's own one-line `const`/`let` of each name, as written."""
+    script = _markup().script
+    out = []
+    for n in names:
+        m = re.search(rf"^(?:const|let) {n} = .*;", script, re.M)
+        assert m, n
+        out.append(m.group(0))
+    return "\n".join(out)
+
+
+def _dash_prelude() -> str:
+    return FAKE_DOM + _consts("DASH_LIMIT", "dashOpen", "approvalsNotes", "TOKVIEW", "VIEW", "tokView",
+                              "ANSWER_HE", "CHECK_HE", "ROLE_STATE", "TOK_WIN", "approvalsIdx",
+                              "approvalsPending") + """
+const rerendered = [];
+function rerenderDash(cls) { rerendered.push(cls); }
+let mounted = null;
+function mountCard(id, node) { mounted = {id, node}; }
+const timers = [];
+function setTimeout(fn, ms) { const t = {fn, ms, cancelled: false}; timers.push(t); return timers.length; }
+function clearTimeout(id) { const t = timers[id - 1]; if (t) t.cancelled = true; }
+const localStorage = {data: {}, setItem(k, v) { this.data[k] = String(v); }, getItem(k) { return this.data[k] ?? null; }};
+"""
+
+
+def _dash(body: str, extra: tuple[str, ...] = ()):
+    return _js(DASH_FUNCS + extra, body, prelude=_dash_prelude())
+
+
+def _text(dumped) -> str:
+    return json.dumps(dumped, ensure_ascii=False)
+
+
+def _find(dumped, cls: str) -> list:
+    """Every node in a dump whose class list holds `cls`."""
+    out = []
+    if isinstance(dumped, dict):
+        if cls in (dumped.get("cls") or "").split():
+            out.append(dumped)
+        for k in dumped.get("kids") or []:
+            out += _find(k, cls)
+    return out
+
+
+def _render_all(doc, now_ms):
+    return _dash(f"""
       const doc = {json.dumps(doc)};
+      const now = {now_ms};
       out.live = dump(renderLive(doc.live));
       out.stuck = dump(renderStuck(doc.stuck));
       out.roles = dump(renderRoles(doc.roles));
@@ -1305,160 +1363,421 @@ def _render_cards(doc):
       out.week = dump(renderWeek(doc.week));
       out.products = dump(renderProducts(doc.products));
       out.waiting = dump(renderWaiting(doc.stuck));
-      out.empty = dump(renderLive([]));
-    """, prelude=FAKE_DOM)
+      out.tokens = dump(renderTokens(doc.tokens, doc.plan));
+      out.timeline = dump(renderTimeline(doc.timeline, now));
+      out.prs = dump(renderPrs(doc.open_prs));
+      out.progress = dump(renderProgress(doc.progress));
+      out.approvals = dump(renderApprovals(doc.next_moves));
+      out.kpis = dump(renderKpis(doc, now));
+    """)
 
 
-def _rows(dumped):
-    # [[label, detail], ...] for a rendered <ul class="dash-list rows">. A
-    # queue row also carries a leading `.chip` (priority) as a 3rd child —
-    # drop it here, so every card's rows read as the same 2-column shape.
-    out = []
-    for li in dumped["kids"]:
-        texts = [k["text"] for k in li["kids"]]
-        if len(texts) > 2:
-            texts = texts[-2:]
-        out.append(texts + [""] * (2 - len(texts)))
-    return out
-
-
-def test_page_renders_every_card_from_a_fixture_document():
-    doc = DASHBOARD_FIXTURE
-    got = _render_cards(doc)
-
-    def label_tags(dumped):
-        return [li["kids"][0]["tag"] for li in dumped["kids"]]
-
-    live0 = doc["live"][0]
-    # idle_min is clamped to 0 (clock skew can make it read negative,
-    # agora#100) — the fixture's -2 must show as "idle 0m", not "idle -2m".
-    assert _rows(got["live"])[0] == [
-        "bricks#48", f"CODER round 1 for issue 48 · round 1 · claimed 14m ago · idle 0m · {live0['last_action']}"]
-    assert set(label_tags(got["live"])) == {"a"}  # `ref` links to `url` when the row has one
-    assert len(_rows(got["stuck"])) == len(doc["stuck"])
-    assert _rows(got["stuck"])[0] == ["adk-lab#12", "NEEDSHUMAN · " + doc["stuck"][0]["text"]]
-    # "waiting for you": the founder's own rows out of `stuck`, by
-    # `check === "NEEDSHUMAN"` — `who_works` carries no such flag at all.
-    assert len(_rows(got["waiting"])) == sum(s["check"] == "NEEDSHUMAN" for s in doc["stuck"])
-    assert _rows(got["roles"])[0] == ["CTO", "idle · " + doc["roles"][0]["doing"] + " · ops#52"]
-    # The priority is a `.chip`, not folded into the label text (agora#100:
-    # "#p0 · adk-lab#8" used to scramble under RTL) — `_rows` drops it, so
-    # the label here is the ref alone.
-    assert _rows(got["queue"])[0] == ["adk-lab#8", doc["queue"][0]["title"] + " · claimed"]
-    assert _rows(got["queue"])[1] == ["ops#57", doc["queue"][1]["title"] + " · needs human"]
-    assert got["queue"]["kids"][0]["kids"][0]["cls"] == "chip p0" and got["queue"]["kids"][0]["kids"][0]["text"] == "P0"
-    # products: `work` is an object and `checks` a list; both read as text.
-    assert _rows(got["products"])[0] == [
-        "SHAL", "SHAL 0.3.0 — מוכן למשתמש ראשון · due 2026-10-31 · 129/149 pts (87%) · 6/7 checks"]
-    assert [r[0] for r in _rows(got["products"])] == [p["name"] for p in doc["products"]]
-    # Nothing to show is said, not left blank: the honest-reporting rule.
-    assert _rows(got["empty"]) == [["—", ""]]
-    assert got["empty"]["kids"][0]["cls"] == "dash-empty muted"
-
-
-def test_week_card_is_one_big_number_not_a_four_row_table():
-    # agora#100: the mockup shows one big number (points closed) plus a
-    # muted line, not a 4-row table with a backwards-reading label.
-    got = _render_cards(DASHBOARD_FIXTURE)
-    week = got["week"]
-    big = week["kids"][0]["kids"][0]
-    assert big["cls"] == "big" and big["text"] == "321"
-    assert "points closed" in week["kids"][0]["text"]
-    assert "last week: 0" in week["kids"][0]["text"]
-    assert "52.7% of company" in week["kids"][1]["text"]
-    assert "1.3h" in week["kids"][1]["text"]
-
-
-def test_no_card_shows_object_object_undefined_or_empty_text_on_the_real_document():
-    # The round-2 bug: renderProducts passed `work` (an object) and `checks`
-    # (a list) straight to text, so the card read "[object Object]".
-    got = _render_cards(DASHBOARD_FIXTURE)
+@pytest.mark.parametrize("fixture", ["old", "220"])
+def test_every_card_renders_cleanly_from_a_real_document(fixture):
+    # The round-2 bug class (agora#90): "[object Object]", "undefined", NaN.
+    # The 2026-09-28 document has no timeline / plan / open_prs at all: each
+    # of those cards says so instead of breaking.
+    doc = DASHBOARD_FIXTURE if fixture == "old" else DASHBOARD_FIXTURE_220
+    now = "Date.parse('2026-09-29T19:11:53Z')" if fixture == "220" else "Date.parse('2026-09-28T12:00:00Z')"
+    got = _render_all(doc, now)
     for name in CARDS:
-        cls = got[name]["cls"].split()
-        assert "dash-list" in cls and got[name]["kids"], name
-        for label, detail in _rows(got[name]):
-            assert label.strip() and label != "—", (name, label, detail)
-            for text in (label, detail):
-                assert "[object" not in text and "undefined" not in text and "null" not in text, \
-                    (name, text)
-    # week is not a rows list any more (see test_week_card_is_one_big_number...);
-    # still guard it against the same failure shapes, on its own terms.
-    week_text = json.dumps(got["week"])
-    assert "[object" not in week_text and "undefined" not in week_text and "NaNnull" not in week_text
+        text = _text(got[name])
+        assert "[object" not in text and "undefined" not in text and "NaN" not in text, (name, text[:300])
+        assert got[name]["text"].strip(), name
+    if fixture == "old":
+        assert "צריך dashboard.py עדכני" in got["timeline"]["text"]
+        assert "צריך dashboard.py עדכני" in got["prs"]["text"]
+        assert "אין נתון תוכנית" in got["tokens"]["text"]
 
 
-def test_panel_css_classes_from_the_mockup_are_present():
-    # agora#100: the panel is ported from the approved mockup
-    # (B8UrALfZEZ34F1sPeJEiNz) — these are the mockup's own class names for
-    # the card grid, a card, a row list, a ref, a priority chip, the pool
-    # card's <dl>, a big number, a percent bar, a role row, its status dot,
-    # the header and the sync pill / button, kept unrenamed on purpose.
-    text = PAGE.read_text(encoding="utf-8")
-    for cls in (".dhead", ".cards", ".card", ".rows", ".ref", ".chip", ".chip.p0",
-                ".live", ".big", ".bar", ".role", ".st", ".sync", ".go"):
-        assert re.search(re.escape(cls) + r"\s*\{", text), cls
+def test_lists_are_cut_to_five_rows_with_a_show_all_toggle():
+    got = _dash("""
+      const rows = Array.from({length: 8}, (_, i) => ({label: "r#" + i, detail: "t" + i}));
+      out.cut = dump(renderRows(rows, "k"));
+      out.cutMore = renderRows(rows, "k").childNodes[1].textContent;
+      renderRows(rows, "k").childNodes[1].onclick();
+      out.open = [...dashOpen];
+      out.rerendered = rerendered;
+      out.full = dump(renderRows(rows, "k"));
+      out.few = dump(renderRows(rows.slice(0, 3), "k"));
+      out.empty = dump(renderRows([], "k", "התור ריק"));
+    """)
+    ul = got["cut"]["kids"][0]
+    assert len(ul["kids"]) == 5 and got["cutMore"] == "הצג הכל (8)"
+    assert got["open"] == ["k"] and got["rerendered"] == ["more-k"]
+    full_ul, less = got["full"]["kids"]
+    assert len(full_ul["kids"]) == 8 and "all" in full_ul["cls"].split() and less["text"] == "הצג פחות"
+    assert got["few"]["tag"] == "ul" and len(got["few"]["kids"]) == 3        # no toggle when it all fits
+    assert got["empty"]["kids"][0]["text"] == "התור ריק"
 
 
-def test_approvals_card_renders_one_of_next_moves_with_prev_next():
-    # The founder's addition to #100: one pending item at a time, "N of M",
-    # so a skipped item is never dropped — prev/next only move the index.
-    # Display-only: the real send is agora#83.
-    got = _js(("renderApprovals", "el"), """
+def test_a_row_is_one_line_with_the_full_text_on_hover():
+    long = "א" * 300
+    got = _dash(f"""
+      const li = rowItem({{label: "shal#1", url: "https://x/1", detail: "{long}", meta: "צריך אדם", metaCls: "warn"}});
+      out.li = dump(li);
+      out.title = li.childNodes[1].title;
+    """)
+    kids = got["li"]["kids"]
+    assert kids[0]["tag"] == "a" and kids[0]["href"] == "https://x/1" and "ref" in kids[0]["cls"]
+    assert "tx" in kids[1]["cls"].split() and got["title"] == "א" * 300
+    assert kids[2]["cls"] == "chip warn"
+    css = _css()
+    assert "text-overflow: ellipsis" in _rule(".tx, .one", css) and "nowrap" in _rule(".tx, .one", css)
+
+
+def test_kpi_strip_is_four_coloured_numbers():
+    got = _dash("""
+      const now = Date.parse("2026-09-29T12:00:00Z");
+      const mid = localMidnight(now);
+      const doc = {next_moves: [{id: "a"}, {id: "b"}], live: [],
+                   timeline: {merges: [{ref: "a#1", at: new Date(mid + 3600e3).toISOString()},
+                                       {ref: "a#2", at: new Date(mid - 3600e3).toISOString()}]},
+                   plan: {"5h": {percent: 90, expired: false}, stale: false}};
+      out.k = dump(renderKpis(doc, now));
+      out.none = dump(renderKpis({}, now));
+      out.expired = dump(renderKpis({plan: {"5h": {percent: 90, expired: true}}}, now));
+    """)
+    tiles = [(k["cls"], k["kids"][0]["text"], k["kids"][1]["text"]) for k in got["k"]["kids"]]
+    assert tiles == [("kpi warn", "2", "מחכה לך"), ("kpi none", "פנוי", "ה-POOL"),
+                     ("kpi ok", "1", "נמזגו היום"), ("kpi bad", "90%", "תוכנית · 5 שעות")]
+    assert [k["kids"][0]["text"] for k in got["none"]["kids"]] == ["—", "פנוי", "—", "—"]
+    assert got["expired"]["kids"][3]["kids"][0]["text"] == "—"
+
+
+def test_timeline_has_run_merge_and_decision_lanes_a_now_line_and_newest_first_events():
+    got = _dash("""
+      const now = new Date(2026, 8, 29, 12, 0).getTime();       // local noon
+      const iso = (h, m) => new Date(2026, 8, 29, h, m).toISOString();
+      const t = {runs: [{ref: "shal#2", round: 1, start: iso(9, 0), end: iso(9, 40), outcome: "RunEnded", live: false, url: "u2"},
+                        {ref: "shal#2", round: 2, start: iso(11, 0), end: null, live: true, url: "u2"},
+                        {ref: "ops#5", round: 1, start: iso(10, 0), end: null, live: false, url: "u5"}],
+                 merges: [{ref: "agora#9", title: "merged thing", at: iso(10, 30), url: "m9"}],
+                 decisions: [{id: "c", answer: "yes", q_he: "לשחרר?", note: "go", at: iso(11, 30)}], notes: {}};
+      out.full = dump(renderTimeline(t, now));
+      out.noDecisions = dump(renderTimeline({...t, decisions: null, notes: {decisions: "no decisions record yet"}}, now));
+      out.empty = dump(renderTimeline({runs: [], merges: [], decisions: [], notes: {}}, now));
+      out.missing = dump(renderTimeline(undefined, now));
+    """)
+    full = got["full"]
+    lanes = [k["text"] for k in _find(full, "ln")]
+    assert lanes == ["ריצות", "מיזוגים", "החלטות מייסד"]
+    runs = _find(full, "run")
+    assert [r["cls"] for r in runs] == ["ev run", "ev run live", "ev run unk"]
+    assert len(_find(full, "mg")) >= 1 and len(_find(full, "dc")) >= 1
+    assert len(_find(full, "now")) == 3 and "עכשיו 12:00" in _text(full)
+    times = [k["text"] for k in _find(full, "evlist")[0]["kids"] for k in k["kids"] if k["tag"] == "time"]
+    assert times == sorted(times, reverse=True) and times[0] == "11:30"
+    assert "המייסד אושר: לשחרר? (go)" in _text(full)
+    nd = got["noDecisions"]
+    assert [k["text"] for k in _find(nd, "ln")] == ["ריצות", "מיזוגים"]
+    assert "החלטות מייסד: אין עדיין מקור" in _text(nd)
+    assert "אין אירועים היום עדיין" in _text(got["empty"])
+    assert "צריך dashboard.py עדכני" in got["missing"]["text"]
+
+
+def test_pool_now_shows_the_run_big_or_one_no_run_line():
+    got = _dash("""
+      out.idle = dump(renderLive([]));
+      out.run = dump(renderLive([{ref: "agora#71", url: "u", round: 2, phase: "reviewer", claimed_min: 34,
+                                   idle_min: -2, last_action: "Bash: pytest -q", prev_end: "08:10Z"}]));
+    """)
+    assert "אין ריצה עכשיו" in got["idle"]["text"] and "פנוי" in got["idle"]["text"]
+    run = got["run"]
+    big = _find(run, "big")[0]
+    assert big["tag"] == "a" and big["text"] == "agora#71"
+    assert "2 · reviewer" in run["text"] and "34 מאז שהתחיל" in run["text"]
+    assert "0 מאז הפעולה האחרונה" in run["text"]            # clock skew clamped (agora#100)
+    assert _find(run, "act")[0]["tag"] == "bdi"
+
+
+def test_roles_have_an_avatar_a_one_line_task_and_a_status_dot():
+    got = _dash("""
+      out.r = dump(renderRoles([{role: "CTO", state: "waiting", doing: "review", ref: "ops#1", url: "u"},
+                                {role: "Pool", state: "busy", doing: "shal#2", ref: "shal#2", url: "u"},
+                                {role: "CMO", state: "off", doing: "אין משימה פתוחה", ref: null}]));
+    """)
+    avs = _find(got["r"], "av")
+    assert [(a["cls"], a["text"]) for a in avs] == [("av role-cto", "CTO"), ("av role-pool", "Pool"), ("av role-cmo", "CMO")]
+    assert [s["cls"] + ":" + s["text"] for s in _find(got["r"], "st")] == ["st wait:מחכה", "st busy:עובד", "st idle:פנוי"]
+
+
+def test_queue_and_prs_carry_chips():
+    got = _dash("""
+      out.q = dump(renderQueue([{priority: "p0", ref: "shal#1", url: "u", title: "t", needs_human: true}]));
+      out.p = dump(renderPrs([{ref: "ops#2", url: "u", title: "b", type: "B", verdict: "RECOMMEND", draft: false},
+                              {ref: "ops#3", url: "u", title: "a", type: "A", verdict: "CHANGES", draft: true},
+                              {ref: "ops#4", url: "u", title: "n", type: null, verdict: null, draft: false}]));
+      out.pNull = dump(renderPrs(null));
+    """)
+    li = got["q"]["kids"][0]["kids"]
+    assert (li[0]["cls"], li[0]["text"]) == ("chip p0", "P0") and li[-1]["text"] == "צריך אדם"
+    chips = [c["text"] for c in _find(got["p"], "chip")]
+    assert chips == ["type B", "type A", "שינויים", "לא נבדק"]
+    assert "טיוטה · a" in _text(got["p"])
+    assert "GitHub לא נקרא" in got["pNull"]["text"]
+    assert "type A: ממתין למיזוג" in got["p"]["text"] and "auto-merge" not in got["p"]["text"]   # the founder merges
+
+
+def test_prs_say_when_the_list_is_cut():
+    # CTO on agora#113: dashboard.py asks GitHub for the first 50 open PRs only.
+    got = _dash("""
+      const p = [{ref: "ops#2", url: "u", title: "b", type: "B", verdict: "RECOMMEND", draft: false}];
+      out.cut = renderPrs(p, 73).textContent;
+      out.whole = renderPrs(p, 1).textContent;
+      out.noTotal = renderPrs(p).textContent;
+    """)
+    assert "מוצגים 1 מתוך 73" in got["cut"]
+    assert "מתוך" not in got["whole"] and "מתוך" not in got["noTotal"]
+
+
+def test_overlapping_runs_get_their_own_rows_and_short_bars_no_text():
+    # QA on ops#220: four parallel pool runs drew on top of each other, and
+    # a 5-minute bar showed one cut letter of its ref.
+    got = _dash("""
+      const now = new Date(2026, 8, 29, 12, 0).getTime();
+      const iso = (h, m) => new Date(2026, 8, 29, h, m).toISOString();
+      const t = {runs: [{ref: "shal#1", round: 1, start: iso(4, 0), end: iso(6, 0), live: false, url: "u"},
+                        {ref: "shal#2", round: 1, start: iso(4, 30), end: iso(4, 40), live: false, url: "u"},
+                        {ref: "shal#3", round: 1, start: iso(8, 0), end: iso(8, 10), live: false, url: "u"}],
+                 merges: [], decisions: [], notes: {}};
+      const tl = renderTimeline(t, now);
+      const runs = [];
+      const walk = (n) => { if ((n.className || "").split(" ").includes("run")) runs.push(n); (n.childNodes || []).forEach(walk); };
+      walk(tl);
+      out.runs = runs.map((r) => ({text: r.textContent, top: r.style.top || "", title: r.title}));
+    """)
+    runs = got["runs"]
+    assert [r["text"] for r in runs] == ["shal#1", "", ""]             # 2 h is wide enough, 10 min is not
+    assert runs[0]["top"] != runs[1]["top"]                            # overlapping: two rows
+    assert runs[2]["top"] == runs[0]["top"]                            # after shal#1 ended: back to row one
+    assert all(r["title"].startswith(r["title"].split(" ")[0]) and "shal#" in r["title"] for r in runs)
+
+
+def test_tokens_card_today_week_toggle_role_and_pool_bars_and_plan():
+    got = _dash("""
+      const t = {agents: {COO: {"24h": {weighted: 3e6}, "7d": {weighted: 9e6}}, CTO: {"24h": {weighted: 1e6}, "7d": {weighted: 2e6}}},
+                 pool: {"24h": {weighted: 2e6}, "7d": {weighted: 5e6}},
+                 pool_runs: {"24h": [{ref: "shal#1", weighted: 1.5e6}, {ref: "shal#2", weighted: 5e5},
+                                     {ref: "a#3", weighted: 1e5}, {ref: "a#4", weighted: 1e4}], "7d": []},
+                 last_limit: {what: "5-hour limit reached", reset: "2099-01-01T00:00:00Z", active: true}};
+      const plan = {"5h": {percent: 62, resets_at: "2099-01-01T00:00:00Z", expired: false},
+                    "7d": {percent: 41, resets_at: "2099-01-05T09:00:00Z", expired: false}, stale: true, age_min: 120};
+      const card = renderTokens(t, plan, "24h");
+      out.today = dump(card);
+      const btns = card.querySelectorAll(".tseg button");
+      out.pressed = btns.map((b) => [b.textContent, b.attrs["aria-pressed"]]);
+      btns[1].onclick();
+      out.tokView = tokView; out.stored = localStorage.getItem(TOKVIEW); out.rerendered = rerendered;
+      out.week = dump(renderTokens(t, plan, "7d"));
+      out.old = dump(renderTokens({agents: {COO: {"5h": {weighted: 1}}}}, null, "24h"));
+      out.none = dump(renderTokens(null, null, "24h"));
+    """)
+    today = got["today"]
+    assert got["pressed"] == [["היום", "true"], ["השבוע", "false"]]
+    assert got["tokView"] == "7d" and got["stored"] == "7d" and got["rerendered"] == ["tok-7d"]
+    assert _find(today, "big")[0]["text"] == "6.0M" and "טוקנים היום" in today["text"]
+    role_bars = [b for b in _find(today, "tb") if "pool" not in b["cls"]]
+    pool_bars = _find(today, "pool")
+    assert [b["kids"][0]["text"] for b in role_bars] == ["COO", "CTO"]
+    assert [b["kids"][0]["text"] for b in pool_bars] == ["pool · shal#1", "pool · shal#2", "pool · a#3"]  # top 3
+    assert "הצג הכל (4)" in today["text"]
+    assert "חלון 5 שעות: 62% מהמגבלה" in today["text"] and "שבועי: 41% מהמגבלה" in today["text"]
+    assert "שורת הסטטוס לא רצה מאז" in today["text"]
+    bdis = [k["text"] for k in _find(today, "warnline")[-1]["kids"] if k.get("tag") == "bdi"]
+    assert bdis == ["5-hour limit reached", "2099-01-01T00:00:00Z"]      # QA on PR 112
+    assert "טוקנים השבוע" in got["week"]["text"] and _find(got["week"], "big")[0]["text"] == "16.0M"
+    assert "אין עדיין נתון להיום" in got["old"]["text"]
+    assert "אין נתון תוכנית" in got["none"]["text"]
+
+
+def test_week_card_is_one_big_number_in_hebrew():
+    got = _dash("out.w = dump(renderWeek({points_closed: 34, points_closed_previous: 27, "
+                "percent_of_company: 5.2, median_go_to_close_h: 1.3}));")
+    assert _find(got["w"], "big")[0]["text"] == "34"
+    assert "נקודות נסגרו (שבוע קודם: 27)" in got["w"]["text"] and "1.3h" in got["w"]["text"]
+
+
+def test_progress_card_renders_stages_milestone_bars_chain_and_blocker():
+    got = _dash("""
+      out.full = dump(renderProgress({
+        stages: [{he: "1. הוכח", current: false}, {he: "2. בשימוש", current: true}],
+        milestones: [{repo: "shal", title: "v0.4.0", closed: 3, total: 4, percent: 75, url: "https://x/m1"}],
+        chain: [{ref: "bricks#50", title: "psu", done: true, url: "https://x/50"},
+                {ref: "shal#253", title: "pack", done: false, url: "https://x/253"}],
+        blocker: {ref: "bricks#50", title: "psu", url: "https://x/50"},
+      }));
+      out.empty = dump(renderProgress(null));
+    """)
+    text = _text(got["full"])
+    for s in ("1. הוכח", "2. בשימוש", "v0.4.0", "3/4", "75%", "bricks#50", "shal#253", "חוסם", "בוצע", "פתוח"):
+        assert s in text, s
+    assert _find(got["full"], "prog-chain")
+    assert got["empty"]["text"] == "—"
+
+
+def test_approvals_card_renders_cost_note_field_and_prev_next():
+    got = _dash("""
       const moves = [
-        {id: "a", q_he: "A?", why_he: "because a", link: "https://x/1"},
-        {id: "b", q_he: "B?", why_he: "because b", link: "https://x/2"},
+        {id: "a", q_he: "A?", why_he: "because a", cost_he: "0.1M", link: "https://github.com/determlab/shal/issues/231"},
+        {id: "b", q_he: "B?", why_he: "because b", link: "https://x/2", deferred: true},
       ];
-      out.first = dump(renderApprovals(moves));
+      const card = renderApprovals(moves);
+      out.first = dump(card);
+      card.querySelector(".appr-next").onclick();
+      out.second = dump(mounted.node);
+      out.one = dump(renderApprovals([moves[0]]));
       out.empty = dump(renderApprovals([]));
-    """, prelude=FAKE_DOM + "\nlet approvalsIdx = 0;\n")
-    text = json.dumps(got["first"], ensure_ascii=False)
-    assert "1 מתוך 2" in text and "A?" in text and "because a" in text and "https://x/1" in text
-    assert "[object" not in text and "undefined" not in text
-    assert "אין אישורים ממתינים" in json.dumps(got["empty"], ensure_ascii=False)
+    """)
+    text = _text(got["first"])
+    assert "1 מתוך 2" in text and "A?" in text and "because a" in text and "0.1M" in text
+    assert "shal#231" in text and '"cls": "appr-note"' in text
+    assert "2 מתוך 2" in _text(got["second"]) and "נדחה קודם" in _text(got["second"])
+    assert not _find(got["one"], "appr-nav")          # one card: no dead prev/next buttons
+    assert "אין אישורים ממתינים" in _text(got["empty"])
 
 
-def test_prs_card_is_grouped_by_type_and_hidden_when_the_section_is_absent():
-    # `prs` is not a field the real document sends (the CTO's review of PR
-    # #90 said so explicitly, "hidden (OK)"); renderDashboard checks
-    # `doc.prs` before ever calling this, but the grouping itself is still
-    # its own small render path worth its own test.
-    got = _js(("renderPrs", "renderRows"), """
-      out.prs = dump(renderPrs({feature: [{label: "#89", detail: "rename stream UI"}],
-                                 bug: [{label: "#90", detail: "fix pill"}]}));
-    """, prelude=FAKE_DOM)
-    prs_kids = got["prs"]["kids"]
-    assert [k["tag"] for k in prs_kids] == ["h4", "ul", "h4", "ul"]
-    assert [k["text"] for k in prs_kids if k["tag"] == "h4"] == ["feature", "bug"]
+def test_yes_no_later_open_a_ten_second_undo_window_before_sending():
+    # The founder's Undo answer on #176: a click never sends right away.
+    got = _dash("""
+      const moves = [{id: "a", q_he: "A?", why_he: "because a", link: "https://x/1"}];
+      const first = renderApprovals(moves);
+      first.querySelector(".appr-note").value = "not today";
+      [...first.querySelectorAll("button")].find((b) => b.textContent === "לא").onclick();
+      out.pending = {id: approvalsPending.id, answer: approvalsPending.answer, note: approvalsPending.note};
+      out.timerMs = timers[timers.length - 1].ms;
+      out.mountedId = mounted.id;
+      out.undo = dump(mounted.node);
+    """)
+    assert got["pending"] == {"id": "a", "answer": "no", "note": "not today"}
+    assert got["timerMs"] == 10000 and got["mountedId"] == "dash-approvals"
+    text = _text(got["undo"])
+    assert "נדחה" in text and "A?" in text and "בטל" in text
+
+
+def test_undo_clears_the_pending_decision_and_nothing_is_sent():
+    got = _dash("""
+      const moves = [{id: "a", q_he: "A?", why_he: "because a", link: "https://x/1"}];
+      const first = renderApprovals(moves);
+      [...first.querySelectorAll("button")].find((b) => b.textContent === "כן").onclick();
+      mounted.node.querySelector("button").onclick();  // the undo bar's one button
+      out.pendingAfterUndo = approvalsPending;
+      out.cancelled = timers[timers.length - 1].cancelled;
+      out.backToNormal = dump(mounted.node);
+    """)
+    assert got["pendingAfterUndo"] is None and got["cancelled"] is True
+    assert "מתוך" in _text(got["backToNormal"])
+
+
+def test_later_defers_and_a_typed_note_survives_a_re_render():
+    got = _dash("""
+      const moves = [{id: "a", q_he: "A?"}];
+      const first = renderApprovals(moves);
+      const note = first.querySelector(".appr-note");
+      note.value = "half typed"; note.oninput();
+      out.again = renderApprovals(moves).querySelector(".appr-note").value;   // a sync re-render
+      [...first.querySelectorAll("button")].find((b) => b.textContent === "אחר כך").onclick();
+      out.answer = approvalsPending.answer;
+    """)
+    assert got["again"] == "half typed" and got["answer"] == "later"
+
+
+def test_commit_approval_posts_id_answer_and_note_then_reloads():
+    got = _js(("commitApproval",), """
+      await commitApproval("a", "no", "not today");
+      out.calls = calls; out.loaded = loaded; out.toasts = toasts;
+    """, prelude=API_STUB + FAKE_DOM + _consts("ANSWER_HE")
+       + "\nlet loaded = false;\nasync function loadDashboard() { loaded = true; }\n")
+    assert got["calls"] == [["POST", "dashboard/approve", {"id": "a", "answer": "no", "note": "not today"}]]
+    assert got["loaded"] is True and got["toasts"] == [["נדחה: נשמר", False]]
+
+
+def test_commit_approval_toasts_on_failure_but_still_reloads():
+    got = _js(("commitApproval",), """
+      FAIL = true;
+      await commitApproval("a", "yes", "");
+      out.toasts = toasts; out.loaded = loaded;
+    """, prelude=API_STUB + FAKE_DOM + _consts("ANSWER_HE")
+       + "\nlet loaded = false;\nasync function loadDashboard() { loaded = true; }\n")
+    assert got["toasts"] and got["toasts"][0][1] is True and got["loaded"] is True
 
 
 def test_pill_states():
     now_s = 1700000000
-    got = _js(("pillText", "renderPill"), f"""
+    got = _dash(f"""
       const now = {now_s} * 1000;
       out.fresh = pillText({{last_sync: {now_s} - 120, stale: false, last_error: null}}, now);
       out.stale = pillText({{last_sync: {now_s} - 10000, stale: true, last_error: null}}, now);
-      out.error = pillText({{last_sync: {now_s} - 120, stale: false,
-                            last_error: "gh: not logged in"}}, now);
-      out.noCmd = pillText({{last_sync: null, stale: true,
-                            last_error: "no dashboard command configured: start the server with --dashboard-cmd"}}, now);
+      out.never = pillText({{last_sync: null, stale: true, last_error: null}}, now);
+      out.error = pillText({{last_sync: {now_s} - 120, stale: false, last_error: "gh: not logged in"}}, now);
       renderPill({{last_sync: {now_s} - 120, stale: false, last_error: null}}, now);
-      out.freshText = $("dash-pill-text").textContent;
       out.freshClass = $("dash-pill").className;
       renderPill({{last_sync: {now_s} - 10000, stale: true, last_error: null}}, now);
       out.staleClass = $("dash-pill").className;
-      renderPill({{last_sync: {now_s} - 120, stale: false,
-                  last_error: "gh: not logged in"}}, now);
+      renderPill({{last_sync: {now_s} - 120, stale: true, last_error: "gh: not logged in"}}, now);
       out.errorText = $("dash-pill-text").textContent;
+      out.errorKids = $("dash-pill-text").childNodes.map((n) => n.tagName || "#text");
       out.errorClass = $("dash-pill").className;
-    """, prelude=FAKE_DOM)
-    assert got["fresh"] == "updated automatically · last sync 2 min ago · source: GitHub"
-    assert got["stale"] == "updated automatically · last sync 167 min ago · source: GitHub"
-    assert got["error"] == "gh: not logged in"
-    assert got["noCmd"] == "no dashboard command configured: start the server with --dashboard-cmd"
-    assert got["freshText"] == got["fresh"] and "stale" not in got["freshClass"].split()
-    assert "stale" in got["staleClass"].split()
-    # An error replaces the line outright — it is not appended beside a stale count.
-    assert got["errorText"] == got["error"] and "stale" not in got["errorClass"].split()
+    """)
+    assert got["fresh"] == "מתעדכן אוטומטית · סנכרון אחרון לפני 2 דק׳ · מקור: GitHub"
+    assert got["stale"] == "ישן: סנכרון אחרון לפני 3 שע׳ · מקור: GitHub"
+    assert got["never"] == "עוד לא סונכרן · מקור: GitHub"
+    assert got["error"] == "שגיאה: gh: not logged in"
+    assert "stale" not in got["freshClass"].split() and "stale" in got["staleClass"].split()
+    # An error replaces the line outright, red, the English part in its own <bdi>.
+    assert got["errorText"] == got["error"] and got["errorKids"] == ["#text", "BDI"]
+    assert "bad" in got["errorClass"].split() and "stale" not in got["errorClass"].split()
+
+
+def test_panel_css_classes_from_the_mockup_are_present():
+    # The mockup's own class names (B8UrALfZEZ34F1sPeJEiNz), kept unrenamed.
+    css = _css()
+    for cls in (".dhead", ".cards", ".card", ".card.wide", ".rows", ".ref", ".chip", ".chip.p0", ".chip.b",
+                ".live", ".big", ".bar", ".role", ".st", ".sync", ".go", ".tseg", ".tb", ".tb.pool", ".plan",
+                ".tl", ".tlin", ".lane", ".axis", ".ev.run", ".ev.mg", ".ev.dc", ".now", ".future", ".evlist",
+                ".mk", ".kpi", ".more"):
+        assert re.search(re.escape(cls) + r"[\s,{]", css), cls
+    assert "repeat(auto-fill, minmax(min(290px, 100%), 1fr))" in _rule(".cards", css)
+    assert "outline" in _rule("button:focus-visible, a:focus-visible, input:focus-visible, "
+                              "textarea:focus-visible, select:focus-visible", css)
+
+
+def test_the_switch_says_board_and_a_reload_opens_the_same_view():
+    text = PAGE.read_text(encoding="utf-8")
+    assert '<button type="button" id="view-dash" class="btn">לוח</button>' in text
+    script = _markup().script
+    set_view = re.search(r"function setView\(view\) \{.*?\n\}", script, re.S).group(0)
+    assert "localStorage.setItem(VIEW, view)" in set_view
+    assert re.search(r'setView\(.*localStorage\.getItem\(VIEW\).*=== "dash" \? "dash" : "chat"\)', script)
+
+
+def test_every_board_control_is_wired():
+    # No dead buttons (ops#220 item 8): each static control on the board has a
+    # handler, and the board has its own theme button (#top is hidden there).
+    script = _markup().script
+    for bid in ("dash-sync", "dash-theme", "view-chat", "view-dash"):
+        assert re.search(rf'\$\("{bid}"\)\.addEventListener\("click"', script), bid
+    body = _function("renderTokens") + _function("cutList") + _function("renderApprovals")
+    assert body.count(".onclick = ") >= 6
+
+
+def test_the_sync_button_says_it_is_working_and_comes_back():
+    script = _markup().script
+    handler = script[script.index('$("dash-sync").addEventListener'):]
+    handler = handler[:handler.index("});") + 3]
+    assert 'b.textContent = "מסנכרן…"' in handler and 'b.textContent = "סנכרן עכשיו"' in handler
+    assert "b.disabled = true" in handler and "b.disabled = false" in handler
+
+
+def test_a_failed_fetch_keeps_the_last_good_document():
+    got = _js(("loadDashboard",), """
+      S.dashboard = {doc: {week: {points_closed: 3}}, last_sync: 10, stale: false, last_error: null};
+      FAIL = true;
+      await loadDashboard();
+      out.d = S.dashboard;
+    """, prelude=API_STUB + "const S = {dashboard: null};\nfunction renderDashboard() {}\n")
+    assert got["d"] == {"doc": {"week": {"points_closed": 3}}, "last_sync": 10, "stale": True,
+                        "last_error": "network down"}
 
 
 # -- issue #168: unread bubbles

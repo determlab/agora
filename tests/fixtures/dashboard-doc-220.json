@@ -1,0 +1,3403 @@
+{
+  "schema": 1,
+  "generated_at": "2026-09-29T19:12:18Z",
+  "as_of": "2026-09-29T19:00:00Z",
+  "content": "ok",
+  "content_problem": null,
+  "company": {
+    "stage1": {
+      "due": "2026-12-08",
+      "days_left": 70,
+      "checks": [
+        {
+          "he": "Quick Start רץ ב-CI",
+          "done": true,
+          "link": "https://github.com/determlab/shal/issues/159"
+        },
+        {
+          "he": "סוכן קר בונה דרייבר או brick שעובר — 5 מתוך 10",
+          "done": false,
+          "link": ""
+        },
+        {
+          "he": "3 מהנדסים מבחוץ הריצו blueprint פעמיים",
+          "done": false,
+          "link": ""
+        }
+      ]
+    },
+    "timeline": [
+      {
+        "he": "Quick Start ב-CI",
+        "date": "2026-09-26",
+        "status": "done",
+        "link": "https://github.com/determlab/shal/issues/159"
+      },
+      {
+        "he": "המאגר עובד מקצה לקצה",
+        "date": "2026-09-27",
+        "status": "done",
+        "link": ""
+      },
+      {
+        "he": "עמדה 1 (שבב) בנויה",
+        "date": "2026-10-03",
+        "status": "not_started",
+        "link": "https://github.com/determlab/adk-lab/issues/11"
+      },
+      {
+        "he": "עמדה 2 (קושחה) בנויה",
+        "date": "2026-10-08",
+        "status": "not_started",
+        "link": "https://github.com/determlab/adk-lab/issues/12"
+      },
+      {
+        "he": "סוכן קר עובר את עמדות 1 ו-2",
+        "date": "2026-10-13",
+        "status": "not_started",
+        "link": ""
+      },
+      {
+        "he": "תיקונים בשאל ממה שהעמדות חשפו",
+        "date": "2026-10-24",
+        "status": "not_started",
+        "link": ""
+      },
+      {
+        "he": "SHAL 0.3.0 למשתמש ראשון",
+        "date": "2026-10-31",
+        "status": "done",
+        "link": "https://github.com/determlab/shal/issues/184"
+      },
+      {
+        "he": "routes: אבן דרך 1 (אחרי שער 2)",
+        "date": "2026-11-14",
+        "status": "not_started",
+        "link": "https://github.com/determlab/ops/issues/44"
+      },
+      {
+        "he": "עמדה 3 (סוף-קו, שני ערוצים)",
+        "date": "2026-11-21",
+        "status": "not_started",
+        "link": ""
+      },
+      {
+        "he": "ADK: 10 ריצות קרות",
+        "date": "2026-11-25",
+        "status": "not_started",
+        "link": "https://github.com/determlab/adk-lab/issues/2"
+      },
+      {
+        "he": "3 מהנדסים מבחוץ, פעמיים (אחרי שלב 1)",
+        "date": "2026-11-30",
+        "status": "not_started",
+        "link": ""
+      },
+      {
+        "he": "יציאה משלב 1",
+        "date": "2026-12-08",
+        "status": "not_started",
+        "link": ""
+      }
+    ]
+  },
+  "products": [
+    {
+      "key": "shal",
+      "name": "SHAL",
+      "repos": [
+        "shal"
+      ],
+      "goal_he": "SHAL 0.3.0 — מוכן למשתמש ראשון",
+      "due": "2026-10-31",
+      "provisional": false,
+      "work": {
+        "issues": 73,
+        "points_total": 199,
+        "points_done": 152,
+        "unsized": 46,
+        "percent": 76
+      },
+      "checks": [
+        {
+          "he": "שחרור ל-PyPI",
+          "done": true,
+          "link": "https://github.com/determlab/shal/issues/184"
+        },
+        {
+          "he": "Quick Start ב-CI מול PyPI",
+          "done": true,
+          "link": "https://github.com/determlab/shal/issues/188"
+        },
+        {
+          "he": "סוכן יכול הכל מה-CLI",
+          "done": true,
+          "link": "https://github.com/determlab/shal/issues/160"
+        },
+        {
+          "he": "אין דרייבר של יצרן בחבילה",
+          "done": true,
+          "link": "https://github.com/determlab/shal/issues/149"
+        },
+        {
+          "he": "HTTP עם GET",
+          "done": true,
+          "link": "https://github.com/determlab/shal/issues/104"
+        },
+        {
+          "he": "AGENTS.md ומדריך",
+          "done": true,
+          "link": "https://github.com/determlab/shal/issues/146"
+        },
+        {
+          "he": "3 דוגמאות",
+          "done": true,
+          "link": "https://github.com/determlab/shal/issues/209"
+        }
+      ]
+    },
+    {
+      "key": "adk",
+      "name": "ADK",
+      "repos": [
+        "adk-lab"
+      ],
+      "goal_he": "סוכן קר כותב דרייבר או brick שעובד — 5 מתוך 10",
+      "due": "2026-12-08",
+      "provisional": false,
+      "work": {
+        "issues": 28,
+        "points_total": 72,
+        "points_done": 19,
+        "unsized": 5,
+        "percent": 26
+      },
+      "checks": [
+        {
+          "he": "ה-runner",
+          "done": true,
+          "link": "https://github.com/determlab/adk-lab/issues/1"
+        },
+        {
+          "he": "6 תרחישים קרים חדשים",
+          "done": false,
+          "link": "https://github.com/determlab/adk-lab/issues/2"
+        },
+        {
+          "he": "הקיר קורא את ה-ADK מהחבילה",
+          "done": true,
+          "link": "https://github.com/determlab/adk-lab/issues/8"
+        }
+      ]
+    },
+    {
+      "key": "pytest-shal",
+      "name": "pytest-shal",
+      "repos": [
+        "pytest-shal"
+      ],
+      "goal_he": "pytest עם SHAL — גרסה 0.1; v1: מריץ blueprint של Bricks",
+      "due": "2026-10-31",
+      "provisional": false,
+      "work": {
+        "issues": 13,
+        "points_total": 31,
+        "points_done": 13,
+        "unsized": 6,
+        "percent": 42
+      },
+      "checks": [
+        {
+          "he": "החבילה",
+          "done": true,
+          "link": "https://github.com/determlab/pytest-shal/issues/1"
+        }
+      ]
+    },
+    {
+      "key": "bricks",
+      "name": "Bricks",
+      "repos": [
+        "bricks"
+      ],
+      "goal_he": "v1: blueprint עם pass/fail, יחידה 2, רשומה ליחידה, ADK ל-bricks",
+      "due": null,
+      "provisional": true,
+      "work": {
+        "issues": 27,
+        "points_total": 59,
+        "points_done": 39,
+        "unsized": 9,
+        "percent": 66
+      },
+      "checks": []
+    },
+    {
+      "key": "aos",
+      "name": "AOS",
+      "repos": [
+        "aos"
+      ],
+      "goal_he": "מושהה עד של-v1 יש משתמש (ops#70)",
+      "due": null,
+      "provisional": true,
+      "work": {
+        "issues": 4,
+        "points_total": 10,
+        "points_done": 7,
+        "unsized": 3,
+        "percent": 70
+      },
+      "checks": [
+        {
+          "he": "אכיפת מצב ה-grant",
+          "done": true,
+          "link": "https://github.com/determlab/aos/issues/3"
+        }
+      ]
+    },
+    {
+      "key": "predictor",
+      "name": "Predictor",
+      "repos": [
+        "predictor"
+      ],
+      "goal_he": "מושהה עד של-v1 יש משתמש (ops#70)",
+      "due": null,
+      "provisional": true,
+      "work": {
+        "issues": 0,
+        "points_total": 0,
+        "points_done": 0,
+        "unsized": 0,
+        "percent": null
+      },
+      "checks": []
+    },
+    {
+      "key": "infra",
+      "name": "תשתית",
+      "repos": [
+        "ops",
+        "agora"
+      ],
+      "goal_he": "ה-pool, Zulip, ה-watchdog והדשבורד",
+      "due": null,
+      "provisional": false,
+      "work": {
+        "issues": 191,
+        "points_total": 538,
+        "points_done": 314,
+        "unsized": 148,
+        "percent": 58
+      },
+      "checks": [
+        {
+          "he": "הדשבורד",
+          "done": false,
+          "link": "https://github.com/determlab/ops/issues/30"
+        },
+        {
+          "he": "Zulip בלי תיוג",
+          "done": true,
+          "link": "https://github.com/determlab/agora/issues/50"
+        }
+      ]
+    }
+  ],
+  "progress": {
+    "stages": {
+      "content": "missing"
+    },
+    "milestones": [
+      {
+        "repo": "shal",
+        "title": "v0.4.0",
+        "closed": 11,
+        "total": 13,
+        "percent": 85,
+        "url": "https://github.com/determlab/shal/milestone/5"
+      },
+      {
+        "repo": "shal",
+        "title": "v0.5.0",
+        "closed": 2,
+        "total": 18,
+        "percent": 11,
+        "url": "https://github.com/determlab/shal/milestone/6"
+      },
+      {
+        "repo": "bricks",
+        "title": "v0.5.0",
+        "closed": 2,
+        "total": 14,
+        "percent": 14,
+        "url": "https://github.com/determlab/bricks/milestone/1"
+      },
+      {
+        "repo": "pytest-shal",
+        "title": "v0.1.0",
+        "closed": 0,
+        "total": 4,
+        "percent": 0,
+        "url": "https://github.com/determlab/pytest-shal/milestone/1"
+      },
+      {
+        "repo": "pytest-shal",
+        "title": "v0.2.0",
+        "closed": 1,
+        "total": 3,
+        "percent": 33,
+        "url": "https://github.com/determlab/pytest-shal/milestone/2"
+      },
+      {
+        "repo": "adk-lab",
+        "title": "gate-1",
+        "closed": 5,
+        "total": 20,
+        "percent": 25,
+        "url": "https://github.com/determlab/adk-lab/milestone/1"
+      }
+    ],
+    "chain": [
+      {
+        "ref": "ops#63",
+        "title": "pool: always-on process with its own chat user (Pool) - status, up/down to N, stop, ask",
+        "done": true,
+        "url": "https://github.com/determlab/ops/issues/63"
+      },
+      {
+        "ref": "ops#68",
+        "title": "policy: every issue carries a version, cross-repo dependencies in GitHub, release blocked by open version issues",
+        "done": false,
+        "url": "https://github.com/determlab/ops/issues/68"
+      },
+      {
+        "ref": "ops#71",
+        "title": "pool: use the determlab-pool GitHub App token so PRs are bot-authored and the CTO can merge type A",
+        "done": false,
+        "url": "https://github.com/determlab/ops/issues/71"
+      },
+      {
+        "ref": "ops#73",
+        "title": "heartbeat: every scheduled job signals alive; a GitHub Actions cron in the cloud fails and emails the founder when one is stale (no new account)",
+        "done": true,
+        "url": "https://github.com/determlab/ops/issues/73"
+      },
+      {
+        "ref": "ops#74",
+        "title": "watchdog: fix lying labels, flag text-only cross-repo refs, 5-line daily digest (extend watchdog-check.py/reaper.ps1, no new reconciler)",
+        "done": true,
+        "url": "https://github.com/determlab/ops/issues/74"
+      },
+      {
+        "ref": "ops#75",
+        "title": "issue template: 5 fields; Done when = committed tests; a ready check refuses agent:go without it",
+        "done": true,
+        "url": "https://github.com/determlab/ops/issues/75"
+      },
+      {
+        "ref": "ops#76",
+        "title": "agent-loop: max 2 review rounds; reviewer order; hand-off = label + one comment (type B)",
+        "done": false,
+        "url": "https://github.com/determlab/ops/issues/76"
+      }
+    ],
+    "blocker": null
+  },
+  "stuck": [
+    {
+      "check": "NEEDSHUMAN",
+      "repo": "adk-lab",
+      "number": 12,
+      "text": "agent:needs-human: Station 2: the firmware test bench (STM32 bootloader rig, oracle, docs, verify) — before 0.3.0"
+    },
+    {
+      "check": "NEEDSHUMAN",
+      "repo": "adk-lab",
+      "number": 11,
+      "text": "agent:needs-human: Station 1: the chip validation bench (tier-2 rig, oracle, docs, verify) — before 0.3.0"
+    },
+    {
+      "check": "NEEDSHUMAN",
+      "repo": "agora",
+      "number": 83,
+      "text": "agent:needs-human: A3 — \"Your next move\": the question buttons post a message in the founder's name to `#coo › הצעד הבא`"
+    },
+    {
+      "check": "NEEDSHUMAN",
+      "repo": "agora",
+      "number": 74,
+      "text": "agent:needs-human: chat server: the endpoints the new page needs - delete stream, read state + unread counts"
+    },
+    {
+      "check": "NEEDSHUMAN",
+      "repo": "bricks",
+      "number": 83,
+      "text": "agent:needs-human: Test the five check-brick checks that have no test"
+    },
+    {
+      "check": "NEEDSHUMAN",
+      "repo": "bricks",
+      "number": 82,
+      "text": "agent:needs-human: Refuse a blank unit id in bricks run --unit and run_for_unit"
+    },
+    {
+      "check": "NEEDSHUMAN",
+      "repo": "bricks",
+      "number": 81,
+      "text": "agent:needs-human: bricks dry-run --json, the same shape as check --json"
+    },
+    {
+      "check": "NEEDSHUMAN",
+      "repo": "bricks",
+      "number": 79,
+      "text": "agent:needs-human: test_undeclared_io_exits_1 fails on Windows: fixtures written without UTF-8"
+    },
+    {
+      "check": "NEEDSHUMAN",
+      "repo": "bricks",
+      "number": 74,
+      "text": "agent:needs-human: Test every shipped blueprint: check and run each file in blueprints/"
+    },
+    {
+      "check": "NEEDSHUMAN",
+      "repo": "bricks",
+      "number": 73,
+      "text": "agent:needs-human: AGENTS.md: name check-brick and the new-brick loop; a test catches CLI drift"
+    },
+    {
+      "check": "NEEDSHUMAN",
+      "repo": "bricks",
+      "number": 72,
+      "text": "agent:needs-human: bricks new: scaffolds that pass check-brick / check as written, and never overwrite a file"
+    },
+    {
+      "check": "NEEDSHUMAN",
+      "repo": "bricks",
+      "number": 70,
+      "text": "agent:needs-human: release.yml: publish bricks-engine to PyPI by trusted publishing"
+    },
+    {
+      "check": "NEEDSHUMAN",
+      "repo": "bricks",
+      "number": 63,
+      "text": "agent:needs-human: Release bricks 0.5.0 on PyPI"
+    },
+    {
+      "check": "NEEDSHUMAN",
+      "repo": "bricks",
+      "number": 25,
+      "text": "agent:needs-human: No packaging check in CI, so the #9 class of defect is untestable here"
+    },
+    {
+      "check": "NEEDSHUMAN",
+      "repo": "ops",
+      "number": 158,
+      "text": "agent:needs-human: PM wake-ups: start a short PM session on a #pm message or when the watchdog sees work"
+    },
+    {
+      "check": "NEEDSHUMAN",
+      "repo": "ops",
+      "number": 71,
+      "text": "agent:needs-human: pool: use the determlab-pool GitHub App token so PRs are bot-authored and the CTO can merge type A"
+    },
+    {
+      "check": "NEEDSHUMAN",
+      "repo": "ops",
+      "number": 58,
+      "text": "agent:needs-human: Wire guard_scope.py to scope_rules.py and add the Bash matcher (by hand, founder)"
+    },
+    {
+      "check": "NEEDSHUMAN",
+      "repo": "ops",
+      "number": 36,
+      "text": "agent:needs-human: A stopped coder resumes its own session (claude -p --resume) instead of a new coder starting cold"
+    },
+    {
+      "check": "NEEDSHUMAN",
+      "repo": "ops",
+      "number": 8,
+      "text": "agent:needs-human: guard_scope.py is blind to Bash — and it blocks the CMO from files the CMO owns"
+    },
+    {
+      "check": "NEEDSHUMAN",
+      "repo": "pytest-shal",
+      "number": 23,
+      "text": "agent:needs-human: Test the documented setup order: --shal-setup > setup.yaml > SHAL_SETUP"
+    },
+    {
+      "check": "NEEDSHUMAN",
+      "repo": "pytest-shal",
+      "number": 21,
+      "text": "agent:needs-human: Test the error messages of check() and the shal_unit marker"
+    },
+    {
+      "check": "NEEDSHUMAN",
+      "repo": "pytest-shal",
+      "number": 19,
+      "text": "agent:needs-human: Test the v1 flow: unit SN-1 then SN-2 into one store, one record per unit"
+    },
+    {
+      "check": "NEEDSHUMAN",
+      "repo": "pytest-shal",
+      "number": 10,
+      "text": "agent:needs-human: SIM_TOPOLOGY: add the shal,sim-psu device (id psu) to the sim rig"
+    },
+    {
+      "check": "NEEDSHUMAN",
+      "repo": "shal",
+      "number": 290,
+      "text": "agent:needs-human: Actuator labels: chamber set_temperature and Sonos playback/volume are actuator (ADR-001 Addendum 6)"
+    },
+    {
+      "check": "NEEDSHUMAN",
+      "repo": "shal",
+      "number": 289,
+      "text": "agent:needs-human: Conformance: 'binds no node' and 'catalog entry failed' name the fix, with tests"
+    },
+    {
+      "check": "NEEDSHUMAN",
+      "repo": "shal",
+      "number": 288,
+      "text": "agent:needs-human: Sim buses: a child with no sim model names the missing decorator; model_for raises a clear LookupError"
+    },
+    {
+      "check": "NEEDSHUMAN",
+      "repo": "shal",
+      "number": 287,
+      "text": "agent:needs-human: Record store: a corrupt file or an id that is not the file name raises RecordError naming the file"
+    },
+    {
+      "check": "NEEDSHUMAN",
+      "repo": "shal",
+      "number": 283,
+      "text": "agent:needs-human: Driver skills: generate-driver certifies with shal check --json; a test checks every shal command in the skills"
+    },
+    {
+      "check": "NEEDSHUMAN",
+      "repo": "shal",
+      "number": 282,
+      "text": "agent:needs-human: shal probe/tools text errors: one line that names a real fix, no traceback, no examples/ path"
+    },
+    {
+      "check": "NEEDSHUMAN",
+      "repo": "shal",
+      "number": 281,
+      "text": "agent:needs-human: Jig sample: print the next step and test reading one unit back with shal records --unit"
+    },
+    {
+      "check": "NEEDSHUMAN",
+      "repo": "shal",
+      "number": 276,
+      "text": "agent:needs-human: PSU setpoints are actuator: fix SDK.md, the build-driver skill and the reference drivers (ruling #274)"
+    },
+    {
+      "check": "NEEDSHUMAN",
+      "repo": "shal",
+      "number": 273,
+      "text": "agent:needs-human: CATALOG.md and README list every shipped shal,* compatible (sim-psu); quoted PyPI install lines"
+    },
+    {
+      "check": "NEEDSHUMAN",
+      "repo": "shal",
+      "number": 272,
+      "text": "agent:needs-human: --json errors: shal call / check / records print {ok: false, error} on stdout; records fix names a working command"
+    },
+    {
+      "check": "NEEDSHUMAN",
+      "repo": "shal",
+      "number": 238,
+      "text": "agent:needs-human: Routes M1 (5/5): bus contract for delivered=no, AGENTS.md routes paragraph, M1 exit test in CI"
+    },
+    {
+      "check": "NEEDSHUMAN",
+      "repo": "shal",
+      "number": 9,
+      "text": "agent:needs-human: Onboarding guide: sim → real rack (docs/GUIDE.md)"
+    },
+    {
+      "check": "IDLE",
+      "repo": "shal",
+      "number": 0,
+      "text": "2 issue(s) at agent:go, nothing at agent:working"
+    }
+  ],
+  "who_works": [
+    {
+      "repo": "adk-lab",
+      "number": 33,
+      "title": "QA mode: run_adk.py --qa (adk-lab#31, RFC-001 D/P3b)",
+      "via": "PR from agent/31-r1"
+    },
+    {
+      "repo": "agora",
+      "number": 55,
+      "title": "#all: one stream where the founder talks to every role — a role wakes only when mentioned,",
+      "via": "agent:working"
+    },
+    {
+      "repo": "bricks",
+      "number": 71,
+      "title": "release.yml: publish bricks-engine to PyPI by trusted publishing",
+      "via": "PR from agent/70-r1"
+    },
+    {
+      "repo": "bricks",
+      "number": 76,
+      "title": "AGENTS.md: name check-brick and the new-brick loop; a test catches CLI drift (#73)",
+      "via": "PR from agent/73-r1"
+    },
+    {
+      "repo": "bricks",
+      "number": 77,
+      "title": "bricks new: scaffolds pass check-brick / check as written, never overwrite a file (#72)",
+      "via": "PR from agent/72-r1"
+    },
+    {
+      "repo": "bricks",
+      "number": 78,
+      "title": "Test every shipped blueprint: check and run each file in blueprints/ (#74)",
+      "via": "PR from agent/74-r1"
+    },
+    {
+      "repo": "bricks",
+      "number": 80,
+      "title": "Write test fixtures with encoding=utf-8 (#79)",
+      "via": "PR from agent/79-r1"
+    },
+    {
+      "repo": "bricks",
+      "number": 84,
+      "title": "bricks dry-run --json, the same shape as check --json",
+      "via": "PR from agent/81-r1"
+    },
+    {
+      "repo": "bricks",
+      "number": 85,
+      "title": "Refuse a blank unit id in bricks run --unit and run_for_unit",
+      "via": "PR from agent/82-r1"
+    },
+    {
+      "repo": "bricks",
+      "number": 86,
+      "title": "Test the five check-brick checks that have no test (#83)",
+      "via": "PR from agent/83-r1"
+    },
+    {
+      "repo": "ops",
+      "number": 194,
+      "title": "P1 follow-ups: dashboard/queue read blockers, paginate the fetch past 100",
+      "via": "PR from agent/187-r1"
+    },
+    {
+      "repo": "ops",
+      "number": 195,
+      "title": "ops lane P3: the review worker (ops#189, RFC-001 Addendum D)",
+      "via": "PR from agent/189-r1"
+    },
+    {
+      "repo": "ops",
+      "number": 209,
+      "title": "ops lane P3b: the QA run (ops#201, RFC-001 Addendum D)",
+      "via": "PR from agent/201-r1"
+    },
+    {
+      "repo": "ops",
+      "number": 210,
+      "title": "ops lane P5: the merge worker, off by default (ops#203)",
+      "via": "PR from agent/203-r1"
+    },
+    {
+      "repo": "ops",
+      "number": 211,
+      "title": "ops lane P4: rounds on the same branch (ops#202, RFC-001 Addendum D)",
+      "via": "PR from agent/202-r1"
+    },
+    {
+      "repo": "ops",
+      "number": 212,
+      "title": "ops-bricks venv: pin to a fresh origin/main of bricks, record the sha (ops#207)",
+      "via": "PR from agent/207-r1"
+    },
+    {
+      "repo": "ops",
+      "number": 214,
+      "title": "Bricks shadow: pre-flight every new head and record on close, from the pool daemon (ops#20",
+      "via": "PR from agent/205-r1"
+    },
+    {
+      "repo": "ops",
+      "number": 215,
+      "title": "ops lane P6: stuck work is reported (ops#204)",
+      "via": "PR from agent/204-r1"
+    },
+    {
+      "repo": "ops",
+      "number": 217,
+      "title": "Pool cleanup follow-ups: cleared litter is a note; the daemon runs from its own pool-src (",
+      "via": "PR from agent/193-r1"
+    },
+    {
+      "repo": "ops",
+      "number": 219,
+      "title": "tests: claude --version probe answer test gets a 60 s budget (ops#218)",
+      "via": "PR from agent/218-r1"
+    },
+    {
+      "repo": "pytest-shal",
+      "number": 20,
+      "title": "Test the v1 flow: unit SN-1 then SN-2 into one store",
+      "via": "PR from agent/19-r1"
+    },
+    {
+      "repo": "pytest-shal",
+      "number": 22,
+      "title": "Test the error messages of check() and the shal_unit marker",
+      "via": "PR from agent/21-r1"
+    },
+    {
+      "repo": "pytest-shal",
+      "number": 24,
+      "title": "Test the documented setup order: --shal-setup > setup.yaml > SHAL_SETUP",
+      "via": "PR from agent/23-r1"
+    },
+    {
+      "repo": "shal",
+      "number": 263,
+      "title": "Onboarding guide: sim → real rack (docs/GUIDE.md)",
+      "via": "PR from agent/9-r2"
+    },
+    {
+      "repo": "shal",
+      "number": 270,
+      "title": "Routes M1 (5/5): bus contract, AGENTS.md routes paragraph, M1 exit test",
+      "via": "PR from agent/238-r1"
+    },
+    {
+      "repo": "shal",
+      "number": 277,
+      "title": "--json errors: call/check/records print {ok: false, error} on stdout (#272)",
+      "via": "PR from agent/272-r1"
+    },
+    {
+      "repo": "shal",
+      "number": 278,
+      "title": "PSU setpoints are actuator: SDK.md, build-driver skill, reference drivers (#276)",
+      "via": "PR from agent/276-r1"
+    },
+    {
+      "repo": "shal",
+      "number": 280,
+      "title": "CATALOG.md and README list every shipped shal,* compatible; quoted PyPI install lines (#27",
+      "via": "PR from agent/273-r1"
+    },
+    {
+      "repo": "shal",
+      "number": 284,
+      "title": "Jig sample: print the next step and test reading one unit back with shal records --unit",
+      "via": "PR from agent/281-r2"
+    },
+    {
+      "repo": "shal",
+      "number": 285,
+      "title": "shal probe/tools: one-line load errors that name a real fix (#282)",
+      "via": "PR from agent/282-r1"
+    },
+    {
+      "repo": "shal",
+      "number": 286,
+      "title": "Driver skills: certify with shal check --json; test every shal command in skills (#283)",
+      "via": "PR from agent/283-r1"
+    },
+    {
+      "repo": "shal",
+      "number": 291,
+      "title": "Sim buses: name the missing sim-model decorator; model_for raises LookupError (#288)",
+      "via": "PR from agent/288-r1"
+    },
+    {
+      "repo": "shal",
+      "number": 292,
+      "title": "Record store: corrupt file or id/name mismatch raises RecordError naming the file (#287)",
+      "via": "PR from agent/287-r1"
+    },
+    {
+      "repo": "shal",
+      "number": 293,
+      "title": "Actuator labels: chamber set_temperature and Sonos playback/volume (#290)",
+      "via": "PR from agent/290-r1"
+    },
+    {
+      "repo": "shal",
+      "number": 294,
+      "title": "Conformance: 'binds no node' and 'catalog entry failed' name the fix (#289)",
+      "via": "PR from agent/289-r1"
+    }
+  ],
+  "roles": [
+    {
+      "role": "CTO",
+      "state": "idle",
+      "doing": "Big feature: the E2E agent-test harness — drivers against b…",
+      "ref": "ops#52",
+      "url": "https://github.com/determlab/ops/issues/52"
+    },
+    {
+      "role": "CMO",
+      "state": "idle",
+      "doing": "CMO: verify the market table of channel pairs for the route…",
+      "ref": "ops#49",
+      "url": "https://github.com/determlab/ops/issues/49"
+    },
+    {
+      "role": "COO",
+      "state": "off",
+      "doing": "אין משימה פתוחה",
+      "ref": null,
+      "url": null
+    },
+    {
+      "role": "Pool",
+      "state": "idle",
+      "doing": "אין ריצה פעילה",
+      "ref": null,
+      "url": null
+    }
+  ],
+  "live": [],
+  "timeline": {
+    "from": "2026-09-28T19:11:53Z",
+    "now": "2026-09-29T19:11:53Z",
+    "runs": [
+      {
+        "ref": "ops#57",
+        "round": 4,
+        "start": "2026-09-28T19:09:37Z",
+        "end": "2026-09-28T19:23:21Z",
+        "outcome": "RunEnded",
+        "live": false,
+        "url": "https://github.com/determlab/ops/issues/57"
+      },
+      {
+        "ref": "ops#116",
+        "round": 6,
+        "start": "2026-09-28T19:09:42Z",
+        "end": "2026-09-28T19:23:51Z",
+        "outcome": "RunEnded",
+        "live": false,
+        "url": "https://github.com/determlab/ops/issues/116"
+      },
+      {
+        "ref": "ops#141",
+        "round": 2,
+        "start": "2026-09-28T19:09:48Z",
+        "end": "2026-09-28T19:24:59Z",
+        "outcome": "RunEnded",
+        "live": false,
+        "url": "https://github.com/determlab/ops/issues/141"
+      },
+      {
+        "ref": "bricks#50",
+        "round": 4,
+        "start": "2026-09-28T19:09:54Z",
+        "end": "2026-09-28T19:12:22Z",
+        "outcome": "RunEnded",
+        "live": false,
+        "url": "https://github.com/determlab/bricks/issues/50"
+      },
+      {
+        "ref": "agora#83",
+        "round": 1,
+        "start": "2026-09-28T19:24:20Z",
+        "end": "2026-09-28T19:26:42Z",
+        "outcome": "RunEnded",
+        "live": false,
+        "url": "https://github.com/determlab/agora/issues/83"
+      },
+      {
+        "ref": "ops#111",
+        "round": 2,
+        "start": "2026-09-28T19:24:27Z",
+        "end": "2026-09-28T19:27:40Z",
+        "outcome": "RunEnded",
+        "live": false,
+        "url": "https://github.com/determlab/ops/issues/111"
+      },
+      {
+        "ref": "ops#57",
+        "round": 5,
+        "start": "2026-09-28T19:29:58Z",
+        "end": "2026-09-28T19:37:09Z",
+        "outcome": "RunEnded",
+        "live": false,
+        "url": "https://github.com/determlab/ops/issues/57"
+      },
+      {
+        "ref": "ops#146",
+        "round": 1,
+        "start": "2026-09-28T19:30:05Z",
+        "end": "2026-09-28T19:59:54Z",
+        "outcome": "RunEnded",
+        "live": false,
+        "url": "https://github.com/determlab/ops/issues/146"
+      },
+      {
+        "ref": "ops#112",
+        "round": 1,
+        "start": "2026-09-28T19:39:36Z",
+        "end": "2026-09-28T19:58:45Z",
+        "outcome": "RunEnded",
+        "live": false,
+        "url": "https://github.com/determlab/ops/issues/112"
+      },
+      {
+        "ref": "shal#261",
+        "round": 1,
+        "start": "2026-09-28T20:03:53Z",
+        "end": "2026-09-28T20:08:55Z",
+        "outcome": "RunEnded",
+        "live": false,
+        "url": "https://github.com/determlab/shal/issues/261"
+      },
+      {
+        "ref": "bricks#59",
+        "round": 1,
+        "start": "2026-09-28T20:03:59Z",
+        "end": "2026-09-28T20:07:32Z",
+        "outcome": "NoPR",
+        "live": false,
+        "url": "https://github.com/determlab/bricks/issues/59"
+      },
+      {
+        "ref": "adk-lab#15",
+        "round": 1,
+        "start": "2026-09-28T20:08:55Z",
+        "end": "2026-09-28T20:15:25Z",
+        "outcome": "RunEnded",
+        "live": false,
+        "url": "https://github.com/determlab/adk-lab/issues/15"
+      },
+      {
+        "ref": "bricks#58",
+        "round": 1,
+        "start": "2026-09-28T20:10:37Z",
+        "end": "2026-09-28T20:11:48Z",
+        "outcome": "RunEnded",
+        "live": false,
+        "url": "https://github.com/determlab/bricks/issues/58"
+      },
+      {
+        "ref": "bricks#59",
+        "round": 2,
+        "start": "2026-09-28T20:17:05Z",
+        "end": "2026-09-28T20:21:50Z",
+        "outcome": "RunEnded",
+        "live": false,
+        "url": "https://github.com/determlab/bricks/issues/59"
+      },
+      {
+        "ref": "agora#74",
+        "round": 2,
+        "start": "2026-09-28T20:17:11Z",
+        "end": "2026-09-28T20:28:21Z",
+        "outcome": "NoPR",
+        "live": false,
+        "url": "https://github.com/determlab/agora/issues/74"
+      },
+      {
+        "ref": "ops#155",
+        "round": 1,
+        "start": "2026-09-28T20:23:08Z",
+        "end": "2026-09-28T21:32:26Z",
+        "outcome": "NoPR",
+        "live": false,
+        "url": "https://github.com/determlab/ops/issues/155"
+      },
+      {
+        "ref": "agora#104",
+        "round": 1,
+        "start": "2026-09-28T21:44:22Z",
+        "end": "2026-09-28T21:46:00Z",
+        "outcome": "NoPR",
+        "live": false,
+        "url": "https://github.com/determlab/agora/issues/104"
+      },
+      {
+        "ref": "agora#104",
+        "round": 2,
+        "start": "2026-09-28T22:06:40Z",
+        "end": "2026-09-28T22:08:22Z",
+        "outcome": "NoPR",
+        "live": false,
+        "url": "https://github.com/determlab/agora/issues/104"
+      },
+      {
+        "ref": "ops#158",
+        "round": 1,
+        "start": "2026-09-28T22:06:45Z",
+        "end": "2026-09-28T22:21:11Z",
+        "outcome": "NoPR",
+        "live": false,
+        "url": "https://github.com/determlab/ops/issues/158"
+      },
+      {
+        "ref": "ops#158",
+        "round": 2,
+        "start": "2026-09-28T22:22:21Z",
+        "end": "2026-09-28T22:23:00Z",
+        "outcome": "Limited",
+        "live": false,
+        "url": "https://github.com/determlab/ops/issues/158"
+      },
+      {
+        "ref": "agora#104",
+        "round": 3,
+        "start": "2026-09-28T23:31:42Z",
+        "end": "2026-09-28T23:40:07Z",
+        "outcome": "NoPR",
+        "live": false,
+        "url": "https://github.com/determlab/agora/issues/104"
+      },
+      {
+        "ref": "ops#158",
+        "round": 3,
+        "start": "2026-09-28T23:31:49Z",
+        "end": "2026-09-28T23:33:47Z",
+        "outcome": "NoPR",
+        "live": false,
+        "url": "https://github.com/determlab/ops/issues/158"
+      },
+      {
+        "ref": "pytest-shal#10",
+        "round": 1,
+        "start": "2026-09-29T00:44:04Z",
+        "end": "2026-09-29T00:45:17Z",
+        "outcome": "RunEnded",
+        "live": false,
+        "url": "https://github.com/determlab/pytest-shal/issues/10"
+      },
+      {
+        "ref": "adk-lab#15",
+        "round": 2,
+        "start": "2026-09-29T00:47:10Z",
+        "end": "2026-09-29T00:49:19Z",
+        "outcome": "NoPR",
+        "live": false,
+        "url": "https://github.com/determlab/adk-lab/issues/15"
+      },
+      {
+        "ref": "bricks#63",
+        "round": 1,
+        "start": "2026-09-29T01:01:56Z",
+        "end": "2026-09-29T01:03:17Z",
+        "outcome": "RunEnded",
+        "live": false,
+        "url": "https://github.com/determlab/bricks/issues/63"
+      },
+      {
+        "ref": "shal#238",
+        "round": 1,
+        "start": "2026-09-29T01:08:19Z",
+        "end": "2026-09-29T01:13:25Z",
+        "outcome": "NoPR",
+        "live": false,
+        "url": "https://github.com/determlab/shal/issues/238"
+      },
+      {
+        "ref": "bricks#25",
+        "round": 1,
+        "start": "2026-09-29T01:08:26Z",
+        "end": "2026-09-29T01:09:47Z",
+        "outcome": "RunEnded",
+        "live": false,
+        "url": "https://github.com/determlab/bricks/issues/25"
+      },
+      {
+        "ref": "shal#9",
+        "round": 1,
+        "start": "2026-09-29T01:08:33Z",
+        "end": "2026-09-29T01:09:34Z",
+        "outcome": "NoPR",
+        "live": false,
+        "url": "https://github.com/determlab/shal/issues/9"
+      },
+      {
+        "ref": "shal#9",
+        "round": 2,
+        "start": "2026-09-29T01:11:03Z",
+        "end": "2026-09-29T01:18:13Z",
+        "outcome": "RunEnded",
+        "live": false,
+        "url": "https://github.com/determlab/shal/issues/9"
+      },
+      {
+        "ref": "shal#264",
+        "round": 1,
+        "start": "2026-09-29T01:18:24Z",
+        "end": "2026-09-29T01:21:13Z",
+        "outcome": "RunEnded",
+        "live": false,
+        "url": "https://github.com/determlab/shal/issues/264"
+      },
+      {
+        "ref": "adk-lab#17",
+        "round": 1,
+        "start": "2026-09-29T01:20:21Z",
+        "end": "2026-09-29T01:23:35Z",
+        "outcome": "RunEnded",
+        "live": false,
+        "url": "https://github.com/determlab/adk-lab/issues/17"
+      },
+      {
+        "ref": "bricks#64",
+        "round": 1,
+        "start": "2026-09-29T02:40:57Z",
+        "end": "2026-09-29T02:46:47Z",
+        "outcome": "RunEnded",
+        "live": false,
+        "url": "https://github.com/determlab/bricks/issues/64"
+      },
+      {
+        "ref": "shal#266",
+        "round": 1,
+        "start": "2026-09-29T02:47:44Z",
+        "end": "2026-09-29T02:50:04Z",
+        "outcome": "RunEnded",
+        "live": false,
+        "url": "https://github.com/determlab/shal/issues/266"
+      },
+      {
+        "ref": "bricks#65",
+        "round": 1,
+        "start": "2026-09-29T02:52:08Z",
+        "end": "2026-09-29T02:55:23Z",
+        "outcome": "RunEnded",
+        "live": false,
+        "url": "https://github.com/determlab/bricks/issues/65"
+      },
+      {
+        "ref": "pytest-shal#15",
+        "round": 1,
+        "start": "2026-09-29T02:52:25Z",
+        "end": "2026-09-29T02:58:16Z",
+        "outcome": "NoPR",
+        "live": false,
+        "url": "https://github.com/determlab/pytest-shal/issues/15"
+      },
+      {
+        "ref": "bricks#70",
+        "round": 1,
+        "start": "2026-09-29T04:44:42Z",
+        "end": "2026-09-29T04:47:21Z",
+        "outcome": "RunEnded",
+        "live": false,
+        "url": "https://github.com/determlab/bricks/issues/70"
+      },
+      {
+        "ref": "bricks#72",
+        "round": 1,
+        "start": "2026-09-29T10:03:00Z",
+        "end": "2026-09-29T10:10:28Z",
+        "outcome": "RunEnded",
+        "live": false,
+        "url": "https://github.com/determlab/bricks/issues/72"
+      },
+      {
+        "ref": "shal#272",
+        "round": 1,
+        "start": "2026-09-29T10:03:09Z",
+        "end": "2026-09-29T10:10:42Z",
+        "outcome": "RunEnded",
+        "live": false,
+        "url": "https://github.com/determlab/shal/issues/272"
+      },
+      {
+        "ref": "bricks#73",
+        "round": 1,
+        "start": "2026-09-29T10:03:17Z",
+        "end": "2026-09-29T10:10:28Z",
+        "outcome": "RunEnded",
+        "live": false,
+        "url": "https://github.com/determlab/bricks/issues/73"
+      },
+      {
+        "ref": "shal#276",
+        "round": 1,
+        "start": "2026-09-29T10:11:47Z",
+        "end": "2026-09-29T10:21:17Z",
+        "outcome": "RunEnded",
+        "live": false,
+        "url": "https://github.com/determlab/shal/issues/276"
+      },
+      {
+        "ref": "bricks#74",
+        "round": 1,
+        "start": "2026-09-29T10:14:33Z",
+        "end": "2026-09-29T10:20:34Z",
+        "outcome": "RunEnded",
+        "live": false,
+        "url": "https://github.com/determlab/bricks/issues/74"
+      },
+      {
+        "ref": "pytest-shal#19",
+        "round": 1,
+        "start": "2026-09-29T10:14:41Z",
+        "end": "2026-09-29T10:18:12Z",
+        "outcome": "RunEnded",
+        "live": false,
+        "url": "https://github.com/determlab/pytest-shal/issues/19"
+      },
+      {
+        "ref": "shal#273",
+        "round": 1,
+        "start": "2026-09-29T10:19:23Z",
+        "end": "2026-09-29T10:24:53Z",
+        "outcome": "RunEnded",
+        "live": false,
+        "url": "https://github.com/determlab/shal/issues/273"
+      },
+      {
+        "ref": "bricks#79",
+        "round": 1,
+        "start": "2026-09-29T10:23:13Z",
+        "end": "2026-09-29T10:30:12Z",
+        "outcome": "RunEnded",
+        "live": false,
+        "url": "https://github.com/determlab/bricks/issues/79"
+      },
+      {
+        "ref": "shal#281",
+        "round": 1,
+        "start": "2026-09-29T11:09:49Z",
+        "end": "2026-09-29T11:11:04Z",
+        "outcome": "Limited",
+        "live": false,
+        "url": "https://github.com/determlab/shal/issues/281"
+      },
+      {
+        "ref": "shal#281",
+        "round": 2,
+        "start": "2026-09-29T14:41:31Z",
+        "end": "2026-09-29T14:47:21Z",
+        "outcome": "RunEnded",
+        "live": false,
+        "url": "https://github.com/determlab/shal/issues/281"
+      },
+      {
+        "ref": "shal#282",
+        "round": 1,
+        "start": "2026-09-29T14:41:39Z",
+        "end": "2026-09-29T14:50:07Z",
+        "outcome": "RunEnded",
+        "live": false,
+        "url": "https://github.com/determlab/shal/issues/282"
+      },
+      {
+        "ref": "shal#283",
+        "round": 1,
+        "start": "2026-09-29T14:41:48Z",
+        "end": "2026-09-29T14:53:43Z",
+        "outcome": "RunEnded",
+        "live": false,
+        "url": "https://github.com/determlab/shal/issues/283"
+      },
+      {
+        "ref": "bricks#81",
+        "round": 1,
+        "start": "2026-09-29T14:48:26Z",
+        "end": "2026-09-29T14:53:31Z",
+        "outcome": "RunEnded",
+        "live": false,
+        "url": "https://github.com/determlab/bricks/issues/81"
+      },
+      {
+        "ref": "bricks#82",
+        "round": 1,
+        "start": "2026-09-29T14:52:09Z",
+        "end": "2026-09-29T14:58:10Z",
+        "outcome": "RunEnded",
+        "live": false,
+        "url": "https://github.com/determlab/bricks/issues/82"
+      },
+      {
+        "ref": "bricks#83",
+        "round": 1,
+        "start": "2026-09-29T14:54:40Z",
+        "end": "2026-09-29T15:02:05Z",
+        "outcome": "RunEnded",
+        "live": false,
+        "url": "https://github.com/determlab/bricks/issues/83"
+      },
+      {
+        "ref": "pytest-shal#21",
+        "round": 1,
+        "start": "2026-09-29T15:08:25Z",
+        "end": "2026-09-29T15:12:40Z",
+        "outcome": "RunEnded",
+        "live": false,
+        "url": "https://github.com/determlab/pytest-shal/issues/21"
+      },
+      {
+        "ref": "shal#287",
+        "round": 1,
+        "start": "2026-09-29T15:13:52Z",
+        "end": "2026-09-29T15:22:57Z",
+        "outcome": "RunEnded",
+        "live": false,
+        "url": "https://github.com/determlab/shal/issues/287"
+      },
+      {
+        "ref": "shal#288",
+        "round": 1,
+        "start": "2026-09-29T15:13:59Z",
+        "end": "2026-09-29T15:21:12Z",
+        "outcome": "RunEnded",
+        "live": false,
+        "url": "https://github.com/determlab/shal/issues/288"
+      },
+      {
+        "ref": "shal#290",
+        "round": 1,
+        "start": "2026-09-29T15:22:51Z",
+        "end": "2026-09-29T15:32:49Z",
+        "outcome": "RunEnded",
+        "live": false,
+        "url": "https://github.com/determlab/shal/issues/290"
+      },
+      {
+        "ref": "shal#289",
+        "round": 1,
+        "start": "2026-09-29T15:24:16Z",
+        "end": "2026-09-29T15:32:49Z",
+        "outcome": "RunEnded",
+        "live": false,
+        "url": "https://github.com/determlab/shal/issues/289"
+      },
+      {
+        "ref": "pytest-shal#23",
+        "round": 1,
+        "start": "2026-09-29T15:34:23Z",
+        "end": "2026-09-29T15:39:44Z",
+        "outcome": "RunEnded",
+        "live": false,
+        "url": "https://github.com/determlab/pytest-shal/issues/23"
+      }
+    ],
+    "merges": [
+      {
+        "ref": "bricks#56",
+        "title": "bricks check-brick: the ADK check for a brick, plus the new-brick scaffold fix and I3 in…",
+        "at": "2026-09-28T19:13:11Z",
+        "url": "https://github.com/determlab/bricks/pull/56"
+      },
+      {
+        "ref": "bricks#57",
+        "title": "psu_limits blueprint: the first test blueprint, verified (#50)",
+        "at": "2026-09-28T19:21:04Z",
+        "url": "https://github.com/determlab/bricks/pull/57"
+      },
+      {
+        "ref": "ops#148",
+        "title": "pool: product-share floor live - claim_order --wanted/--state, worker + daemon notice (op…",
+        "at": "2026-09-28T19:28:16Z",
+        "url": "https://github.com/determlab/ops/pull/148"
+      },
+      {
+        "ref": "ops#150",
+        "title": "bricks pre-flight: widen the type B file list (ops#98 must come out B)",
+        "at": "2026-09-28T19:32:09Z",
+        "url": "https://github.com/determlab/ops/pull/150"
+      },
+      {
+        "ref": "ops#149",
+        "title": "shadow tally line in the dashboard and #pool status (ops#141)",
+        "at": "2026-09-28T19:37:45Z",
+        "url": "https://github.com/determlab/ops/pull/149"
+      },
+      {
+        "ref": "ops#151",
+        "title": "scope_rules.py: pure write-scope rules for the guard + tests (#57)",
+        "at": "2026-09-28T19:42:12Z",
+        "url": "https://github.com/determlab/ops/pull/151"
+      },
+      {
+        "ref": "agora#101",
+        "title": "dashboard panel: port the approved mockup",
+        "at": "2026-09-28T20:10:40Z",
+        "url": "https://github.com/determlab/agora/pull/101"
+      },
+      {
+        "ref": "shal#262",
+        "title": "sim-psu: optional current_limit (constant-current mode) (#261)",
+        "at": "2026-09-28T20:16:12Z",
+        "url": "https://github.com/determlab/shal/pull/262"
+      },
+      {
+        "ref": "pytest-shal#14",
+        "title": "Tighten the fence: protect approve.py and plugin.py, add mypy --strict to lint",
+        "at": "2026-09-28T20:16:52Z",
+        "url": "https://github.com/determlab/pytest-shal/pull/14"
+      },
+      {
+        "ref": "adk-lab#10",
+        "title": "The wall reads the ADK reference set from the installed package (pyshal >=0.3,<0.5) (#8)",
+        "at": "2026-09-28T20:17:29Z",
+        "url": "https://github.com/determlab/adk-lab/pull/10"
+      },
+      {
+        "ref": "shal#255",
+        "title": "shal records: read the record store from the CLI (#251)",
+        "at": "2026-09-28T20:23:34Z",
+        "url": "https://github.com/determlab/shal/pull/255"
+      },
+      {
+        "ref": "bricks#61",
+        "title": "Every G1 clock/random brick declares idempotent=False explicitly",
+        "at": "2026-09-28T20:24:29Z",
+        "url": "https://github.com/determlab/bricks/pull/61"
+      },
+      {
+        "ref": "shal#259",
+        "title": "chore(release): v0.4.0",
+        "at": "2026-09-28T21:35:29Z",
+        "url": "https://github.com/determlab/shal/pull/259"
+      },
+      {
+        "ref": "bricks#62",
+        "title": "run_for_unit(): one public call that runs a blueprint for a unit and returns its verdict…",
+        "at": "2026-09-28T21:38:30Z",
+        "url": "https://github.com/determlab/bricks/pull/62"
+      },
+      {
+        "ref": "ops#156",
+        "title": "tokens producer: dashboard --tokens-out + hourly watchdog scan (#155)",
+        "at": "2026-09-28T21:54:07Z",
+        "url": "https://github.com/determlab/ops/pull/156"
+      },
+      {
+        "ref": "agora#105",
+        "title": "dashboard: full-width board view with chat/board switch",
+        "at": "2026-09-28T22:16:26Z",
+        "url": "https://github.com/determlab/agora/pull/105"
+      },
+      {
+        "ref": "agora#106",
+        "title": "chat: add a PM stream/bot to setup_streams.py (#104)",
+        "at": "2026-09-29T00:05:42Z",
+        "url": "https://github.com/determlab/agora/pull/106"
+      },
+      {
+        "ref": "ops#165",
+        "title": "ops lane: split POOL_REPOS (claimable) from WATCHED_REPOS so the pool skips ops and agora",
+        "at": "2026-09-29T00:47:46Z",
+        "url": "https://github.com/determlab/ops/pull/165"
+      },
+      {
+        "ref": "agora#107",
+        "title": "chat: archive (hide) streams and topics, keep history",
+        "at": "2026-09-29T01:12:17Z",
+        "url": "https://github.com/determlab/agora/pull/107"
+      },
+      {
+        "ref": "ops#170",
+        "title": "worker.ps1: tell pool runs the allowed Bash forms (ops #169)",
+        "at": "2026-09-29T01:30:37Z",
+        "url": "https://github.com/determlab/ops/pull/170"
+      },
+      {
+        "ref": "agora#108",
+        "title": "chat: unread messages — per-user read state, sidebar bubbles, tab title",
+        "at": "2026-09-29T01:51:36Z",
+        "url": "https://github.com/determlab/agora/pull/108"
+      },
+      {
+        "ref": ".github#2",
+        "title": "Org issue forms: feature, bug, small, release",
+        "at": "2026-09-29T01:52:19Z",
+        "url": "https://github.com/determlab/.github/pull/2"
+      },
+      {
+        "ref": ".github#4",
+        "title": "Issue templates: add a required how-to-test field (#3)",
+        "at": "2026-09-29T02:06:13Z",
+        "url": "https://github.com/determlab/.github/pull/4"
+      },
+      {
+        "ref": "ops#177",
+        "title": "ops lane P0: fix the pool (RFC-001 Addendum D)",
+        "at": "2026-09-29T02:31:56Z",
+        "url": "https://github.com/determlab/ops/pull/177"
+      },
+      {
+        "ref": "shal#268",
+        "title": "agent-loop config: auto_merge false, max_rounds 1",
+        "at": "2026-09-29T02:39:25Z",
+        "url": "https://github.com/determlab/shal/pull/268"
+      },
+      {
+        "ref": "bricks#67",
+        "title": "agent-loop config: auto_merge false, max_rounds 1",
+        "at": "2026-09-29T02:39:33Z",
+        "url": "https://github.com/determlab/bricks/pull/67"
+      },
+      {
+        "ref": "pytest-shal#17",
+        "title": "agent-loop config: auto_merge false, max_rounds 1",
+        "at": "2026-09-29T02:39:41Z",
+        "url": "https://github.com/determlab/pytest-shal/pull/17"
+      },
+      {
+        "ref": "adk-lab#16",
+        "title": "gate.py --json: the release gate's one verdict (#15)",
+        "at": "2026-09-29T02:44:47Z",
+        "url": "https://github.com/determlab/adk-lab/pull/16"
+      },
+      {
+        "ref": "adk-lab#18",
+        "title": "README: replace 'Status: empty' with the real status",
+        "at": "2026-09-29T02:44:57Z",
+        "url": "https://github.com/determlab/adk-lab/pull/18"
+      },
+      {
+        "ref": "bricks#68",
+        "title": "Rename package to bricks-engine, version 0.5.0",
+        "at": "2026-09-29T03:12:13Z",
+        "url": "https://github.com/determlab/bricks/pull/68"
+      },
+      {
+        "ref": "ops#153",
+        "title": "Work queue M1: claim_order reads blocked-by links; queue/why (RFC-001)",
+        "at": "2026-09-29T09:44:10Z",
+        "url": "https://github.com/determlab/ops/pull/153"
+      },
+      {
+        "ref": "ops#184",
+        "title": "dashboard: approvals cost field, decisions store, approve.py CLI (ops#176 backend)",
+        "at": "2026-09-29T09:44:24Z",
+        "url": "https://github.com/determlab/ops/pull/184"
+      },
+      {
+        "ref": "ops#185",
+        "title": "pool: clear known --body-file litter before worktree remove; daemon restarts on a source…",
+        "at": "2026-09-29T09:45:31Z",
+        "url": "https://github.com/determlab/ops/pull/185"
+      },
+      {
+        "ref": "shal#265",
+        "title": "AGENTS.md: install line matches PyPI 0.3.0",
+        "at": "2026-09-29T09:45:43Z",
+        "url": "https://github.com/determlab/shal/pull/265"
+      },
+      {
+        "ref": "shal#269",
+        "title": "Remove per-repo issue templates so the org templates apply",
+        "at": "2026-09-29T09:45:53Z",
+        "url": "https://github.com/determlab/shal/pull/269"
+      },
+      {
+        "ref": "bricks#69",
+        "title": "Remove per-repo issue templates so the org templates apply",
+        "at": "2026-09-29T09:46:00Z",
+        "url": "https://github.com/determlab/bricks/pull/69"
+      },
+      {
+        "ref": "pytest-shal#18",
+        "title": "Remove per-repo issue templates so the org templates apply",
+        "at": "2026-09-29T09:46:08Z",
+        "url": "https://github.com/determlab/pytest-shal/pull/18"
+      },
+      {
+        "ref": "adk-lab#13",
+        "title": "AGENTS.md at the root: what an agent needs to use adk-lab",
+        "at": "2026-09-29T09:46:16Z",
+        "url": "https://github.com/determlab/adk-lab/pull/13"
+      },
+      {
+        "ref": "ops#196",
+        "title": "worker: check claude --version before each claim; ClaudeUnavailable (ops#144)",
+        "at": "2026-09-29T09:46:51Z",
+        "url": "https://github.com/determlab/ops/pull/196"
+      },
+      {
+        "ref": "ops#183",
+        "title": "ops lane P2: the pre-flight tells the truth (ops#181, RFC-001 Addendum D)",
+        "at": "2026-09-29T09:47:03Z",
+        "url": "https://github.com/determlab/ops/pull/183"
+      },
+      {
+        "ref": "ops#191",
+        "title": "pool: fail loud on a missing pytest venv (#186); never crash on a locked worker.log (#188)",
+        "at": "2026-09-29T09:48:14Z",
+        "url": "https://github.com/determlab/ops/pull/191"
+      },
+      {
+        "ref": "ops#199",
+        "title": "dashboard page: no crash on a --no-tokens doc (ops#197)",
+        "at": "2026-09-29T09:48:25Z",
+        "url": "https://github.com/determlab/ops/pull/199"
+      },
+      {
+        "ref": "ops#190",
+        "title": "ops#182 step b: CI guard against a cloud PR touching a protected path",
+        "at": "2026-09-29T09:49:53Z",
+        "url": "https://github.com/determlab/ops/pull/190"
+      },
+      {
+        "ref": "adk-lab#30",
+        "title": "cases/station1: the rig, its control port and verify.py, oracle passing",
+        "at": "2026-09-29T09:50:02Z",
+        "url": "https://github.com/determlab/adk-lab/pull/30"
+      },
+      {
+        "ref": "agora#112",
+        "title": "dashboard: approvals carousel Yes/No/Later + tokens (ops#176), big-picture progress card…",
+        "at": "2026-09-29T18:39:09Z",
+        "url": "https://github.com/determlab/agora/pull/112"
+      },
+      {
+        "ref": "ops#192",
+        "title": "dashboard: big-picture progress block, live_line prev_end; status.py non-UTF-8 pool log f…",
+        "at": "2026-09-29T18:40:10Z",
+        "url": "https://github.com/determlab/ops/pull/192"
+      },
+      {
+        "ref": "ops#213",
+        "title": "test_issue_times: pin the clock so the tests stop failing after 2026-09-29 (ops#206)",
+        "at": "2026-09-29T18:40:39Z",
+        "url": "https://github.com/determlab/ops/pull/213"
+      }
+    ],
+    "decisions": null,
+    "notes": {
+      "decisions": "no decisions record yet (decisions.json is written by the first answer)"
+    }
+  },
+  "plan": {
+    "updated": "2026-09-29T19:07:37Z",
+    "age_min": 4,
+    "stale": false,
+    "5h": {
+      "percent": 89,
+      "resets_at": "2026-09-29T19:40:00Z",
+      "expired": false
+    },
+    "7d": {
+      "percent": 73,
+      "resets_at": "2026-10-04T21:00:00Z",
+      "expired": false
+    }
+  },
+  "queue": [
+    {
+      "ref": "shal#238",
+      "title": "Routes M1 (5/5): bus contract for delivered=no, AGENTS.md routes paragraph, M1 exit test…",
+      "priority": "p1",
+      "url": "https://github.com/determlab/shal/issues/238",
+      "claimed_now": false,
+      "needs_human": true
+    },
+    {
+      "ref": "bricks#70",
+      "title": "release.yml: publish bricks-engine to PyPI by trusted publishing",
+      "priority": "p1",
+      "url": "https://github.com/determlab/bricks/issues/70",
+      "claimed_now": false,
+      "needs_human": true
+    },
+    {
+      "ref": "bricks#72",
+      "title": "bricks new: scaffolds that pass check-brick / check as written, and never overwrite a file",
+      "priority": "p1",
+      "url": "https://github.com/determlab/bricks/issues/72",
+      "claimed_now": false,
+      "needs_human": true
+    },
+    {
+      "ref": "shal#272",
+      "title": "--json errors: shal call / check / records print {ok: false, error} on stdout; records fi…",
+      "priority": "p1",
+      "url": "https://github.com/determlab/shal/issues/272",
+      "claimed_now": false,
+      "needs_human": true
+    },
+    {
+      "ref": "shal#276",
+      "title": "PSU setpoints are actuator: fix SDK.md, the build-driver skill and the reference drivers…",
+      "priority": "p1",
+      "url": "https://github.com/determlab/shal/issues/276",
+      "claimed_now": false,
+      "needs_human": true
+    },
+    {
+      "ref": "bricks#79",
+      "title": "test_undeclared_io_exits_1 fails on Windows: fixtures written without UTF-8",
+      "priority": "p1",
+      "url": "https://github.com/determlab/bricks/issues/79",
+      "claimed_now": false,
+      "needs_human": true
+    },
+    {
+      "ref": "shal#290",
+      "title": "Actuator labels: chamber set_temperature and Sonos playback/volume are actuator (ADR-001…",
+      "priority": "p1",
+      "url": "https://github.com/determlab/shal/issues/290",
+      "claimed_now": false,
+      "needs_human": true
+    },
+    {
+      "ref": "bricks#74",
+      "title": "Test every shipped blueprint: check and run each file in blueprints/",
+      "priority": "p2",
+      "url": "https://github.com/determlab/bricks/issues/74",
+      "claimed_now": false,
+      "needs_human": true
+    },
+    {
+      "ref": "pytest-shal#19",
+      "title": "Test the v1 flow: unit SN-1 then SN-2 into one store, one record per unit",
+      "priority": "p2",
+      "url": "https://github.com/determlab/pytest-shal/issues/19",
+      "claimed_now": false,
+      "needs_human": true
+    },
+    {
+      "ref": "shal#273",
+      "title": "CATALOG.md and README list every shipped shal,* compatible (sim-psu); quoted PyPI install…",
+      "priority": "p2",
+      "url": "https://github.com/determlab/shal/issues/273",
+      "claimed_now": false,
+      "needs_human": true
+    },
+    {
+      "ref": "shal#275",
+      "title": "README: the Roadmap names v0.1.0, and four shipped commands are undocumented",
+      "priority": "p2",
+      "url": "https://github.com/determlab/shal/issues/275",
+      "claimed_now": false,
+      "needs_human": false
+    },
+    {
+      "ref": "shal#279",
+      "title": "--json error has two shapes (object in records, string in call/check): use the {type, mes…",
+      "priority": "p2",
+      "url": "https://github.com/determlab/shal/issues/279",
+      "claimed_now": false,
+      "needs_human": false
+    },
+    {
+      "ref": "shal#281",
+      "title": "Jig sample: print the next step and test reading one unit back with shal records --unit",
+      "priority": "p2",
+      "url": "https://github.com/determlab/shal/issues/281",
+      "claimed_now": false,
+      "needs_human": true
+    },
+    {
+      "ref": "shal#282",
+      "title": "shal probe/tools text errors: one line that names a real fix, no traceback, no examples/…",
+      "priority": "p2",
+      "url": "https://github.com/determlab/shal/issues/282",
+      "claimed_now": false,
+      "needs_human": true
+    },
+    {
+      "ref": "shal#283",
+      "title": "Driver skills: generate-driver certifies with shal check --json; a test checks every shal…",
+      "priority": "p2",
+      "url": "https://github.com/determlab/shal/issues/283",
+      "claimed_now": false,
+      "needs_human": true
+    },
+    {
+      "ref": "bricks#81",
+      "title": "bricks dry-run --json, the same shape as check --json",
+      "priority": "p2",
+      "url": "https://github.com/determlab/bricks/issues/81",
+      "claimed_now": false,
+      "needs_human": true
+    },
+    {
+      "ref": "bricks#82",
+      "title": "Refuse a blank unit id in bricks run --unit and run_for_unit",
+      "priority": "p2",
+      "url": "https://github.com/determlab/bricks/issues/82",
+      "claimed_now": false,
+      "needs_human": true
+    },
+    {
+      "ref": "bricks#83",
+      "title": "Test the five check-brick checks that have no test",
+      "priority": "p2",
+      "url": "https://github.com/determlab/bricks/issues/83",
+      "claimed_now": false,
+      "needs_human": true
+    },
+    {
+      "ref": "pytest-shal#21",
+      "title": "Test the error messages of check() and the shal_unit marker",
+      "priority": "p2",
+      "url": "https://github.com/determlab/pytest-shal/issues/21",
+      "claimed_now": false,
+      "needs_human": true
+    },
+    {
+      "ref": "shal#287",
+      "title": "Record store: a corrupt file or an id that is not the file name raises RecordError naming…",
+      "priority": "p2",
+      "url": "https://github.com/determlab/shal/issues/287",
+      "claimed_now": false,
+      "needs_human": true
+    },
+    {
+      "ref": "shal#288",
+      "title": "Sim buses: a child with no sim model names the missing decorator; model_for raises a clea…",
+      "priority": "p2",
+      "url": "https://github.com/determlab/shal/issues/288",
+      "claimed_now": false,
+      "needs_human": true
+    },
+    {
+      "ref": "shal#289",
+      "title": "Conformance: 'binds no node' and 'catalog entry failed' name the fix, with tests",
+      "priority": "p2",
+      "url": "https://github.com/determlab/shal/issues/289",
+      "claimed_now": false,
+      "needs_human": true
+    },
+    {
+      "ref": "pytest-shal#23",
+      "title": "Test the documented setup order: --shal-setup > setup.yaml > SHAL_SETUP",
+      "priority": "p2",
+      "url": "https://github.com/determlab/pytest-shal/issues/23",
+      "claimed_now": false,
+      "needs_human": true
+    },
+    {
+      "ref": "shal#9",
+      "title": "Onboarding guide: sim → real rack (docs/GUIDE.md)",
+      "priority": "p3",
+      "url": "https://github.com/determlab/shal/issues/9",
+      "claimed_now": false,
+      "needs_human": true
+    }
+  ],
+  "open_prs": [
+    {
+      "ref": "ops#194",
+      "title": "P1 follow-ups: dashboard/queue read blockers, paginate the fetch past 100",
+      "url": "https://github.com/determlab/ops/pull/194",
+      "draft": false,
+      "created": "2026-09-29T06:26:05Z",
+      "verdict": "RECOMMEND",
+      "type": "B"
+    },
+    {
+      "ref": "ops#195",
+      "title": "ops lane P3: the review worker (ops#189, RFC-001 Addendum D)",
+      "url": "https://github.com/determlab/ops/pull/195",
+      "draft": false,
+      "created": "2026-09-29T07:04:52Z",
+      "verdict": "CHANGES",
+      "type": "B"
+    },
+    {
+      "ref": "adk-lab#33",
+      "title": "QA mode: run_adk.py --qa (adk-lab#31, RFC-001 D/P3b)",
+      "url": "https://github.com/determlab/adk-lab/pull/33",
+      "draft": false,
+      "created": "2026-09-29T10:12:47Z",
+      "verdict": "RECOMMEND",
+      "type": "B"
+    },
+    {
+      "ref": "adk-lab#34",
+      "title": "cases/station1: agent-facing docs and expected_effects.yaml, oracle passing",
+      "url": "https://github.com/determlab/adk-lab/pull/34",
+      "draft": false,
+      "created": "2026-09-29T10:16:29Z",
+      "verdict": "RECOMMEND",
+      "type": "B"
+    },
+    {
+      "ref": "adk-lab#35",
+      "title": "cases/dmm: bench DMM over SCPI, harness on pyvisa-sim (#22)",
+      "url": "https://github.com/determlab/adk-lab/pull/35",
+      "draft": false,
+      "created": "2026-09-29T10:17:33Z",
+      "verdict": "RECOMMEND",
+      "type": "B"
+    },
+    {
+      "ref": "shal#278",
+      "title": "PSU setpoints are actuator: SDK.md, build-driver skill, reference drivers (#276)",
+      "url": "https://github.com/determlab/shal/pull/278",
+      "draft": false,
+      "created": "2026-09-29T10:20:44Z",
+      "verdict": "RECOMMEND",
+      "type": "B"
+    },
+    {
+      "ref": "adk-lab#37",
+      "title": "cases/pcf8574: the NXP PCF8574 GPIO expander case",
+      "url": "https://github.com/determlab/adk-lab/pull/37",
+      "draft": false,
+      "created": "2026-09-29T10:28:17Z",
+      "verdict": "RECOMMEND",
+      "type": "B"
+    },
+    {
+      "ref": "adk-lab#38",
+      "title": "cases/gh-actions: CI/CD service over http, recorded-responses mock",
+      "url": "https://github.com/determlab/adk-lab/pull/38",
+      "draft": false,
+      "created": "2026-09-29T10:30:39Z",
+      "verdict": "RECOMMEND",
+      "type": "B"
+    },
+    {
+      "ref": "ops#209",
+      "title": "ops lane P3b: the QA run (ops#201, RFC-001 Addendum D)",
+      "url": "https://github.com/determlab/ops/pull/209",
+      "draft": false,
+      "created": "2026-09-29T10:30:49Z",
+      "verdict": "RECOMMEND",
+      "type": "B"
+    },
+    {
+      "ref": "adk-lab#39",
+      "title": "cases/stepper: motion controller, TCP sim, gated motion (#25)",
+      "url": "https://github.com/determlab/adk-lab/pull/39",
+      "draft": false,
+      "created": "2026-09-29T10:33:23Z",
+      "verdict": "RECOMMEND",
+      "type": "B"
+    },
+    {
+      "ref": "adk-lab#40",
+      "title": "cases/relay-modbus: relay board over Modbus, harness on a real pymodbus server (#23)",
+      "url": "https://github.com/determlab/adk-lab/pull/40",
+      "draft": false,
+      "created": "2026-09-29T10:34:09Z",
+      "verdict": "RECOMMEND",
+      "type": "B"
+    },
+    {
+      "ref": "ops#210",
+      "title": "ops lane P5: the merge worker, off by default (ops#203)",
+      "url": "https://github.com/determlab/ops/pull/210",
+      "draft": false,
+      "created": "2026-09-29T10:35:47Z",
+      "verdict": "RECOMMEND",
+      "type": "B"
+    },
+    {
+      "ref": "agora#111",
+      "title": "chat: per-user-and-stream read floor, so joining or new-account history is not unread",
+      "url": "https://github.com/determlab/agora/pull/111",
+      "draft": false,
+      "created": "2026-09-29T10:36:22Z",
+      "verdict": "RECOMMEND",
+      "type": "B"
+    },
+    {
+      "ref": "adk-lab#41",
+      "title": "run_adk.py: a tier-2 case actually runs, via sim: and prompt-rig.md",
+      "url": "https://github.com/determlab/adk-lab/pull/41",
+      "draft": false,
+      "created": "2026-09-29T10:38:13Z",
+      "verdict": "RECOMMEND",
+      "type": "B"
+    },
+    {
+      "ref": "ops#211",
+      "title": "ops lane P4: rounds on the same branch (ops#202, RFC-001 Addendum D)",
+      "url": "https://github.com/determlab/ops/pull/211",
+      "draft": false,
+      "created": "2026-09-29T10:54:14Z",
+      "verdict": "CHANGES",
+      "type": "B"
+    },
+    {
+      "ref": "ops#212",
+      "title": "ops-bricks venv: pin to a fresh origin/main of bricks, record the sha (ops#207)",
+      "url": "https://github.com/determlab/ops/pull/212",
+      "draft": false,
+      "created": "2026-09-29T10:57:58Z",
+      "verdict": "CHANGES",
+      "type": "B"
+    },
+    {
+      "ref": "ops#214",
+      "title": "Bricks shadow: pre-flight every new head and record on close, from the pool daemon (ops#2…",
+      "url": "https://github.com/determlab/ops/pull/214",
+      "draft": false,
+      "created": "2026-09-29T11:16:55Z",
+      "verdict": "CHANGES",
+      "type": "B"
+    },
+    {
+      "ref": "ops#215",
+      "title": "ops lane P6: stuck work is reported (ops#204)",
+      "url": "https://github.com/determlab/ops/pull/215",
+      "draft": false,
+      "created": "2026-09-29T11:34:19Z",
+      "verdict": "RECOMMEND",
+      "type": "B"
+    },
+    {
+      "ref": "bricks#85",
+      "title": "Refuse a blank unit id in bricks run --unit and run_for_unit",
+      "url": "https://github.com/determlab/bricks/pull/85",
+      "draft": false,
+      "created": "2026-09-29T14:57:39Z",
+      "verdict": "RECOMMEND",
+      "type": "B"
+    },
+    {
+      "ref": "shal#291",
+      "title": "Sim buses: name the missing sim-model decorator; model_for raises LookupError (#288)",
+      "url": "https://github.com/determlab/shal/pull/291",
+      "draft": false,
+      "created": "2026-09-29T15:20:38Z",
+      "verdict": "RECOMMEND",
+      "type": "B"
+    },
+    {
+      "ref": "shal#292",
+      "title": "Record store: corrupt file or id/name mismatch raises RecordError naming the file (#287)",
+      "url": "https://github.com/determlab/shal/pull/292",
+      "draft": false,
+      "created": "2026-09-29T15:22:23Z",
+      "verdict": "RECOMMEND",
+      "type": "B"
+    },
+    {
+      "ref": "adk-lab#45",
+      "title": "cases: chamber set_temperature and PSU setpoints are actuator (ADR-001 Addendum 6)",
+      "url": "https://github.com/determlab/adk-lab/pull/45",
+      "draft": false,
+      "created": "2026-09-29T15:25:22Z",
+      "verdict": "RECOMMEND",
+      "type": "B"
+    },
+    {
+      "ref": "ops#217",
+      "title": "Pool cleanup follow-ups: cleared litter is a note; the daemon runs from its own pool-src…",
+      "url": "https://github.com/determlab/ops/pull/217",
+      "draft": false,
+      "created": "2026-09-29T15:28:41Z",
+      "verdict": "RECOMMEND",
+      "type": "B"
+    },
+    {
+      "ref": "shal#293",
+      "title": "Actuator labels: chamber set_temperature and Sonos playback/volume (#290)",
+      "url": "https://github.com/determlab/shal/pull/293",
+      "draft": false,
+      "created": "2026-09-29T15:32:15Z",
+      "verdict": "RECOMMEND",
+      "type": "B"
+    },
+    {
+      "ref": "adk-lab#46",
+      "title": "cases/postgres: a real PostgreSQL service, harness on a live PostgreSQL 16 server (#27)",
+      "url": "https://github.com/determlab/adk-lab/pull/46",
+      "draft": false,
+      "created": "2026-09-29T15:36:48Z",
+      "verdict": "RECOMMEND",
+      "type": "B"
+    },
+    {
+      "ref": "shal#263",
+      "title": "Onboarding guide: sim → real rack (docs/GUIDE.md)",
+      "url": "https://github.com/determlab/shal/pull/263",
+      "draft": false,
+      "created": "2026-09-29T01:17:40Z",
+      "verdict": null,
+      "type": null
+    },
+    {
+      "ref": "agora#109",
+      "title": "chat: unread bubbles never count archived rooms or pre-existing history, add mark-stream-…",
+      "url": "https://github.com/determlab/agora/pull/109",
+      "draft": false,
+      "created": "2026-09-29T02:31:33Z",
+      "verdict": "RECOMMEND",
+      "type": "A"
+    },
+    {
+      "ref": "bricks#71",
+      "title": "release.yml: publish bricks-engine to PyPI by trusted publishing",
+      "url": "https://github.com/determlab/bricks/pull/71",
+      "draft": false,
+      "created": "2026-09-29T04:46:50Z",
+      "verdict": null,
+      "type": null
+    },
+    {
+      "ref": "shal#270",
+      "title": "Routes M1 (5/5): bus contract, AGENTS.md routes paragraph, M1 exit test",
+      "url": "https://github.com/determlab/shal/pull/270",
+      "draft": false,
+      "created": "2026-09-29T04:55:42Z",
+      "verdict": "CHANGES",
+      "type": "A"
+    },
+    {
+      "ref": "bricks#76",
+      "title": "AGENTS.md: name check-brick and the new-brick loop; a test catches CLI drift (#73)",
+      "url": "https://github.com/determlab/bricks/pull/76",
+      "draft": false,
+      "created": "2026-09-29T10:09:50Z",
+      "verdict": "RECOMMEND",
+      "type": "A"
+    },
+    {
+      "ref": "bricks#77",
+      "title": "bricks new: scaffolds pass check-brick / check as written, never overwrite a file (#72)",
+      "url": "https://github.com/determlab/bricks/pull/77",
+      "draft": false,
+      "created": "2026-09-29T10:09:50Z",
+      "verdict": "RECOMMEND",
+      "type": "A"
+    },
+    {
+      "ref": "shal#277",
+      "title": "--json errors: call/check/records print {ok: false, error} on stdout (#272)",
+      "url": "https://github.com/determlab/shal/pull/277",
+      "draft": false,
+      "created": "2026-09-29T10:10:12Z",
+      "verdict": "RECOMMEND",
+      "type": "A"
+    },
+    {
+      "ref": "pytest-shal#20",
+      "title": "Test the v1 flow: unit SN-1 then SN-2 into one store",
+      "url": "https://github.com/determlab/pytest-shal/pull/20",
+      "draft": false,
+      "created": "2026-09-29T10:17:41Z",
+      "verdict": null,
+      "type": null
+    },
+    {
+      "ref": "bricks#78",
+      "title": "Test every shipped blueprint: check and run each file in blueprints/ (#74)",
+      "url": "https://github.com/determlab/bricks/pull/78",
+      "draft": false,
+      "created": "2026-09-29T10:20:05Z",
+      "verdict": "RECOMMEND",
+      "type": "A"
+    },
+    {
+      "ref": "shal#280",
+      "title": "CATALOG.md and README list every shipped shal,* compatible; quoted PyPI install lines (#2…",
+      "url": "https://github.com/determlab/shal/pull/280",
+      "draft": false,
+      "created": "2026-09-29T10:24:23Z",
+      "verdict": "RECOMMEND",
+      "type": "A"
+    },
+    {
+      "ref": "adk-lab#36",
+      "title": "README: add station1 to the case list, document gate.py --json",
+      "url": "https://github.com/determlab/adk-lab/pull/36",
+      "draft": false,
+      "created": "2026-09-29T10:27:10Z",
+      "verdict": "RECOMMEND",
+      "type": "A"
+    },
+    {
+      "ref": "bricks#80",
+      "title": "Write test fixtures with encoding=utf-8 (#79)",
+      "url": "https://github.com/determlab/bricks/pull/80",
+      "draft": false,
+      "created": "2026-09-29T10:29:42Z",
+      "verdict": "RECOMMEND",
+      "type": "A"
+    },
+    {
+      "ref": "adk-lab#43",
+      "title": "gate.py: a case with no generated/driver.py is pending, not a failure",
+      "url": "https://github.com/determlab/adk-lab/pull/43",
+      "draft": false,
+      "created": "2026-09-29T10:52:27Z",
+      "verdict": "RECOMMEND",
+      "type": "A"
+    },
+    {
+      "ref": "shal#284",
+      "title": "Jig sample: print the next step and test reading one unit back with shal records --unit",
+      "url": "https://github.com/determlab/shal/pull/284",
+      "draft": false,
+      "created": "2026-09-29T14:46:50Z",
+      "verdict": "RECOMMEND",
+      "type": "A"
+    },
+    {
+      "ref": "shal#285",
+      "title": "shal probe/tools: one-line load errors that name a real fix (#282)",
+      "url": "https://github.com/determlab/shal/pull/285",
+      "draft": false,
+      "created": "2026-09-29T14:49:39Z",
+      "verdict": "RECOMMEND",
+      "type": "A"
+    },
+    {
+      "ref": "bricks#84",
+      "title": "bricks dry-run --json, the same shape as check --json",
+      "url": "https://github.com/determlab/bricks/pull/84",
+      "draft": false,
+      "created": "2026-09-29T14:53:03Z",
+      "verdict": "RECOMMEND",
+      "type": "A"
+    },
+    {
+      "ref": "shal#286",
+      "title": "Driver skills: certify with shal check --json; test every shal command in skills (#283)",
+      "url": "https://github.com/determlab/shal/pull/286",
+      "draft": false,
+      "created": "2026-09-29T14:53:12Z",
+      "verdict": "RECOMMEND",
+      "type": "A"
+    },
+    {
+      "ref": "bricks#86",
+      "title": "Test the five check-brick checks that have no test (#83)",
+      "url": "https://github.com/determlab/bricks/pull/86",
+      "draft": false,
+      "created": "2026-09-29T15:01:33Z",
+      "verdict": "RECOMMEND",
+      "type": "A"
+    },
+    {
+      "ref": "pytest-shal#22",
+      "title": "Test the error messages of check() and the shal_unit marker",
+      "url": "https://github.com/determlab/pytest-shal/pull/22",
+      "draft": false,
+      "created": "2026-09-29T15:12:12Z",
+      "verdict": "RECOMMEND",
+      "type": "A"
+    },
+    {
+      "ref": "shal#294",
+      "title": "Conformance: 'binds no node' and 'catalog entry failed' name the fix (#289)",
+      "url": "https://github.com/determlab/shal/pull/294",
+      "draft": false,
+      "created": "2026-09-29T15:32:22Z",
+      "verdict": "RECOMMEND",
+      "type": "A"
+    },
+    {
+      "ref": "pytest-shal#24",
+      "title": "Test the documented setup order: --shal-setup > setup.yaml > SHAL_SETUP",
+      "url": "https://github.com/determlab/pytest-shal/pull/24",
+      "draft": false,
+      "created": "2026-09-29T15:39:13Z",
+      "verdict": "RECOMMEND",
+      "type": "A"
+    },
+    {
+      "ref": "ops#219",
+      "title": "tests: claude --version probe answer test gets a 60 s budget (ops#218)",
+      "url": "https://github.com/determlab/ops/pull/219",
+      "draft": false,
+      "created": "2026-09-29T15:55:09Z",
+      "verdict": "RECOMMEND",
+      "type": "A"
+    }
+  ],
+  "shadow": {
+    "n": 0,
+    "agreement_pct": 0.0,
+    "missed_b": 0,
+    "since_reset": 0,
+    "cutover": "not ready",
+    "why": "0/20 PRs since last reset",
+    "tokens_multiplier": null,
+    "cmo_reminder": false,
+    "line": "shadow: 0/20 · 0% · 0 B missed"
+  },
+  "tokens": {
+    "schema": 1,
+    "generated_at": "2026-09-29T19:08:41Z",
+    "agents": {
+      "COO": {
+        "5h": {
+          "fresh": 1356,
+          "write": 7127708,
+          "read": 190250368,
+          "output": 99479,
+          "weighted": 28433423
+        },
+        "24h": {
+          "fresh": 8520,
+          "write": 24146767,
+          "read": 1018987079,
+          "output": 878386,
+          "weighted": 136482617
+        },
+        "7d": {
+          "fresh": 21316,
+          "write": 36059167,
+          "read": 2542005299,
+          "output": 2400375,
+          "weighted": 311297680
+        }
+      },
+      "CTO": {
+        "5h": {
+          "fresh": 750,
+          "write": 2113820,
+          "read": 76149079,
+          "output": 56287,
+          "weighted": 10539368
+        },
+        "24h": {
+          "fresh": 3622,
+          "write": 5656649,
+          "read": 435863051,
+          "output": 402744,
+          "weighted": 52674458
+        },
+        "7d": {
+          "fresh": 24014,
+          "write": 12510742,
+          "read": 785558277,
+          "output": 1481362,
+          "weighted": 101625079
+        }
+      },
+      "CMO": {
+        "5h": {
+          "fresh": 0,
+          "write": 0,
+          "read": 0,
+          "output": 0,
+          "weighted": 0
+        },
+        "24h": {
+          "fresh": 190,
+          "write": 318401,
+          "read": 10443343,
+          "output": 51953,
+          "weighted": 1702291
+        },
+        "7d": {
+          "fresh": 646,
+          "write": 4135474,
+          "read": 176449577,
+          "output": 192594,
+          "weighted": 23777916
+        }
+      },
+      "coder": {
+        "5h": {
+          "fresh": 0,
+          "write": 0,
+          "read": 0,
+          "output": 0,
+          "weighted": 0
+        },
+        "24h": {
+          "fresh": 1062,
+          "write": 3353330,
+          "read": 281107590,
+          "output": 207916,
+          "weighted": 33343064
+        },
+        "7d": {
+          "fresh": 12172,
+          "write": 20030462,
+          "read": 1219915389,
+          "output": 1502072,
+          "weighted": 154552148
+        }
+      }
+    },
+    "pool": {
+      "5h": {
+        "fresh": 1050,
+        "write": 1334397,
+        "read": 20237505,
+        "output": 211424,
+        "weighted": 4749917
+      },
+      "24h": {
+        "fresh": 4022,
+        "write": 5949009,
+        "read": 85777603,
+        "output": 938515,
+        "weighted": 20710619
+      },
+      "7d": {
+        "fresh": 16646,
+        "write": 24641082,
+        "read": 548904602,
+        "output": 5723868,
+        "weighted": 114327799
+      }
+    },
+    "pool_runs": {
+      "5h": [
+        {
+          "ref": "bricks#83",
+          "weighted": 693877,
+          "output": 20976
+        },
+        {
+          "ref": "shal#290",
+          "weighted": 687683,
+          "output": 35230
+        },
+        {
+          "ref": "shal#283",
+          "weighted": 412794,
+          "output": 17281
+        },
+        {
+          "ref": "shal#288",
+          "weighted": 388638,
+          "output": 19499
+        },
+        {
+          "ref": "bricks#81",
+          "weighted": 379612,
+          "output": 18187
+        },
+        {
+          "ref": "shal#281",
+          "weighted": 373576,
+          "output": 18397
+        },
+        {
+          "ref": "shal#282",
+          "weighted": 339907,
+          "output": 14603
+        },
+        {
+          "ref": "pytest-shal#21",
+          "weighted": 324360,
+          "output": 12701
+        },
+        {
+          "ref": "bricks#82",
+          "weighted": 314933,
+          "output": 14004
+        },
+        {
+          "ref": "shal#287",
+          "weighted": 313967,
+          "output": 16950
+        },
+        {
+          "ref": "shal#289",
+          "weighted": 285197,
+          "output": 12453
+        },
+        {
+          "ref": "pytest-shal#23",
+          "weighted": 235373,
+          "output": 11143
+        }
+      ],
+      "24h": [
+        {
+          "ref": "shal#276",
+          "weighted": 1384494,
+          "output": 35436
+        },
+        {
+          "ref": "ops#158",
+          "weighted": 1053834,
+          "output": 40724
+        },
+        {
+          "ref": "ops#57",
+          "weighted": 908575,
+          "output": 69732
+        },
+        {
+          "ref": "ops#146",
+          "weighted": 907751,
+          "output": 44701
+        },
+        {
+          "ref": "bricks#73",
+          "weighted": 815575,
+          "output": 21085
+        },
+        {
+          "ref": "ops#112",
+          "weighted": 786371,
+          "output": 33452
+        },
+        {
+          "ref": "bricks#59",
+          "weighted": 703014,
+          "output": 43233
+        },
+        {
+          "ref": "ops#155",
+          "weighted": 694090,
+          "output": 27809
+        },
+        {
+          "ref": "bricks#83",
+          "weighted": 693877,
+          "output": 20976
+        },
+        {
+          "ref": "shal#290",
+          "weighted": 687683,
+          "output": 35230
+        },
+        {
+          "ref": "adk-lab#15",
+          "weighted": 680007,
+          "output": 40846
+        },
+        {
+          "ref": "bricks#74",
+          "weighted": 615559,
+          "output": 18544
+        },
+        {
+          "ref": "ops#116",
+          "weighted": 547268,
+          "output": 26711
+        },
+        {
+          "ref": "agora#104",
+          "weighted": 537770,
+          "output": 20611
+        },
+        {
+          "ref": "shal#9",
+          "weighted": 516975,
+          "output": 28341
+        },
+        {
+          "ref": "bricks#79",
+          "weighted": 496348,
+          "output": 24919
+        },
+        {
+          "ref": "shal#281",
+          "weighted": 466918,
+          "output": 22182
+        },
+        {
+          "ref": "ops#141",
+          "weighted": 437668,
+          "output": 19733
+        },
+        {
+          "ref": "agora#74",
+          "weighted": 435070,
+          "output": 29361
+        },
+        {
+          "ref": "shal#283",
+          "weighted": 412794,
+          "output": 17281
+        },
+        {
+          "ref": "shal#238",
+          "weighted": 412540,
+          "output": 21259
+        },
+        {
+          "ref": "shal#273",
+          "weighted": 405131,
+          "output": 19409
+        },
+        {
+          "ref": "shal#261",
+          "weighted": 403162,
+          "output": 21652
+        },
+        {
+          "ref": "ops#111",
+          "weighted": 399431,
+          "output": 15431
+        },
+        {
+          "ref": "shal#288",
+          "weighted": 388638,
+          "output": 19499
+        },
+        {
+          "ref": "bricks#81",
+          "weighted": 379612,
+          "output": 18187
+        },
+        {
+          "ref": "bricks#72",
+          "weighted": 377552,
+          "output": 18621
+        },
+        {
+          "ref": "shal#272",
+          "weighted": 368663,
+          "output": 19690
+        },
+        {
+          "ref": "shal#282",
+          "weighted": 339907,
+          "output": 14603
+        },
+        {
+          "ref": "pytest-shal#21",
+          "weighted": 324360,
+          "output": 12701
+        },
+        {
+          "ref": "bricks#82",
+          "weighted": 314933,
+          "output": 14004
+        },
+        {
+          "ref": "shal#287",
+          "weighted": 313967,
+          "output": 16950
+        },
+        {
+          "ref": "pytest-shal#19",
+          "weighted": 289248,
+          "output": 11811
+        },
+        {
+          "ref": "shal#289",
+          "weighted": 285197,
+          "output": 12453
+        },
+        {
+          "ref": "bricks#64",
+          "weighted": 268292,
+          "output": 12381
+        },
+        {
+          "ref": "pytest-shal#23",
+          "weighted": 235373,
+          "output": 11143
+        },
+        {
+          "ref": "bricks#70",
+          "weighted": 226544,
+          "output": 9811
+        },
+        {
+          "ref": "adk-lab#17",
+          "weighted": 212977,
+          "output": 10009
+        },
+        {
+          "ref": "agora#83",
+          "weighted": 191088,
+          "output": 7530
+        },
+        {
+          "ref": "shal#264",
+          "weighted": 185114,
+          "output": 7568
+        },
+        {
+          "ref": "bricks#50",
+          "weighted": 182582,
+          "output": 9182
+        },
+        {
+          "ref": "shal#266",
+          "weighted": 79920,
+          "output": 2580
+        },
+        {
+          "ref": "bricks#63",
+          "weighted": 71972,
+          "output": 2385
+        },
+        {
+          "ref": "pytest-shal#15",
+          "weighted": 59680,
+          "output": 2157
+        },
+        {
+          "ref": "bricks#58",
+          "weighted": 58220,
+          "output": 1930
+        },
+        {
+          "ref": "bricks#65",
+          "weighted": 54931,
+          "output": 1608
+        },
+        {
+          "ref": "bricks#25",
+          "weighted": 52978,
+          "output": 1587
+        },
+        {
+          "ref": "pytest-shal#10",
+          "weighted": 46966,
+          "output": 1467
+        }
+      ],
+      "7d": [
+        {
+          "ref": "agora#82",
+          "weighted": 6788211,
+          "output": 350366
+        },
+        {
+          "ref": "ops#116",
+          "weighted": 6658791,
+          "output": 351328
+        },
+        {
+          "ref": "ops#110",
+          "weighted": 6374184,
+          "output": 284896
+        },
+        {
+          "ref": "bricks#49",
+          "weighted": 5616260,
+          "output": 266537
+        },
+        {
+          "ref": "bricks#48",
+          "weighted": 4903461,
+          "output": 251701
+        },
+        {
+          "ref": "bricks#51",
+          "weighted": 3964669,
+          "output": 189655
+        },
+        {
+          "ref": "ops#113",
+          "weighted": 3846860,
+          "output": 190926
+        },
+        {
+          "ref": "ops#109",
+          "weighted": 3368271,
+          "output": 136282
+        },
+        {
+          "ref": "ops#139",
+          "weighted": 2710227,
+          "output": 118846
+        },
+        {
+          "ref": "ops#102",
+          "weighted": 2487646,
+          "output": 120559
+        },
+        {
+          "ref": "ops#63",
+          "weighted": 2080194,
+          "output": 137211
+        },
+        {
+          "ref": "shal#24",
+          "weighted": 1990562,
+          "output": 94421
+        },
+        {
+          "ref": "adk-lab#3",
+          "weighted": 1892159,
+          "output": 115199
+        },
+        {
+          "ref": "ops#115",
+          "weighted": 1864118,
+          "output": 87734
+        },
+        {
+          "ref": "shal#23",
+          "weighted": 1847095,
+          "output": 66776
+        },
+        {
+          "ref": "agora#61",
+          "weighted": 1838185,
+          "output": 131294
+        },
+        {
+          "ref": "agora#85",
+          "weighted": 1698644,
+          "output": 87375
+        },
+        {
+          "ref": "ops#141",
+          "weighted": 1674388,
+          "output": 76663
+        },
+        {
+          "ref": "shal#237",
+          "weighted": 1591079,
+          "output": 67150
+        },
+        {
+          "ref": "ops#57",
+          "weighted": 1511026,
+          "output": 127418
+        },
+        {
+          "ref": "ops#88",
+          "weighted": 1505231,
+          "output": 84186
+        },
+        {
+          "ref": "agora#71",
+          "weighted": 1500008,
+          "output": 91479
+        },
+        {
+          "ref": "shal#102",
+          "weighted": 1440393,
+          "output": 75030
+        },
+        {
+          "ref": "agora#79",
+          "weighted": 1408893,
+          "output": 56827
+        },
+        {
+          "ref": "shal#276",
+          "weighted": 1384494,
+          "output": 35436
+        },
+        {
+          "ref": "ops#127",
+          "weighted": 1337854,
+          "output": 75820
+        },
+        {
+          "ref": "agora#87",
+          "weighted": 1322440,
+          "output": 64287
+        },
+        {
+          "ref": "ops#74",
+          "weighted": 1259260,
+          "output": 75738
+        },
+        {
+          "ref": "ops#86",
+          "weighted": 1196193,
+          "output": 56437
+        },
+        {
+          "ref": "ops#32",
+          "weighted": 1157896,
+          "output": 52858
+        },
+        {
+          "ref": "shal#235",
+          "weighted": 1104398,
+          "output": 57602
+        },
+        {
+          "ref": "agora#77",
+          "weighted": 1061520,
+          "output": 92554
+        },
+        {
+          "ref": "ops#158",
+          "weighted": 1053834,
+          "output": 40724
+        },
+        {
+          "ref": "agora#72",
+          "weighted": 1013710,
+          "output": 68479
+        },
+        {
+          "ref": "shal#250",
+          "weighted": 1008428,
+          "output": 46014
+        },
+        {
+          "ref": "ops#100",
+          "weighted": 958806,
+          "output": 57075
+        },
+        {
+          "ref": "ops#66",
+          "weighted": 952754,
+          "output": 40956
+        },
+        {
+          "ref": "ops#146",
+          "weighted": 907751,
+          "output": 44701
+        },
+        {
+          "ref": "agora#65",
+          "weighted": 821478,
+          "output": 53628
+        },
+        {
+          "ref": "bricks#73",
+          "weighted": 815575,
+          "output": 21085
+        },
+        {
+          "ref": "shal#44",
+          "weighted": 788544,
+          "output": 35929
+        },
+        {
+          "ref": "ops#112",
+          "weighted": 786371,
+          "output": 33452
+        },
+        {
+          "ref": "agora#81",
+          "weighted": 782773,
+          "output": 39277
+        },
+        {
+          "ref": "agora#56",
+          "weighted": 731963,
+          "output": 38484
+        },
+        {
+          "ref": "shal#231",
+          "weighted": 725366,
+          "output": 41881
+        },
+        {
+          "ref": "bricks#59",
+          "weighted": 703014,
+          "output": 43233
+        },
+        {
+          "ref": "ops#155",
+          "weighted": 694090,
+          "output": 27809
+        },
+        {
+          "ref": "bricks#83",
+          "weighted": 693877,
+          "output": 20976
+        },
+        {
+          "ref": "ops#73",
+          "weighted": 691517,
+          "output": 40027
+        },
+        {
+          "ref": "shal#290",
+          "weighted": 687683,
+          "output": 35230
+        },
+        {
+          "ref": "adk-lab#15",
+          "weighted": 680007,
+          "output": 40846
+        },
+        {
+          "ref": "aos#10",
+          "weighted": 645087,
+          "output": 35887
+        },
+        {
+          "ref": "shal#246",
+          "weighted": 640995,
+          "output": 28854
+        },
+        {
+          "ref": "agora#80",
+          "weighted": 632156,
+          "output": 34359
+        },
+        {
+          "ref": "bricks#74",
+          "weighted": 615559,
+          "output": 18544
+        },
+        {
+          "ref": "ops#111",
+          "weighted": 613767,
+          "output": 30428
+        },
+        {
+          "ref": "ops#75",
+          "weighted": 540850,
+          "output": 31374
+        },
+        {
+          "ref": "agora#104",
+          "weighted": 537770,
+          "output": 20611
+        },
+        {
+          "ref": "shal#9",
+          "weighted": 516975,
+          "output": 28341
+        },
+        {
+          "ref": "agora#74",
+          "weighted": 509056,
+          "output": 32345
+        },
+        {
+          "ref": "shal#142",
+          "weighted": 498508,
+          "output": 22688
+        },
+        {
+          "ref": "bricks#79",
+          "weighted": 496348,
+          "output": 24919
+        },
+        {
+          "ref": "shal#227",
+          "weighted": 478603,
+          "output": 22144
+        },
+        {
+          "ref": "bricks#50",
+          "weighted": 477925,
+          "output": 22178
+        },
+        {
+          "ref": "shal#281",
+          "weighted": 466918,
+          "output": 22182
+        },
+        {
+          "ref": "ops#84",
+          "weighted": 451700,
+          "output": 24479
+        },
+        {
+          "ref": "ops#60",
+          "weighted": 445513,
+          "output": 24067
+        },
+        {
+          "ref": "ops#83",
+          "weighted": 442916,
+          "output": 19679
+        },
+        {
+          "ref": "shal#184",
+          "weighted": 440081,
+          "output": 28870
+        },
+        {
+          "ref": "shal#283",
+          "weighted": 412794,
+          "output": 17281
+        },
+        {
+          "ref": "shal#238",
+          "weighted": 412540,
+          "output": 21259
+        },
+        {
+          "ref": "shal#273",
+          "weighted": 405131,
+          "output": 19409
+        },
+        {
+          "ref": "shal#261",
+          "weighted": 403162,
+          "output": 21652
+        },
+        {
+          "ref": "shal#288",
+          "weighted": 388638,
+          "output": 19499
+        },
+        {
+          "ref": "bricks#81",
+          "weighted": 379612,
+          "output": 18187
+        },
+        {
+          "ref": "agora#57",
+          "weighted": 379434,
+          "output": 21626
+        },
+        {
+          "ref": "bricks#72",
+          "weighted": 377552,
+          "output": 18621
+        },
+        {
+          "ref": "shal#272",
+          "weighted": 368663,
+          "output": 19690
+        },
+        {
+          "ref": "shal#282",
+          "weighted": 339907,
+          "output": 14603
+        },
+        {
+          "ref": "pytest-shal#21",
+          "weighted": 324360,
+          "output": 12701
+        },
+        {
+          "ref": "bricks#82",
+          "weighted": 314933,
+          "output": 14004
+        },
+        {
+          "ref": "shal#287",
+          "weighted": 313967,
+          "output": 16950
+        },
+        {
+          "ref": "ops#95",
+          "weighted": 294515,
+          "output": 15714
+        },
+        {
+          "ref": "pytest-shal#19",
+          "weighted": 289248,
+          "output": 11811
+        },
+        {
+          "ref": "shal#289",
+          "weighted": 285197,
+          "output": 12453
+        },
+        {
+          "ref": "bricks#64",
+          "weighted": 268292,
+          "output": 12381
+        },
+        {
+          "ref": "ops#80",
+          "weighted": 260199,
+          "output": 10981
+        },
+        {
+          "ref": "pytest-shal#23",
+          "weighted": 235373,
+          "output": 11143
+        },
+        {
+          "ref": "bricks#70",
+          "weighted": 226544,
+          "output": 9811
+        },
+        {
+          "ref": "adk-lab#17",
+          "weighted": 212977,
+          "output": 10009
+        },
+        {
+          "ref": "agora#83",
+          "weighted": 191088,
+          "output": 7530
+        },
+        {
+          "ref": "shal#264",
+          "weighted": 185114,
+          "output": 7568
+        },
+        {
+          "ref": "ops#8",
+          "weighted": 155132,
+          "output": 5552
+        },
+        {
+          "ref": "shal#258",
+          "weighted": 140130,
+          "output": 5491
+        },
+        {
+          "ref": "adk-lab#12",
+          "weighted": 118961,
+          "output": 5791
+        },
+        {
+          "ref": "ops#36",
+          "weighted": 109946,
+          "output": 4443
+        },
+        {
+          "ref": "pytest-shal#7",
+          "weighted": 101800,
+          "output": 4908
+        },
+        {
+          "ref": "ops#46",
+          "weighted": 94287,
+          "output": 3193
+        },
+        {
+          "ref": "aos#3",
+          "weighted": 88612,
+          "output": 3313
+        },
+        {
+          "ref": "ops#62",
+          "weighted": 88181,
+          "output": 4109
+        },
+        {
+          "ref": "pytest-shal#6",
+          "weighted": 85163,
+          "output": 3471
+        },
+        {
+          "ref": "adk-lab#11",
+          "weighted": 81735,
+          "output": 4131
+        },
+        {
+          "ref": "shal#236",
+          "weighted": 80304,
+          "output": 3349
+        },
+        {
+          "ref": "shal#266",
+          "weighted": 79920,
+          "output": 2580
+        },
+        {
+          "ref": "bricks#63",
+          "weighted": 71972,
+          "output": 2385
+        },
+        {
+          "ref": "ops#71",
+          "weighted": 66590,
+          "output": 2971
+        },
+        {
+          "ref": "pytest-shal#15",
+          "weighted": 59680,
+          "output": 2157
+        },
+        {
+          "ref": "bricks#58",
+          "weighted": 58220,
+          "output": 1930
+        },
+        {
+          "ref": "bricks#65",
+          "weighted": 54931,
+          "output": 1608
+        },
+        {
+          "ref": "bricks#25",
+          "weighted": 52978,
+          "output": 1587
+        },
+        {
+          "ref": "ops#10",
+          "weighted": 50395,
+          "output": 887
+        },
+        {
+          "ref": "pytest-shal#10",
+          "weighted": 46966,
+          "output": 1467
+        },
+        {
+          "ref": "ops#17",
+          "weighted": 39774,
+          "output": 1316
+        }
+      ]
+    },
+    "cloud": {
+      "5h": {
+        "fresh": 0,
+        "write": 0,
+        "read": 0,
+        "output": 0,
+        "weighted": 0
+      },
+      "24h": {
+        "fresh": 0,
+        "write": 0,
+        "read": 0,
+        "output": 0,
+        "weighted": 0
+      },
+      "7d": {
+        "fresh": 0,
+        "write": 0,
+        "read": 0,
+        "output": 0,
+        "weighted": 0
+      },
+      "note": "cloud coders write no local transcript; zero unless a session is named cloud"
+    },
+    "last_limit": {
+      "what": "You've hit your monthly spend limit ┬╖ raise it at claude.ai/settings/usage?from=cc_cli_limit_message ┬╖ your session limit resets 3:40am (Pacific/Auckland)",
+      "at": "2026-09-29T11:10:58Z",
+      "reset": "2026-09-29T14:40:00Z",
+      "issue": "shal#281",
+      "active": false
+    }
+  },
+  "week": {
+    "points_closed": 496,
+    "points_closed_previous": 0,
+    "percent_of_company": 54.6,
+    "median_go_to_close_h": 1.84
+  },
+  "next_moves": [
+    {
+      "id": "sim-rigs",
+      "q_he": "לאשר לבנות את 3 ה-rigs המדומים?",
+      "why_he": "מתוכננים (שבב, סוף-קו, קושחה). כן = מתחילים מבדיקת השבב.",
+      "cost_he": null,
+      "link": "https://github.com/determlab/ops/blob/main/projects/shal/specs/adk.md"
+    },
+    {
+      "id": "pool-perm-2",
+      "q_he": "הרשאות pool, חלק 2 — לאשר?",
+      "why_he": "בלי זה ה-pool לא שומר עבודה. ריצת pool ≈ 0.1M טוקנים, Coder2 שרף 85M.",
+      "cost_he": null,
+      "link": "https://github.com/determlab/ops/pull/21"
+    },
+    {
+      "id": "coder2-approvals",
+      "q_he": "לאשר 3 פעולות בחלון של Coder2?",
+      "why_he": "בדיקת הבטיחות שלו עצרה: CHANGELOG של 0.3.0, aos #3, ערוץ #all.",
+      "cost_he": null,
+      "link": "https://github.com/determlab/agora/issues/55"
+    },
+    {
+      "id": "pytest-shal-fence",
+      "q_he": "להדק את ה-fence של pytest-shal?",
+      "why_he": "להגן על קבצי האישור ולהוסיף mypy. משנה .agent-loop.yml — רק במילה שלך.",
+      "cost_he": null,
+      "link": "https://github.com/determlab/pytest-shal/pull/4"
+    },
+    {
+      "id": "pytest-shal-public",
+      "q_he": "להפוך את pytest-shal לציבורי?",
+      "why_he": "כל השאר ציבוריים. בלי זה אין CI חובה ואני ממזג ידנית.",
+      "cost_he": null,
+      "link": "https://github.com/determlab/pytest-shal"
+    },
+    {
+      "id": "guard-hook",
+      "q_he": "לאשר תיקון ל-guard hook (ops #8)?",
+      "why_he": "הוא לא רואה פקודות Bash וחוסם את ה-CMO מהקבצים שלו. זו בקרת הרשאות.",
+      "cost_he": null,
+      "link": "https://github.com/determlab/ops/issues/8"
+    },
+    {
+      "id": "zulip-settings",
+      "q_he": "ב-Zulip: ערוצים פרטיים + עריכת הודעות 'Any time'?",
+      "why_he": "שתי לחיצות בהגדרות. הערוצים עדיין ציבוריים, והודעת #status לא מתעדכנת אחרי 10 דקות.",
+      "cost_he": null,
+      "link": "http://127.0.0.1:8090"
+    }
+  ]
+}

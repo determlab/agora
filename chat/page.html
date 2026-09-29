@@ -11,6 +11,7 @@
   --accent: #1f6f78; --accent-text: #ffffff; --accent-soft: #dcebea; --bubble: #ffffff;
   --mine: #d6eae7; --mention: #fff1b8; --mention-line: #e3c04f; --error: #b00020;
   --code: #e6ebe7; --ok: #2e9e5b; --wait: #e0a100; --shadow: 0 1px 2px rgba(0, 0, 0, .07);
+  --run2: #b0662a; --founder: #8a5a2b;
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
@@ -18,7 +19,7 @@
     --bg: #131917; --panel: #1b2321; --text: #e2e9e6; --muted: #93a39e; --line: #2b3633;
     --accent: #5fb3bb; --accent-text: #0b1413; --accent-soft: #1d3a3c; --bubble: #222c2a;
     --mine: #1d4043; --mention: #4a3f17; --mention-line: #8a7424; --error: #ff7a8e;
-    --code: #111816; --ok: #4cc47c; --wait: #f0b429; --shadow: none;
+    --code: #111816; --ok: #4cc47c; --wait: #f0b429; --shadow: none; --run2: #e0a36a; --founder: #d9a46a;
   }
 }
 :root[data-theme="dark"] {
@@ -26,7 +27,7 @@
   --bg: #131917; --panel: #1b2321; --text: #e2e9e6; --muted: #93a39e; --line: #2b3633;
   --accent: #5fb3bb; --accent-text: #0b1413; --accent-soft: #1d3a3c; --bubble: #222c2a;
   --mine: #1d4043; --mention: #4a3f17; --mention-line: #8a7424; --error: #ff7a8e;
-  --code: #111816; --ok: #4cc47c; --wait: #f0b429; --shadow: none;
+  --code: #111816; --ok: #4cc47c; --wait: #f0b429; --shadow: none; --run2: #e0a36a; --founder: #d9a46a;
 }
 * { box-sizing: border-box; }
 body { margin: 0; padding: 1rem; font: 14px/1.45 system-ui, sans-serif; color: var(--text);
@@ -229,13 +230,29 @@ dialog .buttons { display: flex; justify-content: flex-end; gap: .5rem; margin-t
 #main { grid-row: 2; }
 #dash { grid-row: 2; grid-column: 1 / -1; overflow: auto; padding: .75rem 1rem;
   display: flex; flex-direction: column; gap: .75rem; }
-/* agora#100: the panel ported from the approved mockup (B8UrALfZEZ34F1sPeJEiNz).
-   Class names below (dhead/cards/card/rows/ref/chip/live/big/bar/role/st/sync/go)
-   are the mockup's own, kept unrenamed so a side-by-side compare stays legible;
-   .dash-pill/.dash-list/.dash-label/.dash-body/.dash-card stay too, unrenamed,
-   because renderRows/renderPill/mountCard and the existing tests hook them. */
-.dhead { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; margin-bottom: 4px; }
+/* The board, in the approved mockup's look (B8UrALfZEZ34F1sPeJEiNz, ops#220).
+   Class names (dhead/cards/card/rows/ref/chip/live/big/bar/role/st/sync/go/
+   tseg/tb/plan/tl/lane/ev/now/evlist/mk) are the mockup's own, kept on
+   purpose so a side-by-side compare stays legible. First look (founder is
+   ADHD): a strip of four big coloured numbers, then cards of at most five
+   rows each, one line per row, full text on hover, "show all" for the rest. */
+button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-visible {
+  outline: 2px solid var(--accent); outline-offset: 2px; }
+.dhead { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .dhead h2 { margin: 0; font-size: 18px; }
+.kpis-in { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(150px, 100%), 1fr)); gap: 10px; }
+.kpi { border: 1px solid var(--line); border-inline-start: 5px solid var(--muted); border-radius: 10px;
+  background: var(--bubble); padding: 8px 12px; display: flex; flex-direction: column; min-width: 0; }
+.kpi .kv { font-size: 26px; font-weight: 700; line-height: 1.2; font-variant-numeric: tabular-nums;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.kpi .kl { font-size: 12px; color: var(--muted); font-weight: 600; }
+.kpi.ok { border-inline-start-color: var(--ok); }
+.kpi.ok .kv { color: var(--ok); }
+.kpi.warn { border-inline-start-color: var(--wait); }
+.kpi.warn .kv { color: var(--wait); }
+.kpi.bad { border-inline-start-color: var(--error); }
+.kpi.bad .kv { color: var(--error); }
+.kpi.none .kv { color: var(--muted); }
 .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(290px, 100%), 1fr));
   gap: 12px; align-items: start; }
 .card { border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; background: var(--bubble);
@@ -244,56 +261,154 @@ dialog .buttons { display: flex; justify-content: flex-end; gap: .5rem; margin-t
 .card h3 { margin: 0; font-size: 12px; letter-spacing: .06em; color: var(--muted); font-weight: 700;
   display: flex; gap: 8px; align-items: center; }
 .card h3 .cnt { margin-inline-start: auto; font-variant-numeric: tabular-nums; color: var(--text); }
+.dash-body { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.dash-body > div { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
 .rows { display: flex; flex-direction: column; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.rows.all { max-height: 320px; overflow-y: auto; }
 .rows li { display: flex; gap: 8px; align-items: baseline; font-size: 14px; min-width: 0; }
-.rows li .tx { flex: 1; min-width: 0; overflow-wrap: anywhere; unicode-bidi: plaintext; }
+.tx, .one { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  unicode-bidi: plaintext; }
 .ref { font-family: ui-monospace, Consolas, monospace; font-size: 12.5px; direction: ltr;
   unicode-bidi: isolate; color: var(--accent); white-space: nowrap; }
-.chip { font-size: 11px; font-weight: 700; border-radius: 4px; padding: 0 6px; white-space: nowrap; line-height: 18px; }
-.chip.p0 { background: var(--error); color: #fff; }
-.chip.p1 { background: var(--wait); color: #1b1300; }
-.chip.p2 { background: var(--accent-soft); color: var(--text); }
+a.ref, a.dash-label { text-decoration: none; }
+a.dash-label:not(.ref) { color: var(--text); }
+a.dash-label:hover { text-decoration: underline; }
+a.ref:hover { text-decoration: underline; }
+.chip { font-size: 11px; font-weight: 700; border-radius: 4px; padding: 0 6px; white-space: nowrap; line-height: 18px;
+  background: var(--accent-soft); color: var(--text); flex: none; }
+.chip.p0, .chip.bad { background: var(--error); color: #fff; }
+.chip.p1, .chip.warn { background: var(--wait); color: #1b1300; }
+.chip.p2, .chip.a { background: var(--accent-soft); color: var(--text); }
 .chip.b { background: var(--mention); color: var(--text); }
-.chip.a { background: var(--accent-soft); color: var(--text); }
+.chip.none { background: none; border: 1px dashed var(--line); color: var(--muted); font-weight: 500; }
+.more { align-self: flex-start; border: 0; background: none; padding: 0; font-size: 12px; color: var(--accent); }
+.more:hover { text-decoration: underline; }
+.cut { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
 .live { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; font-size: 14px; margin: 0; }
 .live dt { color: var(--muted); }
-.live dd { margin: 0; font-variant-numeric: tabular-nums; min-width: 0; overflow-wrap: anywhere; }
+.live dd { margin: 0; font-variant-numeric: tabular-nums; min-width: 0; white-space: nowrap; overflow: hidden;
+  text-overflow: ellipsis; }
+.live dd.warn { color: var(--wait); }
+.live .act { direction: ltr; unicode-bidi: isolate; font-family: ui-monospace, Consolas, monospace; font-size: 12.5px; }
+.idle { display: flex; align-items: center; gap: 10px; font-size: 14px; }
 .big { font-size: 22px; font-weight: 700; font-family: ui-monospace, Consolas, monospace;
   direction: ltr; unicode-bidi: isolate; }
-.bar { height: 6px; background: var(--accent-soft); border-radius: 3px; overflow: hidden; }
-.bar i { display: block; height: 100%; background: var(--accent); }
-.role { display: flex; align-items: center; gap: 10px; font-size: 14px; }
-.role .av { width: 28px; height: 28px; font-size: 13px; border-radius: 8px; display: grid; place-items: center;
+.bar { flex: none; width: 64px; height: 6px; background: var(--accent-soft); border-radius: 3px; overflow: hidden; }
+.bar i, .pbar i { display: block; height: 100%; background: var(--accent); border-radius: 3px; }
+.pbar { height: 8px; background: var(--accent-soft); border-radius: 3px; overflow: hidden; }
+.pbar i.hi { background: var(--wait); }
+.pbar i.bad { background: var(--error); }
+.prod { display: flex; flex-direction: column; gap: 3px; }
+.prod .top { display: flex; gap: 8px; align-items: baseline; font-size: 14px; min-width: 0; }
+.role { display: flex; align-items: center; gap: 10px; font-size: 14px; min-width: 0; }
+.role .av { width: 32px; height: 28px; font-size: 10px; letter-spacing: 0; border-radius: 8px; display: grid; place-items: center;
   font-weight: 700; color: #fff; flex: none; background: var(--accent); }
-.role .tx { flex: 1; min-width: 0; }
+.role .tx { display: flex; flex-direction: column; white-space: normal; overflow: hidden; }
+.role .av.role-pool { background: var(--run2); }
+.role .av.role-cto { background: #3b5ba5; }
+.role .av.role-coo { background: #7a4f9a; }
+.role .av.role-cmo { background: #b4552d; }
+.role .av.role-pm { background: #6b7b2c; }
 .st { font-size: 12px; font-weight: 700; display: flex; align-items: center; gap: 5px; white-space: nowrap; }
 .st::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
 .st.busy::before { background: var(--ok); }
 .st.wait::before { background: var(--wait); }
-.go { border: 1px solid var(--line); background: none; border-radius: 6px; font-size: 12px; padding: 0 8px;
+.go { border: 1px solid var(--line); background: none; border-radius: 6px; font-size: 12px; padding: 2px 10px;
   white-space: nowrap; color: var(--accent); }
+.go:disabled { opacity: .55; cursor: default; }
 .sync { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--muted);
   border: 1px solid var(--line); border-radius: 999px; padding: 2px 10px; background: var(--bubble);
-  margin-inline-start: auto; }
-.sync .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--ok); animation: dash-pulse 2.4s ease-in-out infinite; }
+  margin-inline-start: auto; min-width: 0; max-width: 100%; }
+#dash-pill-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.sync .dot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--ok); animation: dash-pulse 2.4s ease-in-out infinite; }
 @keyframes dash-pulse { 50% { opacity: .35; } }
-.sync b { color: var(--text); font-weight: 500; }
 /* Amber, not red: a stale dashboard is a document that is still trusted, only old. */
 .sync.stale, .dash-pill.stale { color: var(--wait); border-color: var(--wait); }
-.dash-card h3 { margin: 0 0 .35rem; font-size: 13px; }
-.dash-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: .2rem; }
-.dash-list li { display: flex; justify-content: space-between; gap: .5rem; font-size: 12.5px; }
-.dash-label { font-weight: 600; }
-/* approvals carousel: one item of doc.next_moves at a time (display-only —
-   the yes/no send action is agora#83; this wires the UI slot and click hook). */
+.sync.stale .dot { background: var(--wait); }
+.sync.bad { color: var(--error); border-color: var(--error); }
+.sync.bad .dot { background: var(--error); animation: none; }
+.dash-list { list-style: none; margin: 0; padding: 0; }
+.dash-label { font-weight: 600; flex: none; }
+/* approvals carousel (ops#176), mockup look: one card at a time, N of M. */
 .appr-head { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); }
 .appr-nav { display: flex; gap: 4px; margin-inline-start: auto; }
-.appr-body { display: flex; flex-direction: column; gap: 6px; }
-.appr-body .q { font-size: 14px; font-weight: 600; }
-.appr-body .why { font-size: 13px; color: var(--muted); }
-.appr-btns { display: flex; gap: 6px; }
-.appr-btns .go.yes { color: var(--ok); border-color: var(--ok); }
-.appr-btns .go.no { color: var(--error); border-color: var(--error); }
+.appr-nav .go { padding: 0 8px; font-size: 14px; direction: ltr; unicode-bidi: isolate; }  /* no bidi mirroring: prev points right, next left (QA ops#220) */
+.appr-body { display: flex; flex-direction: column; gap: 4px; border-inline-start: 3px solid var(--accent);
+  padding-inline-start: 10px; }
+.appr-body .q, .appr-body .why { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden; }
+.appr-body .q { font-size: 15px; font-weight: 700; overflow-wrap: anywhere; unicode-bidi: plaintext; }
+.appr-body .why { font-size: 13px; color: var(--muted); overflow-wrap: anywhere; unicode-bidi: plaintext; }
+.appr-meta { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; font-size: 12px; }
+.appr-note { font: inherit; font-size: 13px; padding: 4px 8px; border: 1px solid var(--line); border-radius: 6px;
+  background: var(--panel); color: var(--text); width: 100%; }
+.appr-btns { display: flex; gap: 6px; flex-wrap: wrap; }
+.appr-btns button { border-radius: 6px; font-size: 13px; font-weight: 700; padding: 4px 14px; border: 1px solid var(--line);
+  background: none; }
+.appr-btns .yes { background: var(--ok); border-color: var(--ok); color: #fff; }
+.appr-btns .no { color: var(--error); border-color: var(--error); }
+.appr-btns .later { color: var(--muted); }
+.appr-undo { display: flex; align-items: center; gap: 10px; font-size: 13px; min-width: 0; }
+.appr-undo .tx { font-weight: 600; }
+#dash-approvals h3 .cnt { flex: none; min-width: 1.1rem; height: 1.1rem; margin-inline-start: auto;
+  padding: 0 .3rem; border-radius: 999px; background: var(--accent); color: var(--accent-text);
+  font-size: 10px; font-weight: 700; line-height: 1.1rem; text-align: center; }
+/* tokens: today / this week, one bar per role (blue) and per pool run (orange), plan bars */
+.tokhead { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; flex-direction: row !important; }
+.tseg { margin-inline-start: auto; display: inline-flex; border: 1px solid var(--line); border-radius: 999px; padding: 1px; }
+.tseg button { border: 0; background: none; border-radius: 999px; padding: 0 10px; font-size: 12px; color: var(--muted); }
+.tseg button[aria-pressed="true"] { background: var(--text); color: var(--panel); }
+.tbars { display: flex; flex-direction: column; gap: 6px; }
+.tb { display: grid; grid-template-columns: minmax(0, 112px) 1fr 52px; gap: 8px; align-items: center; font-size: 13px; }
+.tb .lb { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; unicode-bidi: plaintext; }
+.tb .v { font-family: ui-monospace, Consolas, monospace; font-size: 12px; text-align: left; direction: ltr;
+  font-variant-numeric: tabular-nums; }
+.tb .track { height: 10px; background: var(--accent-soft); border-radius: 3px; overflow: hidden; }
+.tb .track i { display: block; height: 100%; background: var(--accent); border-radius: 3px; }
+.tb.pool .track i { background: var(--run2); }
+.plan { display: flex; flex-direction: column; gap: 6px; border-top: 1px solid var(--line); padding-top: 8px; }
+.plan .pl { display: flex; justify-content: space-between; gap: 8px; font-size: 13px; flex-wrap: wrap; }
+.plan .pl span:last-child { color: var(--muted); font-size: 12px; }
+.warnline { color: var(--wait); }
+/* today's timeline: three lanes, hour axis, red "now" line, event list under it */
+.tl { overflow-x: auto; padding: 16px 18px 4px; }
+.tlin { min-width: 640px; display: grid; grid-template-columns: 96px 1fr; row-gap: 6px; font-size: 12px; }
+.tlin .ln { color: var(--muted); align-self: stretch; display: flex; align-items: center;
+  position: sticky; inset-inline-start: 0; z-index: 3; background: var(--bubble);
+  box-shadow: 18px 0 0 var(--bubble); }  /* the shadow covers .tl's padding strip (RTL); stays in view while the lanes scroll (QA ops#220) */
+.lane { position: relative; height: 26px; background: var(--panel); border: 1px solid var(--line); border-radius: 4px; }
+.axis { position: relative; height: 18px; color: var(--muted); font-family: ui-monospace, Consolas, monospace; font-size: 11px; }
+.axis span { position: absolute; transform: translateX(50%); unicode-bidi: isolate; }
+.ev { position: absolute; top: 50%; border: 0; padding: 0; }
+.ev.run { height: 16px; margin-top: -8px; border-radius: 4px; background: var(--accent); color: var(--accent-text);
+  font-size: 11px; overflow: hidden; white-space: nowrap; padding: 0 4px; line-height: 16px;
+  font-family: ui-monospace, Consolas, monospace; unicode-bidi: plaintext; min-width: 4px; box-sizing: border-box; }
+.ev.run:empty { padding: 0; }
+.ev.run.live { background-image: repeating-linear-gradient(45deg, transparent 0 6px, rgba(255, 255, 255, .25) 6px 12px); }
+.ev.run.unk { background: var(--muted); opacity: .6; }
+.ev.mg { width: 12px; height: 12px; margin-top: -6px; margin-inline-start: -6px; border-radius: 50%;
+  background: var(--ok); border: 2px solid var(--bubble); }
+.ev.dc { width: 12px; height: 12px; margin-top: -6px; margin-inline-start: -6px; background: var(--founder);
+  transform: rotate(45deg); border: 2px solid var(--bubble); }
+.now { position: absolute; top: -4px; bottom: -4px; width: 2px; background: var(--error); z-index: 2; }
+.now span { position: absolute; top: -16px; transform: translateX(50%); font-size: 11px; color: var(--error);
+  white-space: nowrap; font-weight: 700; background: var(--bubble); padding: 0 3px; }
+.future { position: absolute; top: 0; bottom: 0; inset-inline-end: 0; background: var(--bubble); opacity: .55; border-radius: 4px; }
+.evlist { display: flex; flex-direction: column; gap: 4px; margin: 0; padding: 0; list-style: none; font-size: 13px; }
+.evlist.all, .tbars.all { max-height: 320px; overflow-y: auto; }
+.evlist li { display: flex; gap: 8px; align-items: center; min-width: 0; }
+.evlist time { font-family: ui-monospace, Consolas, monospace; font-size: 12px; color: var(--muted); direction: ltr; flex: none; }
+.mk { width: 10px; height: 10px; flex: none; border-radius: 2px; background: var(--accent); }
+.mk.mg { border-radius: 50%; background: var(--ok); }
+.mk.dc { background: var(--founder); transform: rotate(45deg); }
+.mk.unk { background: var(--muted); }
+.stage-row { display: flex; flex-wrap: wrap; gap: 6px; flex-direction: row !important; }
+.stage-row .chip.cur { background: var(--accent); color: var(--accent-text); }
+.prog-chain { margin-top: 14px; }
+@media (max-width: 700px) {
+  #dash { padding: .5rem; }
+  .sync { margin-inline-start: 0; flex-basis: 100%; }
+  .kpi .kv { font-size: 22px; }
+}
 </style>
 </head>
 <body>
@@ -319,7 +434,7 @@ dialog .buttons { display: flex; justify-content: flex-end; gap: .5rem; margin-t
 <div id="app" hidden>
   <div id="view-switch">
     <button type="button" id="view-chat" class="btn active">צ'אט</button>
-    <button type="button" id="view-dash" class="btn">לוח מחוונים</button>
+    <button type="button" id="view-dash" class="btn">לוח</button>
   </div>
   <nav id="side">
     <div id="brand"><span id="logo" dir="ltr">agora</span></div>
@@ -371,22 +486,27 @@ dialog .buttons { display: flex; justify-content: flex-end; gap: .5rem; margin-t
   <aside id="dash" hidden>
     <div class="dhead">
       <h2>הלוח של החברה</h2>
-      <div id="dash-pill" class="dash-pill sync">
+      <div id="dash-pill" class="dash-pill sync" role="status">
         <span class="dot" aria-hidden="true"></span>
-        <span id="dash-pill-text"></span>
-        <button type="button" id="dash-sync" class="go">סנכרן עכשיו</button>
+        <span id="dash-pill-text">טוען…</span>
       </div>
+      <button type="button" id="dash-sync" class="go">סנכרן עכשיו</button>
+      <button type="button" id="dash-theme" class="icon" title="כהה / בהיר" aria-label="כהה / בהיר">&#9681;</button>
     </div>
+    <div id="dash-kpis" class="kpis" aria-label="במבט אחד"></div>
     <div class="cards">
-      <section class="dash-card card" id="dash-live"><h3></h3><div class="dash-body"></div></section>
-      <section class="dash-card card wide" id="dash-approvals"><h3></h3><div class="dash-body"></div></section>
-      <section class="dash-card card" id="dash-waiting"><h3></h3><div class="dash-body"></div></section>
-      <section class="dash-card card" id="dash-roles"><h3></h3><div class="dash-body"></div></section>
-      <section class="dash-card card" id="dash-queue"><h3></h3><div class="dash-body"></div></section>
-      <section class="dash-card card" id="dash-prs" hidden><h3></h3><div class="dash-body"></div></section>
-      <section class="dash-card card" id="dash-week"><h3></h3><div class="dash-body"></div></section>
-      <section class="dash-card card" id="dash-products"><h3></h3><div class="dash-body"></div></section>
-      <section class="dash-card card" id="dash-stuck"><h3></h3><div class="dash-body"></div></section>
+      <section class="dash-card card wide" id="dash-timeline"><h3></h3><div class="dash-body"><div class="muted">טוען…</div></div></section>
+      <section class="dash-card card" id="dash-approvals"><h3></h3><div class="dash-body"><div class="muted">טוען…</div></div></section>
+      <section class="dash-card card" id="dash-live"><h3></h3><div class="dash-body"><div class="muted">טוען…</div></div></section>
+      <section class="dash-card card" id="dash-roles"><h3></h3><div class="dash-body"><div class="muted">טוען…</div></div></section>
+      <section class="dash-card card" id="dash-tokens"><h3></h3><div class="dash-body"><div class="muted">טוען…</div></div></section>
+      <section class="dash-card card" id="dash-queue"><h3></h3><div class="dash-body"><div class="muted">טוען…</div></div></section>
+      <section class="dash-card card" id="dash-prs"><h3></h3><div class="dash-body"><div class="muted">טוען…</div></div></section>
+      <section class="dash-card card" id="dash-waiting"><h3></h3><div class="dash-body"><div class="muted">טוען…</div></div></section>
+      <section class="dash-card card" id="dash-stuck"><h3></h3><div class="dash-body"><div class="muted">טוען…</div></div></section>
+      <section class="dash-card card" id="dash-week"><h3></h3><div class="dash-body"><div class="muted">טוען…</div></div></section>
+      <section class="dash-card card" id="dash-products"><h3></h3><div class="dash-body"><div class="muted">טוען…</div></div></section>
+      <section class="dash-card card" id="dash-progress"><h3></h3><div class="dash-body"><div class="muted">טוען…</div></div></section>
     </div>
   </aside>
   <aside id="members-panel" class="drawer" aria-labelledby="members-head">
@@ -927,10 +1047,28 @@ async function poll(gen) {
   }
 }
 
-// -- the dashboard panel (issue #82): the human view of the same document an
-// agent reads from GET /api/v1/dashboard. Every card below is fed by one
-// named section of that document, through a single shared list renderer —
-// each card's own function says only which section and how to filter it.
+// -- the dashboard panel (issue #82; the approved mockup's look, ops#220):
+// the human view of the same document an agent reads from GET
+// /api/v1/dashboard. First look first (the founder is ADHD): four big
+// coloured numbers, then cards of at most DASH_LIMIT one-line rows each, full
+// text on hover and "הצג הכל" for the rest. Every string goes in through
+// textContent; nothing on the board is parsed as markup.
+
+const DASH_LIMIT = 5;
+const dashOpen = new Set();   // lists whose "הצג הכל" is open: survives every re-render
+const approvalsNotes = {};    // card id -> the note typed so far: a sync re-render keeps it
+const TOKVIEW = "agora-board-tokens";
+const VIEW = "agora-chat-view";
+let tokView = "24h";          // the tokens card's toggle: "24h" (היום) or "7d" (השבוע)
+
+function minsAgo(now, thenMs) { return Math.max(0, Math.round((now - thenMs) / 60000)); }
+
+function agoText(mins) {
+  if (mins < 1) return "לפני רגע";
+  if (mins < 90) return "לפני " + mins + " דק׳";
+  if (mins < 48 * 60) return "לפני " + Math.round(mins / 60) + " שע׳";
+  return "לפני " + Math.round(mins / 1440) + " ימים";
+}
 
 // The pill's text: an error (which is also how "no dashboard command
 // configured" reaches the page, per chat/server.py) replaces the normal line
@@ -938,166 +1076,582 @@ async function poll(gen) {
 // timestamp sitting next to a silent problem. `now` (ms) is a parameter so
 // this stays pure and testable; live callers omit it and get Date.now().
 function pillText(d, now) {
-  if (d.last_error) return d.last_error;
+  if (d.last_error) return "שגיאה: " + d.last_error;
   if (now === undefined) now = Date.now();
-  const mins = d.last_sync == null ? null : Math.max(0, Math.round(now / 1000 / 60 - d.last_sync / 60));
-  return "updated automatically · last sync " + (mins == null ? "never" : mins + " min") + " ago · source: GitHub";
+  if (d.last_sync == null) return "עוד לא סונכרן · מקור: GitHub";
+  return (d.stale ? "ישן: " : "מתעדכן אוטומטית · ") + "סנכרון אחרון " + agoText(minsAgo(now, d.last_sync * 1000))
+    + " · מקור: GitHub";
 }
 
 function renderPill(d, now) {
-  $("dash-pill-text").textContent = pillText(d, now);
-  $("dash-pill").classList.toggle("stale", !!d.stale);
-}
-
-// One row shape, {label, detail, url}, covers every card except "open PRs by
-// type": a list of rows, rendered as text through textContent alone; `url`
-// (when a row has one) makes the label a link instead of plain text — still
-// built with createElement and textContent, never a markup sink.
-function renderRows(rows) {
-  const ul = document.createElement("ul");
-  ul.className = "dash-list rows";
-  for (const row of rows || []) {
-    const li = document.createElement("li");
-    if (row.chip) {
-      const chip = document.createElement("span");
-      chip.className = "chip " + row.chip;
-      chip.textContent = row.chipText || row.chip.toUpperCase();
-      li.append(chip);
-    }
-    const label = document.createElement(row.url ? "a" : "span");
-    if (row.url) { label.href = row.url; label.target = "_blank"; label.rel = "noopener"; }
-    // A ref (issue/PR id) is mono/ltr/nowrap, per the mockup's `.ref`; a role
-    // or product name reads like ordinary RTL text, so it gets no `.ref`.
-    label.className = "dash-label" + (row.ref !== false ? " ref" : "");
-    label.textContent = row.label || "";
-    li.append(label);
-    if (row.detail) {
-      const detail = document.createElement("span");
-      detail.className = "dash-detail muted tx";
-      detail.textContent = row.detail;
-      li.append(detail);
-    }
-    ul.append(li);
+  const text = $("dash-pill-text");
+  if (d.last_error) {
+    // The server's error is English: its own <bdi>, so RTL cannot reorder it.
+    text.replaceChildren("שגיאה: ", el("bdi", null, d.last_error));
+  } else {
+    text.textContent = pillText(d, now);
   }
-  if (!ul.children.length) {
-    const li = document.createElement("li");
-    li.className = "dash-empty muted";
-    li.textContent = "—";
-    ul.append(li);
-  }
-  return ul;
+  $("dash-pill").classList.toggle("stale", !!d.stale && !d.last_error);
+  $("dash-pill").classList.toggle("bad", !!d.last_error);
+  $("dash-pill").title = d.last_error
+    || "השרת קורא את GitHub, את הלוג של ה-pool ואת קובץ הטוקנים כל 5 דקות. אין צעד ידני.";
 }
-
-// The mappers below turn one producer row into the {label, detail, url}
-// shape renderRows wants. Field names follow the CTO's review of PR #90
-// (round 1) — https://github.com/determlab/agora/pull/90#issuecomment-5866601187
-// — which named the real shape `ops/tools/dashboard.py` `build()` sends;
-// round 1 had invented a `{label, detail}` shape no producer ever filled, so
-// every card but "open PRs by type" read empty against the live server.
-// Only these functions, and the fixture in tests/fixtures/dashboard-doc.json,
-// should need to change if the real fields drift further from that review.
 
 function joinDetail(...parts) { return parts.filter((p) => p !== null && p !== undefined && p !== "").join(" · "); }
 
-// pool now: one row per agent/session currently on a ref.
+// Re-render the whole board from what is already loaded (no fetch), then put
+// the focus back on the control that asked for it, so a keyboard user does
+// not lose their place.
+function rerenderDash(focusCls) {
+  if (S.dashboard) renderDashboard(S.dashboard);
+  const b = focusCls ? $("dash").querySelector("." + focusCls) : null;
+  if (b) b.focus();
+}
+
+// A list cut to `limit` items with a "הצג הכל (N)" toggle; `key` names it in
+// dashOpen. An open list scrolls inside its card, never the page.
+function cutList(box, items, key, limit) {
+  limit = limit || DASH_LIMIT;
+  const open = dashOpen.has(key);
+  box.append(...(open ? items : items.slice(0, limit)));
+  if (items.length <= limit) return box;
+  if (open) box.classList.add("all");
+  const wrap = el("div", "cut");
+  const more = el("button", "more more-" + key, open ? "הצג פחות" : "הצג הכל (" + items.length + ")");
+  more.type = "button";
+  more.setAttribute("aria-expanded", String(open));
+  more.onclick = () => {
+    if (dashOpen.has(key)) dashOpen.delete(key); else dashOpen.add(key);
+    rerenderDash("more-" + key);
+  };
+  wrap.append(box, more);
+  return wrap;
+}
+
+function link(cls, text, url) {
+  const a = el(url ? "a" : "span", cls, text);
+  if (url) { a.href = url; a.target = "_blank"; a.rel = "noopener"; }
+  return a;
+}
+
+// One row: {chip, chipText, label, url, ref, detail, title, meta}. The
+// detail is one line; its full text is the row's hover title.
+function rowItem(row) {
+  const li = el("li");
+  if (row.chip) li.append(el("span", "chip " + row.chip, row.chipText || row.chip.toUpperCase()));
+  if (row.label) li.append(link("dash-label" + (row.ref !== false ? " ref" : ""), row.label, row.url));
+  if (row.detail) {
+    const d = el("span", "dash-detail tx", row.detail);
+    d.title = row.title || row.detail;
+    li.append(d);
+  }
+  if (row.meta) li.append(el("span", "chip " + (row.metaCls || "none"), row.meta));
+  return li;
+}
+
+// Every list card: rows through rowItem, cut to DASH_LIMIT when `key` is
+// given, and an empty list says so in words (`empty`), never a blank card.
+function renderRows(rows, key, empty) {
+  const ul = el("ul", "dash-list rows");
+  const items = (rows || []).map(rowItem);
+  if (!items.length) {
+    ul.append(el("li", "dash-empty muted", empty || "—"));
+    return ul;
+  }
+  return key ? cutList(ul, items, key) : (ul.append(...items), ul);
+}
+
+function localMidnight(now) { const d = new Date(now); d.setHours(0, 0, 0, 0); return d.getTime(); }
+
+function hhmm(ms) {
+  const d = new Date(ms);
+  return String(d.getHours()).padStart(2, "0") + ":" + String(d.getMinutes()).padStart(2, "0");
+}
+
+// The strip on top: four numbers that answer "how are we doing?" in one
+// look. Colour is the status; the hover title says what each counts.
+function renderKpis(doc, now) {
+  if (now === undefined) now = Date.now();
+  doc = doc || {};
+  const wrap = el("div", "kpis-in");
+  const tile = (label, value, tone, hint) => {
+    const t = el("div", "kpi " + tone);
+    t.append(el("span", "kv", value), el("span", "kl", label));
+    t.title = hint;
+    wrap.append(t);
+  };
+  const moves = Array.isArray(doc.next_moves) ? doc.next_moves : null;
+  tile("מחכה לך", moves ? String(moves.length) : "—", moves ? (moves.length ? "warn" : "ok") : "none",
+       moves ? moves.length + " כרטיסי אישור פתוחים" : "אין נתון");
+  const live = Array.isArray(doc.live) ? doc.live : [];
+  tile("ה-POOL", live.length ? (live.length > 1 ? live.length + " רצות" : "רץ") : "פנוי",
+       live.length ? "ok" : "none", live.length ? live.map((r) => r.ref).join(", ") : "אין ריצה עכשיו");
+  const t = doc.timeline;
+  const merges = t && Array.isArray(t.merges)
+    ? t.merges.filter((m) => Date.parse(m.at) >= localMidnight(now)) : null;
+  tile("נמזגו היום", merges ? String(merges.length) : "—", merges && merges.length ? "ok" : "none",
+       merges ? (merges.map((m) => m.ref).join(", ") || "עוד לא נמזג היום") : "אין נתון");
+  const p = doc.plan && doc.plan["5h"];
+  if (p && !p.expired) {
+    tile("תוכנית · 5 שעות", p.percent + "%", p.percent >= 85 ? "bad" : p.percent >= 60 ? "warn" : "ok",
+         p.percent + "% ממגבלת 5 השעות" + (doc.plan.stale ? " · נקרא " + agoText(doc.plan.age_min) : ""));
+  } else {
+    tile("תוכנית · 5 שעות", "—", "none", p ? "החלון התאפס; מחכה לקריאה חדשה" : "אין נתון תוכנית");
+  }
+  return wrap;
+}
+
+// The timeline's window, in the viewer's own time: from local midnight
+// (or 6 h back, early in the day) to two hours past now.
+function timelineWindow(now) {
+  const mid = localMidnight(now);
+  let from = mid;
+  if (now - mid < 6 * 3600e3) { const d = new Date(now - 6 * 3600e3); d.setMinutes(0, 0, 0); from = d.getTime(); }
+  const t = new Date(now); t.setMinutes(0, 0, 0);
+  return {from, to: t.getTime() + 2 * 3600e3};
+}
+
+const ANSWER_HE = {yes: "אושר", no: "נדחה", later: "לאחר כך"};
+
+// Today's timeline (ops#220): runs, merges and founder decisions on an hour
+// axis with a red "now" line, and the same events as a list under it. A
+// lane whose source is missing (`null` in the document) is left out, and a
+// muted line says why; an empty lane is shown empty.
+function renderTimeline(t, now) {
+  if (now === undefined) now = Date.now();
+  const wrap = el("div", "tlwrap");
+  if (!t || typeof t !== "object") {
+    wrap.append(el("div", "muted", "אין נתוני ציר זמן במסמך: צריך dashboard.py עדכני (ops#220)"));
+    return wrap;
+  }
+  const {from, to} = timelineWindow(now);
+  const span = to - from;
+  const pos = (ms) => (Math.min(Math.max(ms, from), to) - from) / span * 100;
+  const pct = (ms) => pos(ms).toFixed(2) + "%";
+  const runs = (t.runs || []).map((r) => {
+    const a = Date.parse(r.start), b = r.end ? Date.parse(r.end) : null;
+    return {...r, a, b, e: b != null ? b : r.live ? now : a + 5 * 60e3};
+  }).filter((r) => r.e >= from && r.a <= to);
+  const when = (x) => ({...x, ms: Date.parse(x.at)});
+  const inWin = (x) => x.ms >= from && x.ms <= to;
+  const merges = Array.isArray(t.merges) ? t.merges.map(when).filter(inWin) : null;
+  const decisions = Array.isArray(t.decisions) ? t.decisions.map(when).filter(inWin) : null;
+  const scroll = el("div", "tl");
+  const g = el("div", "tlin");
+  g.append(el("span"));
+  const ax = el("div", "axis");
+  const step = span > 12 * 3600e3 ? 2 * 3600e3 : 3600e3;
+  for (let h = from; h <= to; h += step) {
+    if (Math.abs(h - now) < span * 0.1) continue;  // the red "now" label sits there (QA ops#220)
+    const s = el("span", null, hhmm(h)); s.style.insetInlineStart = pct(h); ax.append(s);
+  }
+  g.append(ax);
+  let first = true;
+  const lane = (label, fill) => {
+    g.append(el("span", "ln", label));
+    const l = el("div", "lane");
+    fill(l);
+    const fu = el("div", "future");
+    fu.style.width = (100 - pos(now)).toFixed(2) + "%";
+    const nw = el("div", "now");
+    nw.style.insetInlineStart = pct(now);
+    if (first) { nw.append(el("span", null, "עכשיו " + hhmm(now))); first = false; }
+    l.append(fu, nw);
+    g.append(l);
+  };
+  const runText = (r) => "סבב " + r.round + " · " + (r.live ? "רץ עכשיו" : r.b != null ? "עד " + hhmm(r.b) : "סוף לא ידוע");
+  // Runs that overlap in time go on separate rows (QA ops#220: four pool
+  // runs at once drew on top of each other). A bar too short for its ref
+  // shows no text; the ref stays in its tooltip and the event list.
+  const rowEnds = [];
+  const rowOf = new Map();
+  [...runs].sort((x, y) => x.a - y.a).forEach((r) => {
+    let i = rowEnds.findIndex((end) => end + span * 0.003 <= r.a);
+    if (i < 0) { i = rowEnds.length; rowEnds.push(0); }
+    rowEnds[i] = Math.max(r.e, r.a + span * 0.004);
+    rowOf.set(r, i);
+  });
+  lane("ריצות", (l) => runs.forEach((r) => {
+    const w = (Math.min(r.e, to) - Math.max(r.a, from)) / span * 100;
+    const e = el("span", "ev run" + (r.live ? " live" : "") + (r.b == null && !r.live ? " unk" : ""), w >= 5 ? r.ref : "");
+    if (rowEnds.length > 1) {
+      l.style.height = (rowEnds.length * 14 + 8) + "px";
+      e.style.top = (4 + rowOf.get(r) * 14) + "px";
+      e.style.marginTop = "0";
+      e.style.height = "12px";
+      e.style.lineHeight = "12px";
+    }
+    e.style.insetInlineStart = pct(r.a);
+    e.style.width = w.toFixed(2) + "%";
+    e.title = r.ref + " · " + hhmm(r.a) + "–" + (r.live ? "עכשיו" : r.b != null ? hhmm(r.b) : "?") + " · " + runText(r)
+      + (r.outcome ? " · " + r.outcome : "");
+    l.append(e);
+  }));
+  if (merges) lane("מיזוגים", (l) => merges.forEach((m) => {
+    const e = el("span", "ev mg");
+    e.style.insetInlineStart = pct(m.ms);
+    e.title = hhmm(m.ms) + " · " + m.ref + " · " + (m.title || "");
+    l.append(e);
+  }));
+  if (decisions) lane("החלטות מייסד", (l) => decisions.forEach((d) => {
+    const e = el("span", "ev dc");
+    e.style.insetInlineStart = pct(d.ms);
+    e.title = hhmm(d.ms) + " · " + (ANSWER_HE[d.answer] || d.answer || "") + ": " + (d.q_he || d.id);
+    l.append(e);
+  }));
+  scroll.append(g);
+  wrap.append(scroll);
+  const notes = t.notes || {};
+  if (!merges) {
+    const n = el("div", "muted", "מיזוגים: GitHub לא נקרא בסנכרון האחרון");
+    n.title = notes.merges || "";
+    wrap.append(n);
+  }
+  if (!decisions) {
+    const n = el("div", "muted", "החלטות מייסד: אין עדיין מקור. הקובץ נוצר בתשובה הראשונה בכרטיס אישור.");
+    n.title = notes.decisions || "";
+    wrap.append(n);
+  }
+  const events = [
+    ...runs.map((r) => ({ms: r.a, mk: r.b == null && !r.live ? "unk" : "", ref: r.ref, url: r.url, text: runText(r)})),
+    ...(merges || []).map((m) => ({ms: m.ms, mk: "mg", ref: m.ref, url: m.url, text: "נמזג: " + (m.title || "")})),
+    ...(decisions || []).map((d) => ({ms: d.ms, mk: "dc", ref: null, url: null,
+      text: "המייסד " + (ANSWER_HE[d.answer] || d.answer || "") + ": " + (d.q_he || d.id) + (d.note ? " (" + d.note + ")" : "")})),
+  ].filter((x) => x.ms >= from).sort((x, y) => y.ms - x.ms);
+  const ul = el("ul", "evlist");
+  if (!events.length) {
+    ul.append(el("li", "muted", "אין אירועים היום עדיין"));
+    wrap.append(ul);
+    return wrap;
+  }
+  const items = events.map((x) => {
+    const li = el("li");
+    li.append(el("time", null, hhmm(x.ms)), el("span", "mk " + x.mk));
+    if (x.ref) li.append(link("ref", x.ref, x.url));
+    const tx = el("span", "tx", x.text);
+    tx.title = x.text;
+    li.append(tx);
+    return li;
+  });
+  wrap.append(cutList(ul, items, "tl-events"));
+  return wrap;
+}
+
+// The pool now: the run in progress, big, or one clear "no run now" line.
+// idle_min can read negative (clock skew between the run log and the server,
+// agora#100): clamped to 0.
 function renderLive(rows) {
-  return renderRows((rows || []).map((r) => ({
-    label: r.ref, url: r.url,
-    // idle_min can read negative (clock skew between the run log and the
-    // server, agora#100) — clamp to 0 rather than show a negative age.
-    detail: joinDetail(r.phase, r.round != null ? "round " + r.round : null,
-                        r.claimed_min != null ? "claimed " + r.claimed_min + "m ago" : null,
-                        r.idle_min != null ? "idle " + Math.max(0, r.idle_min) + "m" : null,
-                        r.last_action),
-  })));
+  const wrap = el("div");
+  rows = Array.isArray(rows) ? rows : [];
+  if (!rows.length) {
+    const idle = el("div", "idle");
+    idle.append(el("span", "st idle", "פנוי"), el("span", "muted", "אין ריצה עכשיו"));
+    wrap.append(idle);
+    return wrap;
+  }
+  const r = rows[0];
+  const dl = el("dl", "live");
+  const add = (k, v, cls, title) => {
+    dl.append(el("dt", null, k));
+    const dd = el("dd", cls || null);
+    dd.append(v);
+    if (title) dd.title = title;
+    dl.append(dd);
+  };
+  add("issue", link("big ref", r.ref, r.url));
+  const round = joinDetail(r.round != null ? String(r.round) : null, r.phase);
+  add("סבב", round || "—", null, joinDetail(round, r.prev_end ? "הסבב הקודם הסתיים " + r.prev_end : null));
+  const idle = r.idle_min != null ? Math.max(0, r.idle_min) : null;
+  add("דקות", joinDetail(r.claimed_min != null ? r.claimed_min + " מאז שהתחיל" : null,
+                         idle != null ? idle + " מאז הפעולה האחרונה" : null) || "—",
+      idle != null && idle >= 10 ? "warn" : null);
+  add("פעולה אחרונה", el("bdi", "act", r.last_action || "—"), null, r.last_action || "");
+  wrap.append(dl);
+  if (rows.length > 1) {
+    wrap.append(el("div", "muted", "עוד " + (rows.length - 1) + " ריצות:"));
+    wrap.append(renderRows(rows.slice(1).map((x) => ({label: x.ref, url: x.url,
+      detail: joinDetail(x.round != null ? "סבב " + x.round : null, x.last_action)})), "live-more"));
+  }
+  return wrap;
 }
 
-// stuck: every row the producer flags, regardless of who it is blocking on;
-// `repo`/`number` are the issue or PR's own coordinates, not a link (the
-// producer sends no `url` for these).
+// stuck: every row the producer flags; `repo`/`number` are the issue's own
+// coordinates (the producer sends no `url` for these, so one is built).
+const CHECK_HE = {NEEDSHUMAN: ["צריך אותך", "warn"], STALE: ["תקוע", "bad"], IDLE: ["בלי תנועה", "none"]};
 function stuckRow(r) {
-  return {label: (r.repo || "") + (r.number != null ? "#" + r.number : ""),
-          detail: joinDetail(r.check, r.text)};
+  const has = Number(r.number) > 0;   // IDLE is about a whole repo: number 0, no issue to link
+  const ref = (r.repo || "") + (has ? "#" + r.number : "");
+  const c = CHECK_HE[r.check] || [r.check, "none"];
+  // The chip already says which check it is: drop the text's own "label: " prefix.
+  const text = String(r.text || "").replace(/^agent:needs-human:\s*/, "");
+  return {label: ref, detail: text, title: r.text || "",
+          url: r.repo && has ? "https://github.com/determlab/" + r.repo + "/issues/" + r.number : null,
+          meta: c[0], metaCls: c[1]};
 }
-function renderStuck(rows) { return renderRows((rows || []).map(stuckRow)); }
+// NEEDSHUMAN rows have their own card ("ריצות שממתינות לך"): not twice.
+function renderStuck(rows) {
+  return renderRows((rows || []).filter((r) => r.check !== "NEEDSHUMAN").map(stuckRow), "dash-stuck", "שום דבר לא תקוע");
+}
 
-// "waiting for you" is not a section of its own: it is the founder's own
-// rows out of `stuck` — the ones flagged NEEDSHUMAN, not another agent's.
-// (Round 1 filtered `who_works` too, by a `for` field the real document
-// does not have, so those rows never showed; `who_works` carries no such
-// flag at all, so it is not consulted here.)
+// "runs waiting for you": the founder's own rows out of `stuck` — the ones
+// flagged NEEDSHUMAN, not another agent's.
 function renderWaiting(stuck) {
-  return renderRows((stuck || []).filter((r) => r.check === "NEEDSHUMAN").map(stuckRow));
+  return renderRows((stuck || []).filter((r) => r.check === "NEEDSHUMAN").map(stuckRow), "dash-waiting",
+                    "אף ריצה לא מחכה לך");
 }
 
-// who works on what: one row per role, its current state and task; `ref`
-// links to whatever it is currently on, when there is one.
+// who works on what: an avatar per role, what it is on, and a status dot.
+const ROLE_STATE = {busy: ["busy", "עובד"], waiting: ["wait", "מחכה"], idle: ["idle", "פנוי"], off: ["idle", "פנוי"]};
 function renderRoles(rows) {
-  return renderRows((rows || []).map((r) => ({
-    label: r.role, url: r.url, ref: false,
-    detail: joinDetail(r.state, r.doing, r.ref),
-  })));
+  const box = el("div", "roles");
+  rows = Array.isArray(rows) ? rows : [];
+  if (!rows.length) { box.append(el("div", "muted", "אין נתון תפקידים")); return box; }
+  for (const r of rows) {
+    const row = el("div", "role");
+    const name = String(r.role || "?");
+    const av = el("span", "av role-" + name.toLowerCase().replace(/[^a-z]/g, ""), name.slice(0, 4));
+    av.setAttribute("aria-hidden", "true");
+    const tx = el("div", "tx");
+    const line = el("div", "one", name + " · " + (r.doing || ""));
+    line.title = line.textContent;
+    tx.append(line);
+    if (r.ref) tx.append(link("ref", r.ref, r.url));
+    const st = ROLE_STATE[r.state] || ["idle", r.state || ""];
+    row.append(av, tx, el("span", "st " + st[0], st[1]));
+    box.append(row);
+  }
+  return box;
 }
 
-// the queue by priority: a colored `.chip` (mockup style) instead of folding
-// the priority into the label text, which used to scramble under RTL
-// ("#p0 · adk-lab#8" read as "p0 · adk-#lab#8", agora#100). `claimed_now` /
-// `needs_human` are flags, not text, so they only add a word when true.
+// the queue by priority: a coloured `.chip` (P0 red, P1 amber, P2 grey).
 function renderQueue(rows) {
   return renderRows((rows || []).map((r) => ({
     chip: r.priority ? "p" + String(r.priority).replace(/^p/, "") : null,
     chipText: r.priority ? String(r.priority).toUpperCase() : null,
-    label: r.ref, url: r.url,
-    detail: joinDetail(r.title, r.claimed_now ? "claimed" : null, r.needs_human ? "needs human" : null),
-  })));
+    label: r.ref, url: r.url, detail: r.title || "",
+    meta: r.needs_human ? "צריך אדם" : null, metaCls: "warn",
+  })), "dash-queue", "התור ריק");
 }
 
-// the week: not a list of rows at all but one big number (points closed,
-// mockup style) plus a muted line for the rest, rather than a 4-row table.
+// open PRs: the CTO's last verdict type as a chip (type B comes to the
+// founder); "לא נבדק" until the CTO wrote one. `null` = GitHub unreadable.
+function renderPrs(list, total) {
+  const wrap = el("div");
+  if (list === undefined) { wrap.append(el("div", "muted", "אין נתון במסמך: צריך dashboard.py עדכני (ops#220)")); return wrap; }
+  if (list === null) { wrap.append(el("div", "muted", "GitHub לא נקרא בסנכרון האחרון")); return wrap; }
+  wrap.append(renderRows(list.map((p) => ({
+    chip: p.type ? p.type.toLowerCase() : "none", chipText: p.type ? "type " + p.type : "לא נבדק",
+    label: p.ref, url: p.url, detail: (p.draft ? "טיוטה · " : "") + (p.title || ""),
+    meta: p.verdict === "CHANGES" ? "שינויים" : null, metaCls: "warn",
+  })), "dash-prs", "אין PRs פתוחים"));
+  if (typeof total === "number" && total > list.length)
+    wrap.append(el("div", "muted", "מוצגים " + list.length + " מתוך " + total + " (" + list.length + "+)"));
+  wrap.append(el("div", "muted", "type B מגיע אליך. type A: ממתין למיזוג."));
+  return wrap;
+}
+
+// the week: one big number (points closed) plus one muted line.
 function renderWeek(w) {
-  const wrap = document.createElement("div");
-  if (!w || w.points_closed == null) {
-    wrap.append(el("span", "muted", "—"));
-    return wrap;
-  }
-  const top = document.createElement("div");
+  const wrap = el("div");
+  if (!w || w.points_closed == null) { wrap.append(el("span", "muted", "—")); return wrap; }
+  const top = el("div");
   top.append(el("span", "big", String(w.points_closed)),
-    document.createTextNode(" points closed" + (w.points_closed_previous != null
-      ? " (last week: " + w.points_closed_previous + ")" : "")));
+    " נקודות נסגרו" + (w.points_closed_previous != null ? " (שבוע קודם: " + w.points_closed_previous + ")" : ""));
   wrap.append(top);
   const bits = [];
-  if (w.percent_of_company != null) bits.push(w.percent_of_company + "% of company");
-  if (w.median_go_to_close_h != null) bits.push("median time to close: " + w.median_go_to_close_h + "h");
+  if (w.percent_of_company != null) bits.push(w.percent_of_company + "% מכל העבודה");
+  if (w.median_go_to_close_h != null) bits.push("חציון agent:go עד סגירה: " + w.median_go_to_close_h + "h");
   if (bits.length) wrap.append(el("div", "muted", bits.join(" · ")));
   return wrap;
 }
 
-// products: `goal_he` is the product's goal in Hebrew — the one line worth
-// showing next to its name; `due`, `work` and `checks` follow when present.
-// `work` is an object and `checks` a list, so each is summed up into text here
-// (round 2 passed them straight through and the card printed [object Object]).
+// products: name, its goal on one line, percent done and a bar (mockup).
 function renderProducts(rows) {
-  return renderRows((rows || []).map((r) => {
-    const w = r.work;
-    const work = w && w.points_total != null
-      ? w.points_done + "/" + w.points_total + " pts" + (w.percent != null ? " (" + w.percent + "%)" : "")
-      : null;
-    const checks = Array.isArray(r.checks) && r.checks.length
-      ? r.checks.filter((c) => c.done).length + "/" + r.checks.length + " checks" : null;
-    return {label: r.name, ref: false,
-            detail: joinDetail(r.goal_he, r.due ? "due " + r.due : null, work, checks)};
-  }));
+  const box = el("div", "prods");
+  const items = (rows || []).map((r) => {
+    const w = r.work || {};
+    const item = el("div", "prod");
+    const top = el("div", "top");
+    const name = el("b", null, r.name || "");
+    const goal = el("span", "tx muted", r.goal_he || "");
+    goal.title = joinDetail(r.goal_he, r.due ? "יעד " + r.due : null,
+      w.points_total != null ? w.points_done + "/" + w.points_total + " נקודות" : null,
+      Array.isArray(r.checks) && r.checks.length ? r.checks.filter((c) => c.done).length + "/" + r.checks.length + " בדיקות" : null);
+    top.append(name, goal, el("span", "ref", w.percent != null ? w.percent + "%" : "—"));
+    const bar = el("div", "pbar");
+    const i = el("i");
+    i.style.width = (w.percent || 0) + "%";
+    bar.append(i);
+    item.append(top, bar);
+    return item;
+  });
+  if (!items.length) { box.append(el("div", "muted", "—")); return box; }
+  return cutList(box, items, "dash-products");
 }
 
-// Grouped by type; the card itself stays hidden when the section is absent
-// (renderDashboard never calls this without checking doc.prs first).
-function renderPrs(byType) {
-  const wrap = document.createElement("div");
-  for (const [type, rows] of Object.entries(byType || {})) {
-    const h = document.createElement("h4");
-    h.textContent = type;
-    wrap.append(h, renderRows(rows));
+function fmtTok(n) {
+  n = Number(n) || 0;
+  if (n >= 1e9) return (n / 1e9).toFixed(1) + "B";
+  if (n >= 1e6) return (n / 1e6).toFixed(1) + "M";
+  if (n >= 1e3) return Math.round(n / 1e3) + "k";
+  return String(Math.round(n));
+}
+
+function resetText(key, iso, now) {
+  if (!iso) return "";
+  const ms = Date.parse(iso);
+  const left = Math.max(0, ms - now);
+  if (key === "5h" || left < 24 * 3600e3) {
+    return "מתאפס בעוד " + Math.floor(left / 3600e3) + ":" + String(Math.floor((left % 3600e3) / 60e3)).padStart(2, "0");
   }
+  return "מתאפס " + new Date(ms).toLocaleDateString("he-IL", {weekday: "short"}) + " " + hhmm(ms);
+}
+
+// The Claude plan's own limits (the status line saves them to
+// ~/.claude/plan-usage.json; dashboard.py reads it into `plan`).
+function renderPlan(plan, now) {
+  if (now === undefined) now = Date.now();
+  const box = el("div", "plan");
+  if (!plan) {
+    box.append(el("div", "muted", "אין נתון תוכנית: שורת הסטטוס עוד לא שמרה אותו"));
+    return box;
+  }
+  for (const [k, label] of [["5h", "חלון 5 שעות"], ["7d", "שבועי"]]) {
+    const w = plan[k];
+    const row = el("div", "pl");
+    if (!w) { row.append(el("span", null, label + ": —")); box.append(row); continue; }
+    if (w.expired) { row.append(el("span", null, label + ": התאפס"), el("span", null, "מחכה לקריאה חדשה")); box.append(row); continue; }
+    row.append(el("span", null, label + ": " + w.percent + "% מהמגבלה"), el("span", null, resetText(k, w.resets_at, now)));
+    const bar = el("div", "pbar");
+    const i = el("i", w.percent >= 85 ? "bad" : w.percent >= 60 ? "hi" : "");
+    i.style.width = Math.min(100, w.percent) + "%";
+    bar.append(i);
+    box.append(row, bar);
+  }
+  if (plan.stale) box.append(el("div", "muted warnline", "נקרא " + agoText(plan.age_min) + ": שורת הסטטוס לא רצה מאז"));
+  return box;
+}
+
+// Tokens (ops#220): היום (24 h) / השבוע (7 d), a big total, one blue bar per
+// role and one orange bar per pool run (by issue), then the plan bars. All
+// from the hourly tokens.json dashboard.py merges in: no scan in the sync.
+const TOK_WIN = {"24h": "היום", "7d": "השבוע"};
+function renderTokens(t, plan, view) {
+  view = view || tokView;
+  const wrap = el("div", "tok");
+  const head = el("div", "tokhead");
+  const seg = el("span", "tseg");
+  seg.setAttribute("role", "group");
+  seg.setAttribute("aria-label", "חלון זמן");
+  for (const [k, label] of Object.entries(TOK_WIN)) {
+    const b = el("button", "tok-" + k, label);
+    b.type = "button";
+    b.setAttribute("aria-pressed", String(view === k));
+    b.title = k === "24h" ? "24 השעות האחרונות" : "7 הימים האחרונים";
+    b.onclick = () => {
+      tokView = k;
+      try { localStorage.setItem(TOKVIEW, k); } catch (e) { /* private window: the toggle still works */ }
+      rerenderDash("tok-" + k);
+    };
+    seg.append(b);
+  }
+  const roles = Object.entries((t && t.agents) || {})
+    .map(([name, w]) => ({name, v: w && w[view] ? w[view].weighted : null}))
+    .filter((r) => r.v != null);
+  const pool = t && t.pool && t.pool[view] ? t.pool[view].weighted : null;
+  const cloud = t && t.cloud && t.cloud[view] ? t.cloud[view].weighted : null;
+  const runs = (t && t.pool_runs && t.pool_runs[view]) || [];
+  const total = roles.reduce((a, r) => a + r.v, 0) + (pool || 0) + (cloud || 0);
+  const sum = el("div");
+  if (roles.length || pool != null) {
+    const big = el("span", "big", fmtTok(total));
+    big.title = "יחידות משוקללות: קלט ×1, כתיבת cache ×1.25, קריאת cache ×0.1, פלט ×5. דירוג, לא חשבון.";
+    sum.append(big, " טוקנים " + TOK_WIN[view]);
+  } else {
+    sum.append(el("span", "muted", t ? "אין עדיין נתון ל" + TOK_WIN[view] + ": tokens.json נכתב כל שעה" : "—"));
+  }
+  head.append(sum, seg);
+  wrap.append(head);
+  const max = Math.max(1, ...roles.map((r) => r.v), ...runs.map((r) => r.weighted));
+  const bar = (label, v, isPool, hint) => {
+    const r = el("div", "tb" + (isPool ? " pool" : ""));
+    const tr = el("div", "track");
+    const i = el("i");
+    i.style.width = (v / max * 100).toFixed(1) + "%";
+    tr.append(i);
+    r.append(el("span", "lb", label), tr, el("span", "v", fmtTok(v)));
+    r.title = hint + ": " + Math.round(v).toLocaleString("en-US");
+    return r;
+  };
+  const bars = el("div", "tbars");
+  roles.sort((a, b) => b.v - a.v).forEach((r) => bars.append(bar(r.name, r.v, false, "תפקיד " + r.name)));
+  if (cloud) bars.append(bar("Cloud", cloud, false, "cloud coders"));
+  if (roles.length) wrap.append(bars);
+  if (runs.length) {
+    wrap.append(cutList(el("div", "tbars"), runs.map((r) => bar("pool · " + r.ref, r.weighted, true, "ריצת pool על " + r.ref)),
+                        "tok-runs-" + view, 3));
+  }
+  if (roles.length || runs.length) wrap.append(el("div", "muted", "כחול: תפקידים. כתום: ריצות pool לפי issue."));
+  wrap.append(renderPlan(plan));
+  const lim = t && t.last_limit;
+  if (lim && lim.active) {
+    // The limit text and the reset time are English/ISO inside a Hebrew
+    // line: each goes in its own <bdi> so the RTL order cannot garble it
+    // ("hour limit reached-5", QA on PR 112).
+    const line = el("div", "muted warnline", "מגבלה אחרונה: ");
+    line.append(el("bdi", "", lim.what || ""));
+    if (lim.reset) {
+      line.append(" · מתאפס ב-");
+      line.append(el("bdi", "", lim.reset));
+    }
+    wrap.append(line);
+  }
+  return wrap;
+}
+
+// Big-picture progress (ops#171), compact: stage chips, v1 milestone bars
+// and the v1 chain (five rows each, "הצג הכל" for the rest), its one blocker.
+function renderProgress(p) {
+  const wrap = el("div");
+  p = p || {};
+  const stages = Array.isArray(p.stages) ? p.stages : [];
+  if (stages.length) {
+    const row = el("div", "stage-row");
+    for (const s of stages) row.append(el("span", "chip" + (s.current ? " cur" : " a"), s.he || s.name || ""));
+    wrap.append(row);
+  }
+  const milestones = Array.isArray(p.milestones) ? p.milestones : [];
+  if (milestones.length) {
+    const items = milestones.map((m) => {
+      const li = el("li");
+      li.append(link("dash-label", joinDetail(m.repo, m.title), m.url));
+      if (m.total != null) {
+        const bar = el("div", "bar");
+        const i = el("i");
+        i.style.width = (m.percent || 0) + "%";
+        bar.append(i);
+        li.append(bar, el("span", "dash-detail muted tx", m.closed + "/" + m.total + " (" + (m.percent ?? 0) + "%)"));
+      } else {
+        li.append(el("span", "dash-detail muted tx", "—"));
+      }
+      return li;
+    });
+    wrap.append(cutList(el("ul", "dash-list rows"), items, "prog-ms"));
+  }
+  const chain = Array.isArray(p.chain) ? p.chain : [];
+  if (chain.length) {
+    const rows = renderRows(chain.map((c) => ({
+      label: c.ref, url: c.url, detail: c.title || "", meta: c.done ? "בוצע" : "פתוח", metaCls: c.done ? "a" : "none",
+    })), "prog-chain");
+    rows.classList.add("prog-chain");   // a gap under the milestone bars (QA on PR 112/192)
+    wrap.append(rows);
+  }
+  if (p.blocker) {
+    const b = el("div", "muted");
+    b.append("חוסם: ", link("ref", p.blocker.ref, p.blocker.url), " — " + (p.blocker.title || ""));
+    wrap.append(b);
+  }
+  if (!stages.length && !milestones.length && !chain.length && !p.blocker) wrap.append(el("div", "muted", "—"));
   return wrap;
 }
 
@@ -1105,16 +1659,50 @@ function mountCard(id, node) {
   $(id).querySelector(".dash-body").replaceChildren(node);
 }
 
-// Approvals carousel (agora#100 founder addition): one item of doc.next_moves
-// at a time, "N of M", so a skipped item is never dropped — prev/next only
-// move the index, never filter the list. Display-only: the real yes/no send
-// is agora#83; the buttons here are a UI slot with a click hook and log to
-// the console, nothing is sent. `cost` is not a field `next_moves` has today
-// (noted in the PR) — the row is left out rather than shown as "undefined".
+// Approvals carousel (agora#100, wired for real in ops#176, mockup look in
+// ops#220): one item of doc.next_moves at a time, "N of M", so a skipped
+// item is never dropped — prev/next only move the index, never filter the
+// list. Yes/No/Later open a 10s Undo window (the founder's answer on #176)
+// before POST /api/v1/dashboard/approve actually sends the decision; Undo
+// cancels the timer and nothing is sent.
 let approvalsIdx = 0;
+let approvalsPending = null;  // {id, answer, note, q_he, timer} during the Undo window
+
+function clearApprovalsPending() {
+  if (approvalsPending) clearTimeout(approvalsPending.timer);
+  approvalsPending = null;
+}
+
+async function commitApproval(id, answer, note) {
+  try {
+    await api("POST", "dashboard/approve", {id, answer, note: note || ""});
+    toast((ANSWER_HE[answer] || answer) + ": נשמר");
+  } catch (e) { toast("לא נשלח: " + e.message, true); }
+  finally { await loadDashboard(); }
+}
+
+// `https://github.com/determlab/shal/issues/231` reads as `shal#231`.
+function shortRef(url) {
+  const m = /github\.com\/[^/]+\/([^/]+)\/(?:issues|pull)\/(\d+)/.exec(url || "");
+  return m ? m[1] + "#" + m[2] : "קישור";
+}
+
 function renderApprovals(moves) {
   moves = moves || [];
-  const wrap = document.createElement("div");
+  const wrap = el("div", "appr");
+  if (approvalsPending) {
+    const p = approvalsPending;
+    const bar = el("div", "appr-undo");
+    const what = el("span", "tx", (ANSWER_HE[p.answer] || p.answer) + ": " + (p.q_he || p.id));
+    what.title = what.textContent;
+    bar.append(what);
+    const undo = el("button", "go appr-undo-btn", "בטל");
+    undo.type = "button";
+    undo.onclick = () => { clearApprovalsPending(); mountCard("dash-approvals", renderApprovals(moves)); };
+    bar.append(undo);
+    wrap.append(bar, el("div", "muted", "נשלח בעוד 10 שניות"));
+    return wrap;
+  }
   if (!moves.length) {
     wrap.append(el("div", "muted", "אין אישורים ממתינים"));
     return wrap;
@@ -1123,34 +1711,69 @@ function renderApprovals(moves) {
   const item = moves[approvalsIdx];
   const head = el("div", "appr-head");
   head.append(el("span", null, (approvalsIdx + 1) + " מתוך " + moves.length));
-  const nav = el("div", "appr-nav");
-  const prev = el("button", "go", "‹ הקודם");
-  const next = el("button", "go", "הבא ›");
-  prev.type = "button"; next.type = "button";
-  prev.onclick = () => { approvalsIdx = (approvalsIdx - 1 + moves.length) % moves.length; mountCard("dash-approvals", renderApprovals(moves)); };
-  next.onclick = () => { approvalsIdx = (approvalsIdx + 1) % moves.length; mountCard("dash-approvals", renderApprovals(moves)); };
-  nav.append(prev, next);
-  head.append(nav);
+  if (item.deferred) head.append(el("span", "chip none", "נדחה קודם"));
+  if (moves.length > 1) {
+    const nav = el("div", "appr-nav");
+    const prev = el("button", "go appr-prev", "›");
+    const next = el("button", "go appr-next", "‹");
+    prev.type = "button"; next.type = "button";
+    prev.title = "הקודם"; next.title = "הבא";
+    prev.setAttribute("aria-label", "הקודם"); next.setAttribute("aria-label", "הבא");
+    const go = (d, cls) => {
+      approvalsIdx = (approvalsIdx + d + moves.length) % moves.length;
+      mountCard("dash-approvals", renderApprovals(moves));
+      const b = $("dash-approvals").querySelector("." + cls);
+      if (b) b.focus();
+    };
+    prev.onclick = () => go(-1, "appr-prev");
+    next.onclick = () => go(1, "appr-next");
+    nav.append(prev, next);
+    head.append(nav);
+  }
   wrap.append(head);
   const body = el("div", "appr-body");
-  body.append(el("div", "q", item.q_he || item.id || ""));
-  if (item.why_he) body.append(el("div", "why", item.why_he));
+  const q = el("div", "q", item.q_he || item.id || "");
+  q.title = q.textContent;   // three lines at most; the whole text on hover
+  body.append(q);
+  if (item.why_he) { const why = el("div", "why", item.why_he); why.title = item.why_he; body.append(why); }
+  const meta = el("div", "appr-meta");
+  if (item.cost_he) meta.append(el("span", "chip a", "עלות: " + item.cost_he));
   if (item.link) {
-    const a = document.createElement("a");
-    a.className = "ref"; a.href = item.link; a.target = "_blank"; a.rel = "noopener";
-    a.textContent = item.link;
-    body.append(a);
+    const a = link("ref", shortRef(item.link), item.link);
+    a.title = item.link;
+    meta.append(a);
   }
+  if (meta.childNodes.length) body.append(meta);
   wrap.append(body);
+  const note = el("input", "appr-note");
+  note.type = "text";
+  note.placeholder = "הערה קצרה (לא חובה)";
+  note.setAttribute("aria-label", "הערה קצרה");
+  note.value = approvalsNotes[item.id] || "";
+  note.oninput = () => { approvalsNotes[item.id] = note.value; };
+  wrap.append(note);
   const btns = el("div", "appr-btns");
-  const yes = el("button", "go yes", "כן");
-  const no = el("button", "go no", "לא");
-  yes.type = "button"; no.type = "button";
-  // Display-only slot: agora#83 owns the real send. Skipping (either button)
-  // just moves to the next item — the item itself is never removed.
-  yes.onclick = () => { console.log("approve (not sent — agora#83):", item.id); next.onclick(); };
-  no.onclick = () => { console.log("decline (not sent — agora#83):", item.id); next.onclick(); };
-  btns.append(yes, no);
+  const yes = el("button", "yes", "כן");
+  const no = el("button", "no", "לא");
+  const later = el("button", "later", "אחר כך");
+  yes.type = "button"; no.type = "button"; later.type = "button";
+  // The founder's Undo answer (#176): the click opens a 10s window, shown by
+  // re-rendering into the pending state above; only the timer firing (Undo
+  // not clicked) actually calls the server.
+  const startPending = (answer) => {
+    const pending = {id: item.id, answer, note: note.value.trim(), q_he: item.q_he};
+    pending.timer = setTimeout(() => {
+      approvalsPending = null;
+      delete approvalsNotes[pending.id];
+      commitApproval(pending.id, pending.answer, pending.note);
+    }, 10000);
+    approvalsPending = pending;
+    mountCard("dash-approvals", renderApprovals(moves));
+  };
+  yes.onclick = () => startPending("yes");
+  no.onclick = () => startPending("no");
+  later.onclick = () => startPending("later");
+  btns.append(yes, no, later);
   wrap.append(btns);
   return wrap;
 }
@@ -1159,37 +1782,46 @@ function setCount(id, n) {
   const h3 = $(id).querySelector("h3");
   let cnt = h3.querySelector(".cnt");
   if (!cnt) { cnt = el("span", "cnt"); h3.append(cnt); }
-  cnt.textContent = String(n);
+  cnt.textContent = n == null ? "" : String(n);
 }
 
 function renderDashboard(d) {
   renderPill(d);
-  const doc = d.doc || {};
+  const doc = d.doc && typeof d.doc === "object" ? d.doc : {};
+  $("dash-kpis").replaceChildren(renderKpis(doc));
+  mountCard("dash-timeline", renderTimeline(doc.timeline));
+  // On a narrow screen the timeline scrolls sideways: start at "now" (the
+  // left end in RTL), not at midnight.
+  const tl = $("dash-timeline").querySelector(".tl");
+  if (tl && tl.scrollWidth > tl.clientWidth) tl.scrollLeft = -tl.scrollWidth;
   mountCard("dash-live", renderLive(doc.live));
-  mountCard("dash-approvals", renderApprovals(doc.next_moves));
-  setCount("dash-approvals", (doc.next_moves || []).length);
+  mountCard("dash-approvals", renderApprovals(Array.isArray(doc.next_moves) ? doc.next_moves : []));
+  setCount("dash-approvals", Array.isArray(doc.next_moves) ? doc.next_moves.length : null);
+  mountCard("dash-tokens", renderTokens(doc.tokens, doc.plan));
   mountCard("dash-waiting", renderWaiting(doc.stuck));
+  setCount("dash-waiting", (doc.stuck || []).filter((r) => r.check === "NEEDSHUMAN").length);
   mountCard("dash-roles", renderRoles(doc.roles));
   mountCard("dash-queue", renderQueue(doc.queue));
   setCount("dash-queue", (doc.queue || []).length);
+  mountCard("dash-prs", renderPrs(doc.open_prs, doc.open_prs_total));
+  setCount("dash-prs", Array.isArray(doc.open_prs) ? doc.open_prs.length : null);
   mountCard("dash-week", renderWeek(doc.week));
   mountCard("dash-products", renderProducts(doc.products));
   mountCard("dash-stuck", renderStuck(doc.stuck));
-  setCount("dash-stuck", (doc.stuck || []).length);
-  $("dash-prs").hidden = !doc.prs;
-  if (doc.prs) {
-    mountCard("dash-prs", renderPrs(doc.prs));
-    setCount("dash-prs", Object.values(doc.prs).reduce((a, rows) => a + rows.length, 0));
-  }
+  setCount("dash-stuck", (doc.stuck || []).filter((r) => r.check !== "NEEDSHUMAN").length);
+  mountCard("dash-progress", renderProgress(doc.progress));
 }
 
 // The one place GET /api/v1/dashboard is fetched from: on load, on every
 // "dashboard" event and on reconnect, all through connect() and poll() above.
-// A failed fetch renders as its own error line rather than leaving the last
-// good render in place silently unlabeled as stale.
+// A failed fetch keeps the last good document on screen and says so in the
+// pill (red, with the error), rather than blanking every card.
 async function loadDashboard() {
   try { S.dashboard = await api("GET", "dashboard"); }
-  catch (e) { S.dashboard = {doc: null, last_sync: null, stale: true, last_error: e.message}; }
+  catch (e) {
+    const old = S.dashboard || {};
+    S.dashboard = {doc: old.doc || null, last_sync: old.last_sync ?? null, stale: true, last_error: e.message};
+  }
   renderDashboard(S.dashboard);
 }
 
@@ -1968,6 +2600,7 @@ const DASH_TITLES = {
   "dash-live": "ה-POOL עכשיו", "dash-approvals": "מחכה לאישור שלך", "dash-waiting": "ריצות שממתינות לך",
   "dash-roles": "מי עובד על מה", "dash-queue": "התור לפי עדיפות", "dash-prs": "PRs פתוחים",
   "dash-week": "השבוע", "dash-products": "מוצרים", "dash-stuck": "תקוע",
+  "dash-progress": "התמונה הגדולה", "dash-tokens": "טוקנים", "dash-timeline": "ציר הזמן של היום",
 };
 for (const [id, title] of Object.entries(DASH_TITLES)) {
   $(id).querySelector("h3").textContent = title;
@@ -1982,30 +2615,42 @@ function setView(view) {
   $("dash").hidden = view !== "dash";
   $("view-chat").classList.toggle("active", view === "chat");
   $("view-dash").classList.toggle("active", view === "dash");
+  $("view-chat").setAttribute("aria-pressed", String(view === "chat"));
+  $("view-dash").setAttribute("aria-pressed", String(view === "dash"));
+  // ops#220: a reload opens the view you were on.
+  try { localStorage.setItem(VIEW, view); } catch (e) { /* private window: the switch still works */ }
+  if (view === "dash" && S.dashboard) renderDashboard(S.dashboard);  // fresh "N min ago" and "now" line
 }
 $("view-chat").addEventListener("click", () => setView("chat"));
 $("view-dash").addEventListener("click", () => setView("dash"));
 
 $("dash-sync").addEventListener("click", async () => {
-  $("dash-sync").disabled = true;
-  try { await api("POST", "dashboard/sync"); }
+  const b = $("dash-sync");
+  b.disabled = true;
+  b.textContent = "מסנכרן…";
+  try { await api("POST", "dashboard/sync"); toast("הלוח עודכן"); }
   catch (e) { toast("לא סונכרן: " + e.message, true); }
   // Reload either way: a failed sync still changes last_error, and the pill
   // must show what the server now holds, not what was asked (D3's shape).
-  finally { await loadDashboard(); $("dash-sync").disabled = false; }
+  finally { await loadDashboard(); b.disabled = false; b.textContent = "סנכרן עכשיו"; }
 });
+
+// The pill's "N min ago" moves on its own between syncs.
+setInterval(() => { if (S.dashboard && !$("dash").hidden) renderPill(S.dashboard); }, 30000);
 
 function applyTheme(theme) {
   if (theme === "dark" || theme === "light") document.documentElement.dataset.theme = theme;
   else delete document.documentElement.dataset.theme;
 }
 
-$("theme-btn").addEventListener("click", () => {
+function toggleTheme() {
   const dark = getComputedStyle(document.documentElement).colorScheme.trim() === "dark";
   const next = dark ? "light" : "dark";
   localStorage.setItem(THEME, next);
   applyTheme(next);
-});
+}
+$("theme-btn").addEventListener("click", toggleTheme);
+$("dash-theme").addEventListener("click", toggleTheme);  // the board hides #top, so it has its own
 
 $("key-form").addEventListener("submit", (e) => {
   e.preventDefault();
@@ -2026,6 +2671,11 @@ $("forget").addEventListener("click", () => {
 });
 
 applyTheme(localStorage.getItem(THEME));
+try {
+  const v = localStorage.getItem(TOKVIEW);
+  if (v === "24h" || v === "7d") tokView = v;
+} catch (e) { /* no storage: the default view */ }
+setView((() => { try { return localStorage.getItem(VIEW); } catch (e) { return null; } })() === "dash" ? "dash" : "chat");
 try { S.creds = JSON.parse(localStorage.getItem(STORE) || "null"); } catch (e) { S.creds = null; }
 if (S.creds && S.creds.email && S.creds.key) start(); else { S.creds = null; showKeys(""); }
 </script>

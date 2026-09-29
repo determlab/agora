@@ -29,6 +29,40 @@ def _ok_cmd(calls) -> str:
 
 FAIL_CMD = f"{PY} -c 'import sys; sys.stderr.write(\"gh: not logged in\\n\"); sys.exit(1)'"
 
+# -- ops#176: POST /api/v1/dashboard/approve, which shells out to
+# --approve-cmd (a stand-in for ops's tools/approve.py) the same way
+# --dashboard-cmd stands in for tools/dashboard.py above.
+
+DOC_MOVES = {"next_moves": [
+    {"id": "a", "q_he": "A?", "why_he": "because a", "cost_he": "0.1M", "link": "https://x/a"},
+    {"id": "b", "q_he": "B?", "why_he": "because b", "cost_he": "0.2M", "link": "https://x/b"},
+]}
+
+
+def _ok_cmd_moves(calls) -> str:
+    counter = str(calls).replace("\\", "/")
+    return (f"{PY} -c 'import json; open(\"{counter}\", \"a\").write(\"x\\n\"); "
+            f"print(json.dumps({json.dumps(DOC_MOVES)}))'")
+
+
+def _approve_ok_cmd() -> str:
+    """A stand-in for `tools/approve.py <id> <answer> [--note N] --json`:
+    echoes back what it was asked to record, the same shape approve.py's own
+    --json prints on success."""
+    return (f"{PY} -c 'import sys, json; a = sys.argv[1:]; "
+            f"note = a[a.index(\"--note\") + 1] if \"--note\" in a else None; "
+            f"print(json.dumps({{\"ok\": True, \"id\": a[0], \"answer\": a[1], \"note\": note, "
+            f"\"at\": \"2026-09-29T10:00:00Z\"}}))'")
+
+
+APPROVE_REJECT_CMD = (f"{PY} -c 'import json; "
+                      f"print(json.dumps({{\"ok\": False, \"error\": \"card a is already "
+                      f"answered (yes at 2026-09-29T09:00:00Z)\", \"fix\": \"nothing to do - it "
+                      f"is already closed\"}})); "
+                      f"raise SystemExit(2)'")
+APPROVE_FAIL_CMD = f"{PY} -c 'import sys; sys.stderr.write(\"boom\\n\"); sys.exit(1)'"
+APPROVE_TIMEOUT_CMD = f"{PY} -c 'import time; time.sleep(5)'"
+
 
 def _calls(path) -> int:
     return len(path.read_text().splitlines()) if path.exists() else 0
@@ -44,13 +78,14 @@ class Clock:
 
 @pytest.fixture
 def make(tmp_path):
-    """make(cmd, every=3600) -> (api, server): a server with the sync thread
-    running, after its first (immediate) run has finished, and a bot's Api."""
+    """make(cmd, every=3600, approve_cmd=None) -> (api, server): a server
+    with the sync thread running, after its first (immediate) run has
+    finished, and a bot's Api."""
     servers = []
 
-    def _make(cmd, every=3600.0):
+    def _make(cmd, every=3600.0, approve_cmd=None):
         server = chat.make_server(str(tmp_path / "chat.sqlite3"), port=0, dashboard_cmd=cmd,
-                                  dashboard_every=every)
+                                  dashboard_every=every, approve_cmd=approve_cmd)
         threading.Thread(target=server.serve_forever, daemon=True).start()
         servers.append(server)
         dash = server.RequestHandlerClass.chat.dashboard
@@ -267,14 +302,99 @@ def test_no_key_is_refused(make):
     bad = Api(api.base, "cto-bot@chat.localhost", "wrong")
     assert bad("GET", "dashboard")[0] == 401
     assert bad("POST", "dashboard/sync")[0] == 401
+    assert bad("POST", "dashboard/approve")[0] == 401
+
+
+# -- ops#176: POST /api/v1/dashboard/approve --------------------------------
+
+
+def test_approve_yes_removes_the_card_from_the_cached_next_moves(make, tmp_path):
+    api, server = make(_ok_cmd_moves(tmp_path / "calls"), approve_cmd=_approve_ok_cmd())
+    status, body = api("POST", "dashboard/approve", id="a", answer="yes")
+    assert status == 200 and body["result"] == "success", body
+    assert body["id"] == "a" and body["answer"] == "yes" and body["note"] is None
+    _, got = api("GET", "dashboard")
+    assert [c["id"] for c in got["doc"]["next_moves"]] == ["b"]
+
+
+def test_approve_no_with_a_note_removes_the_card_and_passes_the_note(make, tmp_path):
+    api, server = make(_ok_cmd_moves(tmp_path / "calls"), approve_cmd=_approve_ok_cmd())
+    status, body = api("POST", "dashboard/approve", id="a", answer="no", note="not yet")
+    assert status == 200 and body["answer"] == "no" and body["note"] == "not yet"
+    _, got = api("GET", "dashboard")
+    assert [c["id"] for c in got["doc"]["next_moves"]] == ["b"]
+
+
+def test_approve_later_moves_the_card_to_the_end_marked_deferred(make, tmp_path):
+    api, server = make(_ok_cmd_moves(tmp_path / "calls"), approve_cmd=_approve_ok_cmd())
+    status, body = api("POST", "dashboard/approve", id="a", answer="later")
+    assert status == 200 and body["answer"] == "later"
+    _, got = api("GET", "dashboard")
+    moves = got["doc"]["next_moves"]
+    assert [c["id"] for c in moves] == ["b", "a"]
+    assert moves[1]["deferred"] is True and "deferred" not in moves[0]
+
+
+def test_approve_sends_a_dashboard_event_like_a_real_sync(make, tmp_path):
+    api, server = make(_ok_cmd_moves(tmp_path / "calls"), approve_cmd=_approve_ok_cmd())
+    _, q = api("POST", "register", event_types=["dashboard"])
+    assert api("POST", "dashboard/approve", id="a", answer="yes")[0] == 200
+    _, got = api("GET", "events", queue_id=q["queue_id"], last_event_id=-1, dont_block="true")
+    assert [e["type"] for e in got["events"]] == ["dashboard"]
+
+
+def test_approve_requires_id_and_a_known_answer(make, tmp_path):
+    api, server = make(_ok_cmd_moves(tmp_path / "calls"), approve_cmd=_approve_ok_cmd())
+    status, body = api("POST", "dashboard/approve", answer="yes")
+    assert status == 400 and "id" in body["msg"].lower()
+    status, body = api("POST", "dashboard/approve", id="a", answer="maybe")
+    assert status == 400 and "answer" in body["msg"].lower()
+
+
+def test_approve_reports_the_clis_own_rejection_of_an_already_answered_card(make, tmp_path):
+    api, server = make(_ok_cmd_moves(tmp_path / "calls"), approve_cmd=APPROVE_REJECT_CMD)
+    status, body = api("POST", "dashboard/approve", id="a", answer="yes")
+    assert status == 400 and body["result"] == "error"
+    assert "already answered" in body["msg"] and "nothing to do" in body["msg"]
+    # A rejected call never patches the cache: the card is still there.
+    _, got = api("GET", "dashboard")
+    assert [c["id"] for c in got["doc"]["next_moves"]] == ["a", "b"]
+
+
+def test_approve_reports_a_crashing_command(make, tmp_path):
+    api, server = make(_ok_cmd_moves(tmp_path / "calls"), approve_cmd=APPROVE_FAIL_CMD)
+    status, body = api("POST", "dashboard/approve", id="a", answer="yes")
+    assert status == 502 and "boom" in body["msg"]
+
+
+def test_approve_reports_a_timeout(make, tmp_path):
+    api, server = make(_ok_cmd_moves(tmp_path / "calls"), approve_cmd=APPROVE_TIMEOUT_CMD)
+    _dash(server).approve_timeout = 0.5
+    status, body = api("POST", "dashboard/approve", id="a", answer="yes")
+    assert status == 502 and "timed out" in body["msg"]
+
+
+def test_no_approve_command_configured_names_the_flag(make, tmp_path):
+    api, server = make(_ok_cmd_moves(tmp_path / "calls"))  # no approve_cmd
+    status, body = api("POST", "dashboard/approve", id="a", answer="yes")
+    assert status == 400 and "--approve-cmd" in body["msg"]
+
+
+def test_approve_patches_only_the_matching_card_leaving_others_untouched(make, tmp_path):
+    api, server = make(_ok_cmd_moves(tmp_path / "calls"), approve_cmd=_approve_ok_cmd())
+    api("POST", "dashboard/approve", id="a", answer="yes")
+    _, got = api("GET", "dashboard")
+    assert got["doc"]["next_moves"] == [{"id": "b", "q_he": "B?", "why_he": "because b",
+                                         "cost_he": "0.2M", "link": "https://x/b"}]
 
 
 def test_cli_takes_the_flags():
-    serve = ["serve", "--dashboard-cmd", "x --json", "--dashboard-every", "60"]
+    serve = ["serve", "--dashboard-cmd", "x --json", "--dashboard-every", "60",
+             "--approve-cmd", "y --json"]
     parsed = {}
 
-    def fake(db, port, poll, seed, cmd, every):
-        parsed.update(cmd=cmd, every=every)
+    def fake(db, port, poll, seed, cmd, every, approve_cmd=None):
+        parsed.update(cmd=cmd, every=every, approve_cmd=approve_cmd)
         raise SystemExit(0)
     real, chat.make_server = chat.make_server, fake
     try:
@@ -282,4 +402,4 @@ def test_cli_takes_the_flags():
             chat.main(serve)
     finally:
         chat.make_server = real
-    assert parsed == {"cmd": "x --json", "every": 60.0}
+    assert parsed == {"cmd": "x --json", "every": 60.0, "approve_cmd": "y --json"}
