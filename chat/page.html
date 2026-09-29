@@ -91,6 +91,16 @@ code, pre { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .topic:hover { color: var(--text); }
 .topic.open { background: var(--accent); color: var(--accent-text); }
+.topic-row { display: flex; align-items: center; }
+.topic-row .topic { flex: 1; min-width: 0; }
+.topic-archive { opacity: 0; transition: opacity .15s; font-size: 11px; }
+.topic-row:hover .topic-archive, .topic-archive:focus { opacity: 1; }
+#archive { border-top: 1px solid var(--line); margin-top: .5rem; padding-top: .35rem; }
+.archive-head { font-size: 11px; font-weight: 700; letter-spacing: .08em; color: var(--muted); padding: .25rem; }
+.archived-row { display: flex; align-items: center; gap: .25rem; font-size: 12px; }
+.archived-name { flex: 1; min-width: 0; text-align: start; border: 0; background: none; color: var(--muted);
+  padding: .2rem .4rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+button.archived-name:hover { color: var(--text); }
 .new-topic { border: 0; background: none; font-size: 12px; color: var(--accent);
   padding-block: .15rem; padding-inline: 1.4rem .5rem; }
 .new-topic:hover { text-decoration: underline; }
@@ -313,8 +323,13 @@ dialog .buttons { display: flex; justify-content: flex-end; gap: .5rem; margin-t
       <button type="button" id="forget" class="icon" title="מוחק את ה-API key מהדפדפן הזה">שכח מפתח</button>
     </div>
     <div id="streams-head"><span>ערוצים</span>
-      <button type="button" id="new-stream-btn" class="icon" title="ערוץ חדש" aria-label="ערוץ חדש">+</button></div>
+      <span><button type="button" id="archive-btn" class="icon" title="ערוצים ונושאים בארכיון" aria-expanded="false">ארכיון</button>
+      <button type="button" id="new-stream-btn" class="icon" title="ערוץ חדש" aria-label="ערוץ חדש">+</button></span></div>
     <ul id="streams"></ul>
+    <div id="archive" hidden>
+      <div class="archive-head">ארכיון (ההודעות נשמרות)</div>
+      <ul id="archived"></ul>
+    </div>
   </nav>
   <main id="main">
     <div id="top">
@@ -385,6 +400,7 @@ dialog .buttons { display: flex; justify-content: flex-end; gap: .5rem; margin-t
       <select id="members-who" aria-label="מי להוסיף"></select>
       <button type="submit" class="btn">הוסף</button>
     </form>
+    <div class="row"><button type="button" id="members-archive" class="btn">העבר את הערוץ לארכיון</button></div>
     <p id="members-status" class="muted"></p>
     <div class="api-box">
       <div class="muted">מה הדף שולח</div>
@@ -452,6 +468,8 @@ const S = {
   creds: null, gen: 0, queue: null, lastEvent: -1, me: null, sending: false, dashboard: null,
   streams: [],          // [{stream_id, name, invite_only}]
   topics: new Map(),    // stream name -> Map(topic -> newest message id)
+  archivedStreams: [],  // [{stream_id, name, invite_only}]: hidden from the list
+  archivedTopics: new Map(), // stream name -> [topic]: hidden from the list
   collapsed: new Set(), // stream ids whose topics are folded away
   users: new Map(),     // user id -> user
   open: null,           // {stream_id, stream, topic}
@@ -636,6 +654,22 @@ function renameStream(streamId, newName) {
   return api("PATCH", "streams/" + streamId, {new_name: newName});
 }
 
+// Archive hides a stream or a topic from the list; its messages stay on the
+// server. A new message to an archived topic brings it back by itself.
+function setStreamArchived(streamId, archived) {
+  return api("PATCH", "streams/" + streamId, {is_archived: archived});
+}
+
+function archiveTopic(streamId, topic) {
+  const path = "streams/" + streamId + "/archived_topics";
+  return api("POST", path, {topic: topic});
+}
+
+function restoreTopic(streamId, topic) {
+  const path = "streams/" + streamId + "/archived_topics";
+  return api("DELETE", path, {topic: topic});
+}
+
 function privacy(s) { return s.invite_only ? "פרטי" : "ציבורי"; }
 
 // What the create dialog says. `s` is the stream as the server lists it after
@@ -779,19 +813,76 @@ async function connect(gen) {
 }
 
 async function loadStreams() {
-  const subs = (await api("GET", "users/me/subscriptions")).subscriptions;
-  S.streams = subs.map((s) => ({stream_id: s.stream_id, name: s.name, invite_only: s.invite_only}));
+  const subs = (await api("GET", "users/me/subscriptions", {include_archived: true})).subscriptions;
+  const short = (s) => ({stream_id: s.stream_id, name: s.name, invite_only: s.invite_only});
+  S.streams = subs.filter((s) => !s.is_archived).map(short);
+  S.archivedStreams = subs.filter((s) => s.is_archived).map(short);
   S.topics = new Map();
+  S.archivedTopics = new Map();
   for (const s of S.streams) {
-    const got = await api("GET", "messages", {
-      narrow: [{operator: "channel", operand: s.name}],
-      anchor: "newest", num_before: 1000, num_after: 0});
-    const topics = new Map();
-    for (const m of got.messages) topics.set(m.subject, Math.max(topics.get(m.subject) || 0, m.id));
+    const got = await api("GET", "users/me/" + s.stream_id + "/topics", {include_archived: true});
+    const topics = new Map(), archived = [];
+    for (const t of got.topics) {
+      if (t.is_archived) archived.push(t.name); else topics.set(t.name, t.max_id);
+    }
     S.topics.set(s.name, topics);
+    S.archivedTopics.set(s.name, archived);
   }
   if (S.open && !S.streams.some((s) => s.stream_id === S.open.stream_id)) closeTopic();
   renderStreams();
+  renderArchive();
+}
+
+// The "ארכיון" section: archived streams and topics, each with a restore
+// button. An archived topic still opens, to read its history.
+function renderArchive() {
+  const list = $("archived");
+  list.replaceChildren();
+  let n = 0;
+  const row = (label, onOpen, onRestore) => {
+    const li = document.createElement("li");
+    li.className = "archived-row";
+    const name = document.createElement(onOpen ? "button" : "span");
+    if (onOpen) { name.type = "button"; name.addEventListener("click", onOpen); }
+    name.className = "archived-name";
+    name.dir = "auto";
+    name.textContent = label;
+    const restore = document.createElement("button");
+    restore.type = "button";
+    restore.className = "icon";
+    restore.textContent = "שחזר";
+    restore.addEventListener("click", onRestore);
+    li.append(name, restore);
+    list.append(li);
+    n += 1;
+  };
+  for (const s of S.archivedStreams) {
+    row("#" + s.name, null, () => archiveAction("#" + s.name + " שוחזר",
+                                                () => setStreamArchived(s.stream_id, false)));
+  }
+  for (const s of S.streams) {
+    for (const topic of S.archivedTopics.get(s.name) || []) {
+      row("#" + s.name + " › " + topic, () => openTopic(s.stream_id, s.name, topic),
+          () => archiveAction("#" + s.name + " › " + topic + " שוחזר",
+                              () => restoreTopic(s.stream_id, topic)));
+    }
+  }
+  if (!n) {
+    const li = document.createElement("li");
+    li.className = "archived-row muted";
+    li.textContent = "אין כלום בארכיון";
+    list.append(li);
+  }
+  $("archive-btn").textContent = n ? "ארכיון · " + n : "ארכיון";
+}
+
+// One archive or restore: the server's refusal is shown as it is, and the
+// lists are read back from the server, never guessed.
+async function archiveAction(done, call) {
+  try { await call(); } catch (e) { toast("לא בוצע: " + e.message, true); return false; }
+  try { await loadStreams(); } catch (e) { /* the next reconnect reloads */ }
+  toast(done);
+  return true;
 }
 
 async function poll(gen) {
@@ -1093,6 +1184,10 @@ function onMessage(m) {
   const topics = S.topics.get(m.display_recipient);
   if (!topics) return;
   topics.set(m.subject, Math.max(topics.get(m.subject) || 0, m.id));
+  // The server un-archived this topic when the message arrived.
+  const archived = (S.archivedTopics && S.archivedTopics.get(m.display_recipient)) || [];
+  const at = archived.findIndex((t) => t.toLowerCase() === m.subject.toLowerCase());
+  if (at >= 0) { archived.splice(at, 1); renderArchive(); }
   renderStreams();
   if (S.open && S.open.stream_id === m.stream_id
       && S.open.topic.toLowerCase() === m.subject.toLowerCase()) {
@@ -1154,7 +1249,15 @@ function renderStreams() {
       btn.textContent = topic;
       if (S.open && S.open.stream_id === s.stream_id && S.open.topic === topic) btn.classList.add("open");
       btn.addEventListener("click", () => openTopic(s.stream_id, s.name, topic));
-      item.append(btn);
+      const arc = document.createElement("button");
+      arc.type = "button";
+      arc.className = "icon topic-archive";
+      arc.title = "העבר את הנושא לארכיון (ההודעות נשמרות)";
+      arc.textContent = "ארכב";
+      arc.addEventListener("click", () => archiveAction(
+        "#" + s.name + " › " + topic + " הועבר לארכיון", () => archiveTopic(s.stream_id, topic)));
+      item.className = "topic-row";
+      item.append(btn, arc);
       ul.append(item);
     }
     ul.append(newTopicItem(s));
@@ -1729,6 +1832,19 @@ $("members-private").addEventListener("change", async () => {
   } catch (err) { now = undefined; }
   if (now) { S.panel = now; $("members-private").checked = !!now.invite_only; }
   report("members-status", privateReport(S.panel.name, want, now));
+});
+
+$("members-archive").addEventListener("click", async () => {
+  if (!S.panel) return;
+  const s = S.panel;
+  if (await archiveAction("#" + s.name + " הועבר לארכיון",
+                          () => setStreamArchived(s.stream_id, true))) closeMembers();
+});
+
+$("archive-btn").addEventListener("click", () => {
+  const box = $("archive");
+  box.hidden = !box.hidden;
+  $("archive-btn").setAttribute("aria-expanded", String(!box.hidden));
 });
 
 $("members-close").addEventListener("click", closeMembers);

@@ -108,7 +108,8 @@ CREATE TABLE IF NOT EXISTS users (
     date_joined INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS streams (
     stream_id INTEGER PRIMARY KEY, name TEXT UNIQUE COLLATE NOCASE NOT NULL,
-    invite_only INTEGER NOT NULL, description TEXT NOT NULL DEFAULT '');
+    invite_only INTEGER NOT NULL, description TEXT NOT NULL DEFAULT '',
+    is_archived INTEGER NOT NULL DEFAULT 0);
 CREATE TABLE IF NOT EXISTS subscriptions (
     user_id INTEGER NOT NULL, stream_id INTEGER NOT NULL,
     PRIMARY KEY (user_id, stream_id));
@@ -131,6 +132,9 @@ CREATE TABLE IF NOT EXISTS events (
     id INTEGER PRIMARY KEY AUTOINCREMENT, queue_id TEXT NOT NULL, body TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS events_queue ON events (queue_id, id);
 CREATE TABLE IF NOT EXISTS dashboard (ts INTEGER PRIMARY KEY, doc TEXT, error TEXT);
+CREATE TABLE IF NOT EXISTS archived_topics (
+    stream_id INTEGER NOT NULL, topic TEXT COLLATE NOCASE NOT NULL,
+    archived_at INTEGER NOT NULL, PRIMARY KEY (stream_id, topic));
 """
 
 
@@ -171,7 +175,18 @@ class Store:
         self.changed = threading.Condition(self.lock)
         self.db.execute("PRAGMA journal_mode=WAL")
         self.db.execute("PRAGMA busy_timeout=5000")
+        self.migrate()
         self.db.executescript(SCHEMA)
+
+    def migrate(self) -> None:
+        """Bring a database made by an older server up to SCHEMA without
+        touching its rows. ``CREATE TABLE IF NOT EXISTS`` adds a new table;
+        a new column on an existing table needs its own ``ALTER TABLE``."""
+        with self.lock:
+            cols = {r[1] for r in self.db.execute("PRAGMA table_info(streams)")}
+            if cols and "is_archived" not in cols:
+                self.db.execute("ALTER TABLE streams ADD COLUMN is_archived "
+                                "INTEGER NOT NULL DEFAULT 0")
 
     @contextlib.contextmanager
     def tx(self):
@@ -294,7 +309,7 @@ def stream_json(r) -> dict:
     return {"stream_id": r["stream_id"], "name": r["name"],
             "invite_only": bool(r["invite_only"]), "description": r["description"],
             "rendered_description": r["description"], "is_web_public": False,
-            "history_public_to_subscribers": True}
+            "history_public_to_subscribers": True, "is_archived": bool(r["is_archived"])}
 
 
 def _mention_marks(u: dict) -> list[str]:
@@ -669,6 +684,13 @@ class Chat:
                 topic = p.get("topic", p.get("subject"))
                 if topic is None:
                     raise ApiError("Missing topic: send 'topic'", "REQUEST_VARIABLE_MISSING")
+                if stream["is_archived"]:
+                    raise ApiError(f"Stream #{stream['name']} is archived: restore it first "
+                                   f"with PATCH /streams/{stream['stream_id']} "
+                                   f"is_archived=false", "STREAM_ARCHIVED")
+                # A new message brings an archived topic back into the list.
+                self.s.x("DELETE FROM archived_topics WHERE stream_id=? AND topic=?",
+                         (stream["stream_id"], topic))
                 mid = self.s.x("INSERT INTO messages (sender_id, type, stream_id, subject,"
                                " content, timestamp) VALUES (?,?,?,?,?,?)",
                                (me["id"], "stream", stream["stream_id"], topic, content, now))
@@ -825,22 +847,77 @@ class Chat:
             raise ApiError(f"Must be an organization administrator to {what}: use the "
                            f"credentials from add-human or bootstrap", "UNAUTHORIZED")
 
-    def subscriptions(self, me: dict) -> dict:
+    # GET /users/me/subscriptions: an archived stream only with include_archived=true
+    def subscriptions(self, me: dict, p: dict | None = None) -> dict:
+        archived = "" if _bool((p or {}).get("include_archived"), False) \
+            else "AND s.is_archived=0 "
         return {"subscriptions": [
             stream_json(r) for r in self.s.q(
                 "SELECT s.* FROM streams s JOIN subscriptions x ON x.stream_id=s.stream_id "
-                "WHERE x.user_id=? ORDER BY s.name", (me["id"],))]}
+                f"WHERE x.user_id=? {archived}ORDER BY s.name", (me["id"],))]}
 
-    # GET /streams
+    # GET /streams: an archived stream only with exclude_archived=false (Zulip's name)
     def streams(self, me: dict, p: dict) -> dict:
+        archived = " AND is_archived=0" if _bool(p.get("exclude_archived"), True) else ""
         if _bool(p.get("include_all_active"), False):
             self._admin(me, "list every stream (include_all_active)")
-            rows = self.s.q("SELECT * FROM streams ORDER BY name")
+            rows = self.s.q(f"SELECT * FROM streams WHERE 1{archived} ORDER BY name")
         else:
-            rows = self.s.q("SELECT * FROM streams WHERE invite_only=0 OR stream_id IN "
-                            "(SELECT stream_id FROM subscriptions WHERE user_id=?) "
-                            "ORDER BY name", (me["id"],))
+            rows = self.s.q("SELECT * FROM streams WHERE (invite_only=0 OR stream_id IN "
+                            "(SELECT stream_id FROM subscriptions WHERE user_id=?))"
+                            f"{archived} ORDER BY name", (me["id"],))
         return {"streams": [stream_json(r) for r in rows]}
+
+    # -- archive: a stream or a topic leaves the lists; its messages stay
+
+    # DELETE /streams/{id} is Zulip's "archive a channel"; PATCH is_archived=false
+    # restores it. Nothing is deleted either way.
+    def archive_stream(self, me: dict, sid: int, archived: bool = True) -> dict:
+        self._admin(me, ("archive" if archived else "restore") + " a stream")
+        self._stream_by_id(me, sid)
+        self.s.x("UPDATE streams SET is_archived=? WHERE stream_id=?", (int(archived), sid))
+        return {}
+
+    @staticmethod
+    def _topic_arg(p: dict) -> str:
+        topic = p.get("topic", p.get("subject"))
+        if topic is None or not str(topic).strip():
+            raise ApiError("Missing 'topic' argument: the topic name to archive or restore",
+                           "REQUEST_VARIABLE_MISSING")
+        return str(topic)
+
+    # GET /users/me/{stream_id}/topics: Zulip's topic list, newest first
+    def topics(self, me: dict, sid: int, p: dict) -> dict:
+        stream = self.s.visible_stream(me, sid)
+        rows = self.s.q(
+            "SELECT m.subject AS name, max(m.id) AS max_id, "
+            "EXISTS (SELECT 1 FROM archived_topics a WHERE a.stream_id=m.stream_id "
+            "AND a.topic=m.subject) AS archived "
+            "FROM messages m WHERE m.type='stream' AND m.stream_id=? "
+            "GROUP BY m.subject COLLATE NOCASE ORDER BY max_id DESC", (stream["stream_id"],))
+        include = _bool(p.get("include_archived"), False)
+        return {"topics": [{"name": r["name"], "max_id": r["max_id"],
+                            "is_archived": bool(r["archived"])}
+                           for r in rows if include or not r["archived"]]}
+
+    # GET|POST|DELETE /streams/{id}/archived_topics: list, archive, restore
+    def archived_topics(self, me: dict, sid: int, method: str, p: dict) -> dict:
+        stream = self.s.visible_stream(me, sid)
+        sid = stream["stream_id"]
+        if method == "POST":
+            topic = self._topic_arg(p)
+            if not self.s.one("SELECT 1 FROM messages WHERE type='stream' AND stream_id=? "
+                              "AND subject=? COLLATE NOCASE", (sid, topic)):
+                raise ApiError(f"No topic '{topic}' in #{stream['name']}: list them with "
+                               f"GET /users/me/{sid}/topics", "BAD_REQUEST")
+            self.s.x("INSERT OR IGNORE INTO archived_topics VALUES (?,?,?)",
+                     (sid, topic, int(time.time())))
+        elif method == "DELETE":
+            self.s.x("DELETE FROM archived_topics WHERE stream_id=? AND topic=?",
+                     (sid, self._topic_arg(p)))
+        return {"stream_id": sid, "topics": [r[0] for r in self.s.q(
+            "SELECT topic FROM archived_topics WHERE stream_id=? "
+            "ORDER BY archived_at DESC, topic", (sid,))]}
 
     def _principals(self, me: dict, p: dict) -> list[dict]:
         if not p.get("principals"):
@@ -919,6 +996,8 @@ class Chat:
                          (p["description"], sid))
             if p.get("new_name"):
                 self.s.x("UPDATE streams SET name=? WHERE stream_id=?", (p["new_name"], sid))
+            if p.get("is_archived") is not None:
+                self.archive_stream(me, sid, _bool(p["is_archived"], False))
         return {}
 
     # POST /bots
@@ -941,6 +1020,8 @@ class Chat:
     def route(self, method: str, path: str, me: dict, p: dict) -> dict:
         m = re.fullmatch(r"messages/(\d+)(/reactions)?", path)
         st = re.fullmatch(r"streams/(\d+)(/members)?", path)
+        at = re.fullmatch(r"streams/(\d+)/archived_topics", path)
+        tp = re.fullmatch(r"users/me/(\d+)/topics", path)
         if path == "messages" and method == "POST":
             return self.send(me, p)
         if path == "messages" and method == "GET":
@@ -962,7 +1043,7 @@ class Chat:
                                                                         "ORDER BY id")]}
         if path == "users/me/subscriptions":
             if method == "GET":
-                return self.subscriptions(me)
+                return self.subscriptions(me, p)
             if method == "POST":
                 return self.subscribe(me, p)
             if method == "DELETE":
@@ -977,6 +1058,12 @@ class Chat:
                 "SELECT user_id FROM subscriptions WHERE stream_id=? ORDER BY user_id", (sid,))]}
         if st and not st.group(2) and method == "PATCH":
             return self.update_stream(me, int(st.group(1)), p)
+        if st and not st.group(2) and method == "DELETE":
+            return self.archive_stream(me, int(st.group(1)))
+        if at and method in ("GET", "POST", "DELETE"):
+            return self.archived_topics(me, int(at.group(1)), method, p)
+        if tp and method == "GET":
+            return self.topics(me, int(tp.group(1)), p)
         if path == "bots" and method == "POST":
             return self.create_bot(me, p)
         if path == "dashboard" and method == "GET":
