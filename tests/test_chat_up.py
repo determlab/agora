@@ -26,8 +26,8 @@ from test_chat_setup import HUMAN, cli_env
 
 ZULIP_CLI = ROOT / "bot" / "zulip.py"
 SETUP = ROOT / "bot" / "setup_streams.py"
-ROLES = ("CTO", "CMO", "COO", "WATCHDOG", "POOL")
-STREAMS = ["cto", "cmo", "coo", "status", "feature", "pool"]
+ROLES = ("CTO", "CMO", "COO", "WATCHDOG", "POOL", "PM")
+STREAMS = ["cto", "cmo", "coo", "status", "feature", "pool", "PM"]
 
 
 def _free_port() -> int:
