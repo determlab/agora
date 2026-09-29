@@ -72,6 +72,25 @@ stream); `GET` there lists the archived ones. `GET
 carries `is_archived`. A new message to an archived topic un-archives it. From
 a shell: `python bot/zulip.py archive|unarchive --stream S [--topic T] --json`.
 
+## Unread messages (issue #168)
+
+Read state is per user, stored in the `read_messages` table (never touched by
+sending: a sender's own messages are simply excluded from their own unread
+count, not written as read). `GET /api/v1/unread` returns unread counts per
+stream and per topic for the caller:
+```json
+{"streams": [{"stream_id": 3, "name": "feature", "unread": 4,
+              "topics": [{"name": "ops#44 routes", "unread": 4}]}]}
+```
+`POST /api/v1/mark_topic_as_read` with `stream_id` and `topic_name` (Zulip's
+own endpoint and argument names) marks every message in that topic, not sent
+by the caller, read. The page shows a small round bubble next to each stream
+and topic with unread messages (hidden at 0), starts every stream's topic
+list collapsed on load, marks a topic read when it is opened (and when a
+message arrives while it is already open), and shows the total in the tab
+title as `(N) Agora`. From a shell: `python bot/zulip.py unread --json` and
+`python bot/zulip.py mark-read --stream S --topic T`.
+
 ## Accounts, by hand
 
     python chat/server.py bootstrap --json                      # an admin bot

@@ -86,6 +86,10 @@ code, pre { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
 .stream-row.folded .caret { transform: rotate(90deg); }
 .gear { opacity: 0; transition: opacity .15s; }
 .stream-row:hover .gear, .stream-row.open .gear, .gear:focus { opacity: 1; }
+.badge { flex: none; min-width: 1.1rem; height: 1.1rem; margin-inline-start: .3rem;
+  padding: 0 .3rem; border-radius: 999px; background: var(--accent); color: var(--accent-text);
+  font-size: 10px; font-weight: 700; line-height: 1.1rem; text-align: center; }
+.topic-row .badge { margin-inline-start: 0; margin-inline-end: .3rem; }
 .topic { display: block; width: 100%; text-align: start; border: 0; background: none;
   padding-block: .2rem; padding-inline: 1.4rem .5rem; border-radius: 6px; color: var(--muted);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -471,6 +475,8 @@ const S = {
   archivedStreams: [],  // [{stream_id, name, invite_only}]: hidden from the list
   archivedTopics: new Map(), // stream name -> [topic]: hidden from the list
   collapsed: new Set(), // stream ids whose topics are folded away
+  seenStreams: new Set(), // stream ids already given their starts-collapsed default
+  unread: new Map(),    // stream id -> {unread, topics: Map(topic.toLowerCase() -> count)}
   users: new Map(),     // user id -> user
   open: null,           // {stream_id, stream, topic}
   shown: new Set(),     // message ids in the open topic
@@ -807,6 +813,7 @@ async function connect(gen) {
   S.queue = reg.queue_id;
   S.lastEvent = reg.last_event_id;
   await loadStreams();
+  await loadUnread();
   if (S.open) await openTopic(S.open.stream_id, S.open.stream, S.open.topic);
   await loadDashboard();  // once on load, and again on every reconnect through here
   setLive("live", "מחובר");
@@ -820,6 +827,10 @@ async function loadStreams() {
   S.topics = new Map();
   S.archivedTopics = new Map();
   for (const s of S.streams) {
+    // A stream's topic list starts collapsed the first time it is seen (page
+    // load, or a fresh subscription); a fold the human already chose survives
+    // a reconnect.
+    if (!S.seenStreams.has(s.stream_id)) { S.seenStreams.add(s.stream_id); S.collapsed.add(s.stream_id); }
     const got = await api("GET", "users/me/" + s.stream_id + "/topics", {include_archived: true});
     const topics = new Map(), archived = [];
     for (const t of got.topics) {
@@ -1179,6 +1190,53 @@ async function loadDashboard() {
   renderDashboard(S.dashboard);
 }
 
+// -- unread bubbles (issue #168): per-stream, per-topic counts kept in
+// S.unread and pushed to the tab title. A user's own messages are never
+// unread for them (the server excludes them; nothing to do here either).
+
+function updateTitle() {
+  let total = 0;
+  for (const entry of S.unread.values()) total += entry.unread;
+  document.title = total ? "(" + total + ") Agora" : "agora · צ'אט";
+}
+
+async function loadUnread() {
+  const data = await api("GET", "unread");
+  const map = new Map();
+  for (const s of data.streams) {
+    const topics = new Map();
+    for (const t of s.topics) topics.set(t.name.toLowerCase(), t.unread);
+    map.set(s.stream_id, {unread: s.unread, topics});
+  }
+  S.unread = map;
+  renderStreams();
+  updateTitle();
+}
+
+// Opening a topic marks it read, and so does a message that arrives while
+// it is already open (onMessage below): either way the server and S.unread
+// agree, so a reconnect's loadUnread() never contradicts what is on screen.
+async function markTopicRead(streamId, topic) {
+  const entry = S.unread.get(streamId);
+  const had = entry ? entry.topics.get(topic.toLowerCase()) || 0 : 0;
+  if (entry && had) {
+    entry.topics.delete(topic.toLowerCase());
+    entry.unread = Math.max(0, entry.unread - had);
+    renderStreams();
+    updateTitle();
+  }
+  try { await api("POST", "mark_topic_as_read", {stream_id: streamId, topic_name: topic}); }
+  catch (e) { /* the next loadUnread() (reconnect) reconciles */ }
+}
+
+function bumpUnread(streamId, topic) {
+  let entry = S.unread.get(streamId);
+  if (!entry) { entry = {unread: 0, topics: new Map()}; S.unread.set(streamId, entry); }
+  const key = topic.toLowerCase();
+  entry.topics.set(key, (entry.topics.get(key) || 0) + 1);
+  entry.unread += 1;
+}
+
 function onMessage(m) {
   if (m.type !== "stream") return;
   const topics = S.topics.get(m.display_recipient);
@@ -1188,9 +1246,15 @@ function onMessage(m) {
   const archived = (S.archivedTopics && S.archivedTopics.get(m.display_recipient)) || [];
   const at = archived.findIndex((t) => t.toLowerCase() === m.subject.toLowerCase());
   if (at >= 0) { archived.splice(at, 1); renderArchive(); }
+  const mine = S.me && m.sender_id === S.me.user_id;
+  const isOpen = S.open && S.open.stream_id === m.stream_id
+      && S.open.topic.toLowerCase() === m.subject.toLowerCase();
+  if (!mine) {
+    if (isOpen) markTopicRead(m.stream_id, m.subject); else bumpUnread(m.stream_id, m.subject);
+  }
   renderStreams();
-  if (S.open && S.open.stream_id === m.stream_id
-      && S.open.topic.toLowerCase() === m.subject.toLowerCase()) {
+  updateTitle();
+  if (isOpen) {
     addMessages([m], false);
   }
 }
@@ -1235,7 +1299,10 @@ function renderStreams() {
     gear.setAttribute("aria-label", "חברים והגדרות");
     gear.append(svgIcon(GEAR, "gear-ico"));
     gear.addEventListener("click", () => openMembers(s));
-    row.append(name, gear);
+    row.append(name);
+    const unread = (S.unread instanceof Map ? S.unread : new Map()).get(s.stream_id);
+    if (unread && unread.unread > 0) row.append(el("span", "badge", String(unread.unread)));
+    row.append(gear);
     li.append(row);
     const ul = document.createElement("ul");
     ul.hidden = folded;
@@ -1257,7 +1324,10 @@ function renderStreams() {
       arc.addEventListener("click", () => archiveAction(
         "#" + s.name + " › " + topic + " הועבר לארכיון", () => archiveTopic(s.stream_id, topic)));
       item.className = "topic-row";
-      item.append(btn, arc);
+      item.append(btn);
+      const topicUnread = unread ? unread.topics.get(topic.toLowerCase()) || 0 : 0;
+      if (topicUnread > 0) item.append(el("span", "badge", String(topicUnread)));
+      item.append(arc);
       ul.append(item);
     }
     ul.append(newTopicItem(s));
@@ -1341,6 +1411,7 @@ async function openTopic(streamId, stream, topic) {
   $("members-btn").disabled = false;
   $("members-btn").textContent = membersLabel(null);
   refreshCount(streamId);
+  markTopicRead(streamId, topic);
   $("app").classList.remove("side-open");
   S.collapsed.delete(streamId);
   renderStreams();

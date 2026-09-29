@@ -237,6 +237,12 @@ and the text. Pass the last id back as `--since` to get only newer ones.
 A stream the bot is not subscribed to, or one that does not exist, is named
 on stderr and exits 2; nothing is sent.
 
+`python bot/zulip.py unread [--json]` prints unread counts per stream and
+topic (issue #168); `python bot/zulip.py mark-read --stream S --topic T
+[--json]` marks every message in that topic read, the same thing opening it
+in `chat/page.html` does. A message the bot itself sent is never unread for
+it.
+
 ## Memory limits (issue #57)
 
 Each container has a `mem_limit` in `docker-compose.yml`, about 2 GB in

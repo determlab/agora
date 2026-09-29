@@ -234,6 +234,80 @@ def test_message_over_10000_characters_is_refused(env):
     assert status == 400 and body["msg"].startswith("Message too long")
 
 
+# -- issue #168: unread messages
+
+
+def test_168_own_messages_are_never_unread(env):
+    cto = env["cto"]
+    cto("POST", "messages", type="stream", to="feature", topic="t", content="one")
+    cto("POST", "messages", type="stream", to="feature", topic="t", content="two")
+    status, unread = cto("GET", "unread")
+    assert status == 200 and unread["streams"] == []
+
+
+def test_168_unread_counts_per_stream_and_topic(env):
+    cto, coo = env["cto"], env["coo"]
+    env["store"].subscribe(env["coo_user"]["id"], env["feature"])
+    cto("POST", "messages", type="stream", to="feature", topic="t1", content="a")
+    cto("POST", "messages", type="stream", to="feature", topic="t1", content="b")
+    cto("POST", "messages", type="stream", to="feature", topic="t2", content="c")
+    status, unread = coo("GET", "unread")
+    assert status == 200
+    [feature] = unread["streams"]
+    assert feature["name"] == "feature" and feature["unread"] == 3
+    assert {t["name"]: t["unread"] for t in feature["topics"]} == {"t1": 2, "t2": 1}
+    # CTO sent every message: nothing is unread for CTO.
+    assert cto("GET", "unread")[1]["streams"] == []
+
+
+def test_168_mark_topic_as_read_clears_only_that_topic_and_only_others_messages(env):
+    cto, coo = env["cto"], env["coo"]
+    env["store"].subscribe(env["coo_user"]["id"], env["feature"])
+    cto("POST", "messages", type="stream", to="feature", topic="t1", content="a")
+    coo("POST", "messages", type="stream", to="feature", topic="t1", content="mine")
+    cto("POST", "messages", type="stream", to="feature", topic="t2", content="b")
+    status, body = coo("POST", "mark_topic_as_read", stream_id=env["feature"], topic_name="t1")
+    assert status == 200 and body == {"result": "success", "msg": ""}
+    status, unread = coo("GET", "unread")
+    [feature] = unread["streams"]
+    assert feature["unread"] == 1 and [t["name"] for t in feature["topics"]] == ["t2"]
+    # Idempotent: marking an already-read topic again changes nothing.
+    status, body = coo("POST", "mark_topic_as_read", stream_id=env["feature"], topic_name="t1")
+    assert status == 200
+    assert coo("GET", "unread")[1]["streams"][0]["unread"] == 1
+
+
+def test_168_mark_topic_as_read_is_case_insensitive_on_the_topic_name(env):
+    cto, coo = env["cto"], env["coo"]
+    env["store"].subscribe(env["coo_user"]["id"], env["feature"])
+    cto("POST", "messages", type="stream", to="feature", topic="Roadmap", content="a")
+    status, body = coo("POST", "mark_topic_as_read", stream_id=env["feature"], topic_name="roadmap")
+    assert status == 200, body
+    assert coo("GET", "unread")[1]["streams"] == []
+
+
+def test_168_mark_topic_as_read_needs_a_topic_and_a_visible_stream(env):
+    coo = env["coo"]
+    status, body = coo("POST", "mark_topic_as_read", stream_id=env["feature"])
+    assert status == 400 and body["code"] == "REQUEST_VARIABLE_MISSING"
+    status, body = coo("POST", "mark_topic_as_read", stream_id=999999, topic_name="t")
+    assert status == 400 and body["code"] == "STREAM_DOES_NOT_EXIST"
+
+
+def test_168_the_read_flag_follows_mark_topic_as_read(env):
+    cto, coo = env["cto"], env["coo"]
+    env["store"].subscribe(env["coo_user"]["id"], env["feature"])
+    _, sent = cto("POST", "messages", type="stream", to="feature", topic="t", content="hi")
+    _, got = coo("GET", "messages", anchor=sent["id"], num_before=0, num_after=0)
+    assert "read" not in got["messages"][0]["flags"]
+    coo("POST", "mark_topic_as_read", stream_id=env["feature"], topic_name="t")
+    _, got = coo("GET", "messages", anchor=sent["id"], num_before=0, num_after=0)
+    assert "read" in got["messages"][0]["flags"]
+    # The sender's own message is always "read", mark-read or not.
+    _, got = cto("GET", "messages", anchor=sent["id"], num_before=0, num_after=0)
+    assert "read" in got["messages"][0]["flags"]
+
+
 def test_malformed_content_length_answers_in_zulips_shape(env):
     port = int(env["base"].rsplit(":", 1)[1])
     with socket.create_connection(("127.0.0.1", port), timeout=10) as s:

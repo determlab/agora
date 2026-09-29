@@ -40,9 +40,10 @@ def msg(i: int, content: str = "hi", **extra) -> dict:
 class FakeZulip:
     """Stands in for ZulipClient._request. Records every call."""
 
-    def __init__(self, subscribed=("coo",), exists=("coo", "cto"), messages=()):
+    def __init__(self, subscribed=("coo",), exists=("coo", "cto"), messages=(), unread=None):
         self.subscribed, self.exists = list(subscribed), list(exists)
         self.messages = list(messages)
+        self.unread = list(unread) if unread is not None else []
         self.calls: list[tuple[str, str, dict]] = []
 
     def __call__(self, client, method, path, params=None):
@@ -64,6 +65,10 @@ class FakeZulip:
             else:  # Zulip may include the anchor; the CLI must drop it
                 found = [m for m in self.messages if m["id"] >= int(anchor)]
             return {"result": "success", "messages": list(reversed(found))}
+        if path == "unread" and method == "GET":
+            return {"result": "success", "streams": self.unread}
+        if path == "mark_topic_as_read" and method == "POST":
+            return {"result": "success"}
         raise AssertionError(f"unexpected call {method} {path}")
 
 
@@ -194,6 +199,55 @@ def test_cmo_is_refused_in_feature(cli, monkeypatch, capsys):
                      "--topic", "t", "--text", "x"]) == 2
     assert "Nothing was sent" in capsys.readouterr().err
     assert not [c for c in fake.calls if c[:2] == ("POST", "messages")]
+
+
+# -- issue #168: unread and mark-read
+
+
+def test_unread_prints_streams_and_topics(cli, monkeypatch, capsys):
+    fake = _stub(monkeypatch, cli, FakeZulip(unread=[
+        {"stream_id": 1, "name": "coo", "unread": 3,
+         "topics": [{"name": "t1", "unread": 2}, {"name": "t2", "unread": 1}]}]))
+    assert cli.main(["unread"]) == 0
+    out = capsys.readouterr().out
+    assert "#coo: 3 unread" in out and "t1: 2" in out and "t2: 1" in out
+    assert fake.calls[-1][:2] == ("GET", "unread")
+
+
+def test_unread_json_prints_the_raw_streams_list(cli, monkeypatch, capsys):
+    streams = [{"stream_id": 1, "name": "coo", "unread": 1,
+               "topics": [{"name": "t1", "unread": 1}]}]
+    _stub(monkeypatch, cli, FakeZulip(unread=streams))
+    assert cli.main(["unread", "--json"]) == 0
+    assert json.loads(capsys.readouterr().out) == {"streams": streams}
+
+
+def test_unread_with_nothing_says_so_on_stderr(cli, monkeypatch, capsys):
+    _stub(monkeypatch, cli, FakeZulip(unread=[]))
+    assert cli.main(["unread"]) == 0
+    out = capsys.readouterr()
+    assert out.out == "" and "no unread" in out.err
+
+
+def test_mark_read_calls_mark_topic_as_read_with_the_streams_id(cli, monkeypatch, capsys):
+    fake = _stub(monkeypatch, cli, FakeZulip())
+    assert cli.main(["mark-read", "--stream", "coo", "--topic", "smoke"]) == 0
+    assert "marked read: #coo › smoke" in capsys.readouterr().out
+    method, path, params = fake.calls[-1]
+    assert (method, path) == ("POST", "mark_topic_as_read")
+    assert params == {"stream_id": 1, "topic_name": "smoke"}
+
+
+def test_mark_read_json_prints_one_object(cli, monkeypatch, capsys):
+    _stub(monkeypatch, cli, FakeZulip())
+    assert cli.main(["mark-read", "--stream", "coo", "--topic", "smoke", "--json"]) == 0
+    assert json.loads(capsys.readouterr().out) == {"ok": True, "stream": "coo", "topic": "smoke"}
+
+
+def test_mark_read_of_a_stream_that_does_not_exist_is_refused(cli, monkeypatch, capsys):
+    _stub(monkeypatch, cli, FakeZulip())
+    assert cli.main(["mark-read", "--stream", "nosuch", "--topic", "t"]) == 1
+    assert "refused by Zulip" in capsys.readouterr().err
 
 
 def _run(args, env_extra, tmp_path, prelude=""):
