@@ -625,13 +625,13 @@ def test_79_rename_reaches_the_server_through_the_pages_own_call_and_the_sidebar
     assert got["label"] == "#roadmap"
 
 
-def test_dialogs_are_in_the_page_and_there_is_no_stream_delete_or_unread_count():
+def test_dialogs_are_in_the_page_and_there_is_no_stream_delete_control():
     text = PAGE.read_text(encoding="utf-8")
     assert not re.search(r"\b(confirm|prompt|alert)\(", _markup().script)
     assert "showModal()" in text and "<dialog" in text
-    # Both need server work first (#74): no control that reaches nothing.
+    # No control that reaches nothing: archiving a stream is PATCH is_archived
+    # (see setStreamArchived), never Zulip's generic bulk-flags endpoint.
     assert 'api("DELETE", "streams' not in text and "messages/flags" not in text
-    assert "unread" not in text.lower()
 
 
 def test_the_theme_follows_the_system_and_a_stored_choice():
@@ -1458,4 +1458,137 @@ def test_pill_states():
     assert got["freshText"] == got["fresh"] and "stale" not in got["freshClass"].split()
     assert "stale" in got["staleClass"].split()
     # An error replaces the line outright — it is not appended beside a stale count.
-    assert got["errorText"] == "gh: not logged in" and "stale" not in got["errorClass"].split()
+    assert got["errorText"] == got["error"] and "stale" not in got["errorClass"].split()
+
+
+# -- issue #168: unread bubbles
+
+
+def test_168_unread_bubbles_render_next_to_streams_and_topics_hidden_when_zero():
+    prelude = FAKE_DOM + """
+      const CARET = "c", GEAR = "g", SVG = "http://www.w3.org/2000/svg";
+      const S = {streams: [{stream_id: 1, name: "feature", invite_only: true},
+                           {stream_id: 2, name: "quiet", invite_only: false}],
+                 topics: new Map([["feature", new Map([["a", 5], ["b", 9]])],
+                                  ["quiet", new Map([["c", 1]])]]),
+                 unread: new Map([[1, {unread: 3, topics: new Map([["a", 3]])}]]),
+                 collapsed: new Set(), open: null, adding: null};
+    """
+    got = _js(("svgIcon", "renderStreams", "newTopicItem", "el"), """
+      renderStreams();
+      const rows = $("streams").querySelectorAll(".stream-row");
+      out.streamBadges = rows.map((r) => r.querySelectorAll(".badge").map((b) => b.textContent));
+      const items = $("streams").querySelectorAll(".topic-row");
+      out.topicBadges = items.map((it) => [it.querySelector(".topic").textContent,
+                                           it.querySelectorAll(".badge").map((b) => b.textContent)]);
+    """, prelude=prelude)
+    # #feature has 3 unread, all in topic "a" — #quiet and topic "b" have none
+    # and show no badge at all (hidden, not a "0").
+    assert got["streamBadges"] == [["3"], []]
+    assert got["topicBadges"] == [["b", []], ["a", ["3"]], ["c", []]]
+
+
+def test_168_every_streams_topic_list_starts_collapsed_the_first_time_it_is_seen():
+    # loadStreams() defaults a stream's fold to collapsed the first time it
+    # appears (page load, or a brand-new subscription); a reconnect that
+    # sees the same stream again must not re-collapse a fold the human chose.
+    stub = """
+      const calls = [];
+      async function api(method, path, params) {
+        calls.push([method, path, params]);
+        if (path === "users/me/subscriptions") {
+          return {subscriptions: [
+            {stream_id: 1, name: "feature", invite_only: true, is_archived: false},
+            {stream_id: 2, name: "later", invite_only: false, is_archived: false}]};
+        }
+        return {topics: []};
+      }
+      function renderStreams() {}
+      function renderArchive() {}
+      function closeTopic() {}
+      const S = {streams: [], archivedStreams: [], topics: new Map(), archivedTopics: new Map(),
+                 collapsed: new Set(), seenStreams: new Set(), open: null};
+    """
+    got = _js(("loadStreams",), """
+      await loadStreams();
+      out.firstLoad = [...S.collapsed].sort();
+      S.collapsed.delete(1);   // the human expands #feature
+      await loadStreams();     // a reconnect: the same two streams again
+      out.afterReconnect = [...S.collapsed].sort();
+    """, prelude=stub)
+    assert got["firstLoad"] == [1, 2]
+    assert got["afterReconnect"] == [2]
+
+
+def test_168_mark_topic_read_zeroes_the_bubble_locally_and_tells_the_server():
+    prelude = API_STUB + """
+      const S = {unread: new Map([[1, {unread: 5, topics: new Map([["a", 2], ["b", 3]])}]])};
+      let renders = 0;
+      function renderStreams() { renders += 1; }
+      function updateTitle() {}
+    """
+    got = _js(("markTopicRead",), """
+      await markTopicRead(1, "A");
+      out.calls = calls.splice(0);
+      out.entry = {unread: S.unread.get(1).unread, topics: [...S.unread.get(1).topics.entries()]};
+      out.renders = renders;
+      await markTopicRead(1, "nothing-to-zero");
+      out.calls2 = calls.splice(0);
+      out.renders2 = renders;
+    """, prelude=prelude)
+    assert got["calls"] == [["POST", "mark_topic_as_read", {"stream_id": "1", "topic_name": "A"}]]
+    # Case-insensitive: "A" clears the "a" entry, "b" is untouched.
+    assert got["entry"] == {"unread": 3, "topics": [["b", 3]]}
+    assert got["renders"] == 1
+    # Nothing local to zero, but the server still gets told (idempotent).
+    assert got["calls2"] == [["POST", "mark_topic_as_read",
+                              {"stream_id": "1", "topic_name": "nothing-to-zero"}]]
+    assert got["renders2"] == 1
+
+
+def test_168_a_live_message_bumps_the_bubble_unless_its_topic_is_open_or_the_message_is_mine():
+    prelude = API_STUB + """
+      const S = {me: {user_id: 9}, open: {stream_id: 1, stream: "feature", topic: "open-topic"},
+                 topics: new Map([["feature", new Map()]]), archivedTopics: new Map(),
+                 unread: new Map()};
+      let rendered = 0, titled = 0;
+      function renderStreams() { rendered += 1; }
+      function updateTitle() { titled += 1; }
+      function renderArchive() {}
+      function addMessages(list, toEnd) {}
+    """
+    got = _js(("onMessage", "markTopicRead", "bumpUnread"), """
+      const msg = (subject, id, sender) => ({type: "stream", stream_id: 1,
+        display_recipient: "feature", subject, id, sender_id: sender});
+      onMessage(msg("closed-topic", 1, 5));
+      onMessage(msg("closed-topic", 2, 5));
+      out.otherReaderUnread = [...S.unread.get(1).topics.entries()];
+      onMessage(msg("closed-topic", 3, 9));  // my own message: never unread
+      out.afterMine = S.unread.get(1).unread;
+      await Promise.resolve();
+      calls.length = 0;
+      onMessage(msg("open-topic", 4, 5));    // arrives while its own topic is open
+      await Promise.resolve();
+      out.openTopicUnread = (S.unread.get(1).topics.get("open-topic") || 0);
+      out.markReadCalls = calls;
+      out.rendered = rendered; out.titled = titled;
+    """, prelude=prelude)
+    assert got["otherReaderUnread"] == [["closed-topic", 2]]
+    assert got["afterMine"] == 2  # unchanged by my own message
+    assert got["openTopicUnread"] == 0
+    assert got["markReadCalls"] == [["POST", "mark_topic_as_read",
+                                     {"stream_id": "1", "topic_name": "open-topic"}]]
+    assert got["rendered"] > 0 and got["titled"] > 0
+
+
+def test_168_the_tab_title_shows_the_total_unread_count():
+    got = _js(("updateTitle",), """
+      updateTitle();
+      out.empty = document.title;
+      S.unread.set(1, {unread: 2, topics: new Map()});
+      S.unread.set(2, {unread: 1, topics: new Map()});
+      updateTitle();
+      out.some = document.title;
+    """, prelude="const document = {}; const S = {unread: new Map()};")
+    assert got["empty"] == "agora · צ'אט"
+    assert got["some"] == "(3) Agora"

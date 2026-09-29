@@ -135,6 +135,9 @@ CREATE TABLE IF NOT EXISTS dashboard (ts INTEGER PRIMARY KEY, doc TEXT, error TE
 CREATE TABLE IF NOT EXISTS archived_topics (
     stream_id INTEGER NOT NULL, topic TEXT COLLATE NOCASE NOT NULL,
     archived_at INTEGER NOT NULL, PRIMARY KEY (stream_id, topic));
+CREATE TABLE IF NOT EXISTS read_messages (
+    user_id INTEGER NOT NULL, message_id INTEGER NOT NULL,
+    PRIMARY KEY (user_id, message_id));
 """
 
 
@@ -518,10 +521,11 @@ class Chat:
         m["flags"] = self.flags(row, me)
         return m
 
-    @staticmethod
-    def flags(row, me: dict) -> list[str]:
+    def flags(self, row, me: dict) -> list[str]:
         flags = []
-        if row["sender_id"] == me["id"]:
+        if row["sender_id"] == me["id"] or self.s.one(
+                "SELECT 1 FROM read_messages WHERE user_id=? AND message_id=?",
+                (me["id"], row["id"])):
             flags.append("read")
         if _mentions(row["content"], me):
             flags.append("mentioned")
@@ -900,6 +904,45 @@ class Chat:
                             "is_archived": bool(r["archived"])}
                            for r in rows if include or not r["archived"]]}
 
+    # GET /unread: per-stream, per-topic unread counts (issue #168). Zulip
+    # carries this shape (streams, each with its topics) inside `register`'s
+    # `unread_msgs`; this server hands it back on its own so a client can
+    # refresh counts without re-registering a queue. A message this user sent
+    # is never unread for them, so it is excluded here rather than tracked as
+    # read — no write on send, and nothing to backfill for old messages.
+    def unread(self, me: dict, p: dict | None = None) -> dict:
+        streams: dict[int, dict] = {}
+        for row in self.s.q(
+                "SELECT s.stream_id AS stream_id, s.name AS name, m.subject AS topic, "
+                "COUNT(*) AS n FROM messages m JOIN streams s ON s.stream_id=m.stream_id "
+                "WHERE m.type='stream' AND m.sender_id != ? AND s.stream_id IN "
+                "(SELECT stream_id FROM subscriptions WHERE user_id=?) AND NOT EXISTS "
+                "(SELECT 1 FROM read_messages r WHERE r.user_id=? AND r.message_id=m.id) "
+                "GROUP BY s.stream_id, m.subject COLLATE NOCASE",
+                (me["id"], me["id"], me["id"])):
+            entry = streams.setdefault(row["stream_id"], {
+                "stream_id": row["stream_id"], "name": row["name"], "unread": 0, "topics": []})
+            entry["topics"].append({"name": row["topic"], "unread": row["n"]})
+            entry["unread"] += row["n"]
+        return {"streams": list(streams.values())}
+
+    # POST /mark_topic_as_read: Zulip's own endpoint and argument names.
+    # Every message in the topic not sent by `me` becomes read for `me`.
+    def mark_topic_as_read(self, me: dict, p: dict) -> dict:
+        sid = _int(p, "stream_id")
+        topic = p.get("topic_name")
+        if not topic or not str(topic).strip():
+            raise ApiError("Missing 'topic_name' argument: the topic to mark read",
+                           "REQUEST_VARIABLE_MISSING")
+        self.s.visible_stream(me, sid)
+        with self.s.tx():
+            for row in self.s.q(
+                    "SELECT id FROM messages WHERE type='stream' AND stream_id=? "
+                    "AND subject=? COLLATE NOCASE AND sender_id != ?", (sid, topic, me["id"])):
+                self.s.x("INSERT OR IGNORE INTO read_messages (user_id, message_id) "
+                         "VALUES (?,?)", (me["id"], row["id"]))
+        return {}
+
     # GET|POST|DELETE /streams/{id}/archived_topics: list, archive, restore
     def archived_topics(self, me: dict, sid: int, method: str, p: dict) -> dict:
         stream = self.s.visible_stream(me, sid)
@@ -1064,6 +1107,10 @@ class Chat:
             return self.archived_topics(me, int(at.group(1)), method, p)
         if tp and method == "GET":
             return self.topics(me, int(tp.group(1)), p)
+        if path == "unread" and method == "GET":
+            return self.unread(me, p)
+        if path == "mark_topic_as_read" and method == "POST":
+            return self.mark_topic_as_read(me, p)
         if path == "bots" and method == "POST":
             return self.create_bot(me, p)
         if path == "dashboard" and method == "GET":
