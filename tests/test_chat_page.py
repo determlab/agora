@@ -1984,3 +1984,89 @@ def test_mark_stream_read_tells_the_server_even_with_nothing_local_to_zero():
     """, prelude=prelude)
     assert got["calls"] == [["POST", "mark_stream_as_read", {"stream_id": "7"}]]
     assert got["renders"] == 0  # nothing local to clear: no local entry, no re-render
+
+
+# -- ops#236: phone pairing (the button, the QR, the ?pair= bootstrap)
+
+
+def test_the_pair_button_sits_in_me_row_and_opens_a_dialog():
+    m = _markup()
+    ids = [a.get("id") for _, a in m.elements]
+    assert ids.index("who") < ids.index("pair-btn") < ids.index("forget")
+    [btn] = [a for t, a in m.elements if a.get("id") == "pair-btn"]
+    assert btn.get("title")
+    [dlg] = [(t, a) for t, a in m.elements if a.get("id") == "pair-dlg"]
+    assert dlg[0] == "dialog"
+    assert '$("pair-btn").addEventListener("click"' in m.script
+    assert '$("pair-dlg").showModal()' in m.script
+    assert '$("pair-close").addEventListener("click", () => $("pair-dlg").close())' in m.script
+
+
+def test_the_pair_button_asks_the_server_and_draws_the_qr_it_answers_with():
+    script = _markup().script
+    assert 'await api("POST", "pair")' in script
+    assert "renderQr($(\"pair-qr\")" in script
+    assert 'say("pair-status", "שגיאה: " + e.message, true)' in script
+
+
+def test_pair_redeem_bootstrap_uses_fetch_not_api_and_cleans_the_url():
+    script = _markup().script
+    # No auth yet to send: this goes through a plain fetch, never api().
+    rp = _function("redeemPair")
+    assert 'fetch("/api/v1/pair/redeem"' in rp
+    assert "Authorization" not in rp
+    assert 'new URLSearchParams(location.search).get("pair")' in script
+    assert "await redeemPair(code)" in script
+    assert 'localStorage.setItem(STORE, JSON.stringify(S.creds))' in script
+    assert 'history.replaceState(null, "", location.pathname)' in script
+    # A real reload would resubmit the one-time code.
+    assert "location.reload(" not in script and "location.assign(" not in script
+
+
+def test_the_qr_renders_as_an_svg_with_a_quiet_zone_and_dark_modules():
+    script = _markup().script
+    start = script.index("const SVG =")
+    end = script.index("const S = {")
+    got = _js((), """
+      const svg = renderQr($("pair-qr"), "https://mypc.tail1234.ts.net/?pair=" + "x".repeat(32));
+      out.tag = svg.tagName;
+      out.kids = $("pair-qr").children.length;
+      out.rects = svg.children.filter((c) => c.tagName === "RECT").length;
+      out.viewBox = svg.attrs.viewBox;
+      // Drawing again must clear the old QR, not pile a second one on top.
+      renderQr($("pair-qr"), "https://mypc.tail1234.ts.net/?pair=short");
+      out.kidsAfterRedraw = $("pair-qr").children.length;
+    """, prelude=FAKE_DOM + script[start:end])
+    assert got["tag"] == "SVG"
+    assert got["kids"] == 1
+    assert got["kidsAfterRedraw"] == 1
+    assert got["rects"] > 50  # the white background plus plenty of dark modules
+    assert got["viewBox"]
+
+
+def test_pairing_a_phone_is_a_real_round_trip_through_the_server(tmp_path):
+    """What the page's two fetches actually drive: POST /pair (Basic auth,
+    the allowed Host/Origin) then POST /pair/redeem (no auth at all) gets
+    back the same human's email and api_key. The QR drawing and the URL
+    cleanup are covered separately above; node is not available here to
+    drive a real browser."""
+    # A local import: test_chat_allow_host imports `_request` from this very
+    # module, so importing it back at module load time would be circular.
+    from test_chat_allow_host import NAME, Served
+
+    run = Served(str(tmp_path / "chat.sqlite3"), allow_hosts=[NAME])
+    try:
+        human = chat.add_human(run.store, HUMAN, "Test Human")
+        status, _, raw = _request(run, "POST", "/api/v1/pair", user=human, Host=NAME,
+                                  Origin=f"https://{NAME}")
+        pair = json.loads(raw)
+        assert status == 200, pair
+        status, _, raw = _request(run, "POST", "/api/v1/pair/redeem", {"pair": pair["code"]},
+                                  Host=NAME)
+        body = json.loads(raw)
+        assert status == 200, body
+        assert body["email"] == human["email"]
+        assert body["api_key"] == human["api_key"]
+    finally:
+        run.stop()
+
