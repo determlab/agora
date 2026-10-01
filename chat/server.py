@@ -704,18 +704,22 @@ class Chat:
                 or self.s.one("SELECT 1 FROM read_messages WHERE user_id=? AND message_id=?",
                               (me["id"], row["id"])):
             flags.append("read")
-        if _mentions(row["content"], me) or self._all_hands_broadcast(row):
+        if _mentions(row["content"], me) or self._all_hands_broadcast(row, me):
             flags.append("mentioned")
         return flags
 
-    def _all_hands_broadcast(self, row) -> bool:
+    def _all_hands_broadcast(self, row, me: dict) -> bool:
         """ops#242: a human's message in the ``All hands`` stream wakes every
         subscriber like a mention, so nobody has to type @all there. A bot's
-        own message does not, so bots never wake each other in a loop."""
+        own message does not, so bots never wake each other in a loop. Only
+        bots actually subscribed to the stream are woken — a bot that isn't
+        in the room doesn't get flagged just because it exists."""
         if row["type"] != "stream" or self.s.user(row["sender_id"])["is_bot"]:
             return False
         stream = self.s.one("SELECT name FROM streams WHERE stream_id=?", (row["stream_id"],))
-        return stream is not None and stream[0] == ALL_HANDS_STREAM
+        return stream is not None and stream[0] == ALL_HANDS_STREAM and self.s.one(
+            "SELECT 1 FROM subscriptions WHERE user_id=? AND stream_id=?",
+            (me["id"], row["stream_id"])) is not None
 
     def _visible_message(self, me: dict, mid: int):
         row = self.s.one("SELECT * FROM messages WHERE id=?", (mid,))
@@ -747,7 +751,7 @@ class Chat:
                 sender = self.s.user(row["sender_id"])
                 ok = str(operand).lower() in (sender["email"].lower(), str(sender["id"]))
             elif op == "is" and operand == "mentioned":
-                ok = _mentions(row["content"], user) or self._all_hands_broadcast(row)
+                ok = _mentions(row["content"], user) or self._all_hands_broadcast(row, user)
             elif op == "is" and operand in ("private", "dm"):
                 ok = row["type"] == "private"
             else:
@@ -925,8 +929,9 @@ class Chat:
                 marks = _mention_marks(me)
                 clause = "(" + " OR ".join(["instr(m.content, ?) > 0"] * len(marks)) + \
                     " OR (m.type='stream' AND m.stream_id IN (SELECT stream_id FROM streams " \
-                    "WHERE name=?) AND m.sender_id IN (SELECT id FROM users WHERE is_bot=0)))"
-                a = marks + [ALL_HANDS_STREAM]
+                    "WHERE name=?) AND m.sender_id IN (SELECT id FROM users WHERE is_bot=0) " \
+                    "AND m.stream_id IN (SELECT stream_id FROM subscriptions WHERE user_id=?)))"
+                a = marks + [ALL_HANDS_STREAM, me["id"]]
             elif op == "is" and operand in ("private", "dm"):
                 clause, a = "m.type='private'", []
             else:
