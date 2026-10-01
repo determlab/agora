@@ -91,6 +91,11 @@ NO_DASHBOARD = "no dashboard command configured: start the server with --dashboa
 APPROVE_TIMEOUT = 30.0  # ops#176: a local, gh-free write — nowhere near dashboard.py's own timeout
 NO_APPROVE = "no approve command configured: start the server with --approve-cmd"
 ANSWERS = ("yes", "no", "later")
+PAIR_TTL = 300  # ops#236: a pairing code is good for 5 minutes
+PAIR_RATE_LIMIT = 10  # ops#236: failed /pair/redeem attempts per PAIR_RATE_WINDOW per address
+PAIR_RATE_WINDOW = 60.0
+NO_ALLOW_HOST = ("no --allow-host configured: set AGORA_ALLOW_HOST and run "
+                 "tailscale serve --bg 8095")
 
 
 def default_dashboard_cmd() -> str:
@@ -154,6 +159,8 @@ CREATE TABLE IF NOT EXISTS read_messages (
 CREATE TABLE IF NOT EXISTS read_floor (
     user_id INTEGER NOT NULL, stream_id INTEGER NOT NULL, floor_id INTEGER NOT NULL,
     PRIMARY KEY (user_id, stream_id));
+CREATE TABLE IF NOT EXISTS pairs (
+    user_id INTEGER PRIMARY KEY, code_hash TEXT NOT NULL, created INTEGER NOT NULL);
 """
 
 
@@ -307,6 +314,30 @@ class Store:
                      (email, full_name, int(is_bot), api_key or _new_key(), role,
                       int(time.time())))
         return self.user(uid)
+
+    def create_pair(self, user_id: int) -> str:
+        """ops#236: a one-time code so a phone can log in without ever
+        seeing the API key. Only its sha256 hash is stored; one row per
+        user, so asking again replaces the old code."""
+        code = secrets.token_urlsafe(24)
+        code_hash = hashlib.sha256(code.encode()).hexdigest()
+        self.x("INSERT OR REPLACE INTO pairs (user_id, code_hash, created) VALUES (?,?,?)",
+               (user_id, code_hash, int(time.time())))
+        return code
+
+    def redeem_pair(self, code: str) -> dict | None:
+        """The code's user if it is live and unused, consuming it either
+        way it is found: a second redeem of the same code, concurrent or
+        not, must see it gone."""
+        code_hash = hashlib.sha256(code.encode()).hexdigest()
+        with self.tx():
+            row = self.one("SELECT * FROM pairs WHERE code_hash=?", (code_hash,))
+            if row is None:
+                return None
+            self.x("DELETE FROM pairs WHERE code_hash=?", (code_hash,))
+            if row["created"] < int(time.time()) - PAIR_TTL:
+                return None
+            return self.user(row["user_id"])
 
     def create_stream(self, name: str, invite_only: bool = True) -> int:
         return self.x("INSERT INTO streams (name, invite_only) VALUES (?,?)",
@@ -653,14 +684,42 @@ class Dashboard:
                              (q["queue_id"], json.dumps({"type": "dashboard", "last_sync": row["ts"]})))
 
 
+class RateLimiter:
+    """ops#236: refuses a key (an IP address) once it has racked up
+    ``limit`` hits inside the trailing ``window`` seconds. In memory
+    only — a restart clears it, which is fine for a login brute-force
+    guard."""
+
+    def __init__(self, limit: int, window: float, clock=time.time):
+        self.limit, self.window, self.clock = limit, window, clock
+        self.lock = threading.Lock()
+        self.hits: dict[str, list[float]] = {}
+
+    def _recent(self, key: str) -> list[float]:
+        now = self.clock()
+        hits = [t for t in self.hits.get(key, []) if now - t < self.window]
+        self.hits[key] = hits
+        return hits
+
+    def blocked(self, key: str) -> bool:
+        with self.lock:
+            return len(self._recent(key)) >= self.limit
+
+    def hit(self, key: str) -> None:
+        with self.lock:
+            self._recent(key).append(self.clock())
+
+
 class Chat:
     """The endpoints. Each returns the success body (without ``result``)."""
 
     def __init__(self, store: Store, poll_seconds: float = POLL_SECONDS,
-                 dashboard: Dashboard | None = None):
+                 dashboard: Dashboard | None = None, allow_hosts: tuple[str, ...] = ()):
         self.s = store
         self.poll_seconds = poll_seconds
         self.dashboard = dashboard or Dashboard(store)
+        self.allow_hosts = allow_hosts
+        self.pair_limiter = RateLimiter(PAIR_RATE_LIMIT, PAIR_RATE_WINDOW)
 
     def message_json(self, row, me: dict) -> dict:
         s = self.s
@@ -1257,6 +1316,32 @@ class Chat:
                 "avatar_url": None, "default_sending_stream": None,
                 "default_events_register_stream": None, "default_all_public_streams": False}
 
+    # POST /pair (ops#236): the PC, logged in already, asks for a one-time
+    # code to show the phone as a QR instead of the raw API key.
+    def create_pair(self, me: dict, p: dict) -> dict:
+        if not self.allow_hosts:
+            raise ApiError(NO_ALLOW_HOST, "NO_ALLOW_HOST")
+        return {"code": self.s.create_pair(me["id"]), "host": self.allow_hosts[0],
+                "expires_in": PAIR_TTL}
+
+    # POST /pair/redeem (ops#236): no auth — the code itself is the
+    # credential. Called directly by Handler._handle, never through route(),
+    # so it must stay reachable before `authenticate()` runs.
+    def redeem_pair(self, host_ok: bool, addr: str, p: dict) -> dict:
+        code = p.get("pair")
+        if not code:
+            raise ApiError("Missing 'pair' argument", "REQUEST_VARIABLE_MISSING")
+        if self.pair_limiter.blocked(addr):
+            raise ApiError("Too many attempts: wait a minute and try again",
+                           "RATE_LIMITED", 429)
+        user = self.s.redeem_pair(code) if host_ok else None
+        if user is None:
+            self.pair_limiter.hit(addr)
+            # A wrong Host and a bad/used/expired code look identical: never
+            # tell a guesser which half of the check it failed.
+            raise ApiError("No such pairing code", "BAD_REQUEST", 404)
+        return {"email": user["email"], "api_key": user["api_key"]}
+
     def route(self, method: str, path: str, me: dict, p: dict) -> dict:
         m = re.fullmatch(r"messages/(\d+)(/reactions)?", path)
         st = re.fullmatch(r"streams/(\d+)(/members)?", path)
@@ -1312,6 +1397,8 @@ class Chat:
             return self.mark_stream_as_read(me, p)
         if path == "bots" and method == "POST":
             return self.create_bot(me, p)
+        if path == "pair" and method == "POST":
+            return self.create_pair(me, p)
         if path == "dashboard" and method == "GET":
             return self.dashboard.state()
         if path == "dashboard/sync" and method == "POST":
@@ -1384,6 +1471,13 @@ class Handler(BaseHTTPRequestHandler):
             hosts |= {name, f"{name}:443"}
         return hosts
 
+    def _pair_host_ok(self) -> bool:
+        """ops#236: /pair/redeem only works over the Host the QR itself
+        points at (an --allow-host name) — never 127.0.0.1/localhost, so a
+        stolen code is useless without also being on the tailnet path."""
+        host = (self.headers.get("Host") or "").lower()
+        return any(host in (name, f"{name}:443") for name in self.allow_hosts)
+
     def _origins(self) -> set[str]:
         port = self.server.server_address[1]
         return ({f"http://127.0.0.1:{port}", f"http://localhost:{port}"}
@@ -1440,8 +1534,15 @@ class Handler(BaseHTTPRequestHandler):
             if not url.path.startswith("/api/v1/"):
                 raise ApiError(f"Endpoint not found: {url.path} (the API is under /api/v1/)",
                                "BAD_REQUEST", 404)
+            path = url.path[len("/api/v1/"):].strip("/")
+            if path == "pair/redeem" and method == "POST":
+                # No auth (ops#236): the code itself is the credential, and
+                # the phone has no API key yet to send one with.
+                out = self.chat.redeem_pair(self._pair_host_ok(), self.client_address[0], params)
+                self._reply(200, {"result": "success", "msg": "", **out})
+                return
             me = self.chat.s.authenticate(self.headers.get("Authorization"))
-            out = self.chat.route(method, url.path[len("/api/v1/"):].strip("/"), me, params)
+            out = self.chat.route(method, path, me, params)
             self._reply(200, {"result": "success", "msg": "", **out})
         except ApiError as e:
             self._reply(e.status, {"result": "error", "msg": e.msg, "code": e.code, **e.extra})
@@ -1477,9 +1578,10 @@ def make_server(db: str, port: int = 8095, poll_seconds: float = POLL_SECONDS,
     if seed_ids is not None:
         store.seed_ids(seed_ids)
     dashboard = Dashboard(store, dashboard_cmd, dashboard_every, approve_cmd=approve_cmd)
+    hosts = tuple(allow_host(h) for h in allow_hosts)
     handler = type("ChatHandler", (Handler,), {
-        "chat": Chat(store, poll_seconds, dashboard),
-        "allow_hosts": tuple(allow_host(h) for h in allow_hosts)})
+        "chat": Chat(store, poll_seconds, dashboard, allow_hosts=hosts),
+        "allow_hosts": hosts})
     server = ThreadingHTTPServer((HOST, port), handler)
     server.daemon_threads = True
     dashboard.start()
