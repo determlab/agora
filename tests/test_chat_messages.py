@@ -221,6 +221,52 @@ def test_all_is_a_mention_for_every_reader(env):
     assert "mentioned" in got["messages"][0]["flags"]
 
 
+def test_all_hands_wakes_every_subscribed_bot_without_tagging(env):
+    """ops#242: no @all needed in 'All hands' — a human post there mentions
+    every subscribed bot, a bot's post does not, and other streams are
+    unchanged."""
+    store, cto, coo = env["store"], env["cto"], env["coo"]
+    all_hands = store.create_stream("All hands")
+    cto_user = store.user_by_ref("cto-bot@chat.localhost")
+    store.subscribe(cto_user["id"], all_hands)
+    store.subscribe(env["coo_user"]["id"], all_hands)
+    founder = store.create_user("founder@chat.localhost", "Founder")
+    store.subscribe(founder["id"], all_hands)
+    founder_api = Api(env["base"], founder["email"], founder["api_key"])
+
+    _, sent = founder_api("POST", "messages", type="stream", to="All hands",
+                          topic="standup", content="morning, no tags needed")
+    for who in (cto, coo):
+        _, got = who("GET", "messages", anchor="newest", num_before=10, num_after=0,
+                     narrow=[{"operator": "is", "operand": "mentioned"}])
+        assert [m["id"] for m in got["messages"]] == [sent["id"]]
+        assert "mentioned" in got["messages"][0]["flags"]
+
+    # A bot's own post in 'All hands' does not wake the other bots.
+    _, bot_sent = cto("POST", "messages", type="stream", to="All hands",
+                      topic="standup", content="status update")
+    _, got = coo("GET", "messages", anchor="newest", num_before=10, num_after=0,
+                 narrow=[{"operator": "is", "operand": "mentioned"}])
+    assert bot_sent["id"] not in [m["id"] for m in got["messages"]]
+
+    # Other streams keep the plain mention rule: no free ride from 'All hands'.
+    store.subscribe(founder["id"], env["feature"])
+    _, other_sent = founder_api("POST", "messages", type="stream", to="feature",
+                                topic="t", content="no tag here either")
+    _, got = cto("GET", "messages", anchor="newest", num_before=10, num_after=0,
+                 narrow=[{"operator": "is", "operand": "mentioned"}])
+    assert other_sent["id"] not in [m["id"] for m in got["messages"]]
+
+    # A bot not subscribed to 'All hands' is not in the room: it is not
+    # woken by the founder's post there, even though it can be @mentioned
+    # directly elsewhere.
+    pm_bot = store.create_user("pm-bot@chat.localhost", "PM", is_bot=True)
+    pm = Api(env["base"], pm_bot["email"], pm_bot["api_key"])
+    _, got = pm("GET", "messages", anchor="newest", num_before=10, num_after=0,
+                narrow=[{"operator": "is", "operand": "mentioned"}])
+    assert sent["id"] not in [m["id"] for m in got["messages"]]
+
+
 def test_message_over_10000_characters_is_refused(env):
     cto = env["cto"]
     status, body = cto("POST", "messages", type="stream", to="feature", topic="t",
