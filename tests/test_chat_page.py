@@ -324,7 +324,7 @@ def test_the_page_has_no_inline_handlers_or_styles_the_csp_would_block():
 
 def test_each_mention_button_inserts_exactly_what_wakes_that_bot(world, monkeypatch):
     names = [a["data-mention"] for _, a in _markup().elements if "data-mention" in a]
-    assert names == ["COO", "CTO", "CMO", "Watchdog", "all"], names
+    assert names == ["COO", "CTO", "CMO", "CPSO", "Watchdog", "all"], names
     run, human, bots = world["run"], world["human"], world["bots"]
     # A stream that is nobody's own and not #feature: only a mention wakes here.
     sid = run.store.create_stream("mentions", invite_only=True)
@@ -802,7 +802,7 @@ def test_77_the_palette_is_teal_on_green_grey_in_light_and_dark():
 
 def test_77_every_sender_gets_a_coloured_square_by_role():
     got = _js(("roleOf", "initial", "avatar"), """
-      out.roles = [["CTO", true], ["coo", true], ["CMO", true], ["Watchdog", true],
+      out.roles = [["CTO", true], ["coo", true], ["CMO", true], ["CPSO", true], ["Watchdog", true],
                    ["Deploy bot", true], ["Hemi", false], ["cto", false], ["", false]]
         .map(([n, b]) => roleOf(n, b));
       out.again = roleOf("CTO", true) === roleOf(" CTO ", true);
@@ -810,7 +810,7 @@ def test_77_every_sender_gets_a_coloured_square_by_role():
       const a = avatar("Watchdog", true, true);
       out.av = [a.tagName, a.className, a.textContent];
     """, prelude=FAKE_DOM)
-    assert got["roles"] == ["cto", "coo", "cmo", "watchdog", "bot", "human", "cto", "human"]
+    assert got["roles"] == ["cto", "coo", "cmo", "cpso", "watchdog", "bot", "human", "cto", "human"]
     assert got["again"] is True
     assert got["initials"] == ["H", "ש", "C", "?"]
     assert got["av"] == ["SPAN", "avatar role-watchdog small", "W"]
@@ -845,7 +845,7 @@ def test_77_the_ui_speaks_hebrew_right_to_left_and_keeps_technical_terms_english
     p = Text()
     p.feed(PAGE.read_text(encoding="utf-8"))
     technical = {"agora", "Email", "email", "API", "key", "api_key", "localStorage", "HTTP",
-                 "Basic", "auth", "Enter", "Shift", "COO", "CTO", "CMO", "Watchdog", "all"}
+                 "Basic", "auth", "Enter", "Shift", "COO", "CTO", "CMO", "CPSO", "Watchdog", "all"}
     for chunk in p.chunks:
         latin = set(re.findall(r"[A-Za-z_]+", chunk)) - technical
         assert not latin, (chunk, latin)

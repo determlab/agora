@@ -62,13 +62,13 @@ import sys
 from zulip_client import ZulipClient, ZulipError
 
 # stream name -> is it a role stream (a bot belongs here) or the watchdog-only one
-STREAMS = ["cto", "cmo", "coo", "status", "feature", "pool", "PM"]
+STREAMS = ["cto", "cmo", "coo", "cpso", "status", "feature", "pool", "PM"]
 
 # (bot full_name, short_name). short_name is also the stream the bot owns —
 # short_name becomes the email's local part (Zulip's own convention:
 # "<short_name>-bot@<realm domain>"), confirmed against the live stack rather
 # than assumed.
-ROLE_BOTS = [("CTO", "cto"), ("CMO", "cmo"), ("COO", "coo")]
+ROLE_BOTS = [("CTO", "cto"), ("CMO", "cmo"), ("COO", "coo"), ("CPSO", "cpso")]
 
 STATUS_STREAM = "status"
 

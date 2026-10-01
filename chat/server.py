@@ -1525,6 +1525,13 @@ def bots_from_env(store: Store, path: str) -> list[dict]:
     as a bot with that email and key. ``ADMIN`` is skipped: in bot/.env it is
     the founder's own account, which only ``add-human`` makes. A bot that
     exists already gets the file's key; a human is never touched."""
+    plan = stream_plan()
+    # The real full names setup_streams.py finds bots by — CTO, CMO, COO, CPSO,
+    # Watchdog, Pool, PM — read from its own ROLE_BOTS/WATCHDOG_BOT/POOL_BOT/
+    # PM_BOT rather than guessed: a 4-letter acronym like CPSO would otherwise
+    # title-case to "Cpso" under the short-role heuristic below.
+    full_names = {short.upper(): full for full, short in
+                 (*plan.ROLE_BOTS, plan.WATCHDOG_BOT, plan.POOL_BOT, plan.PM_BOT)}
     env, out = _read_env(path), []
     for key in sorted(env):
         m = re.fullmatch(r"ZULIP_([A-Z0-9_]+)_EMAIL", key)
@@ -1533,8 +1540,7 @@ def bots_from_env(store: Store, path: str) -> list[dict]:
                 or not env.get(f"ZULIP_{m.group(1)}_API_KEY"):
             continue
         role, email, api_key = m.group(1), env[key], env[f"ZULIP_{m.group(1)}_API_KEY"]
-        # setup_streams.py finds bots by these full names: CTO, CMO, COO, Watchdog.
-        name = role if len(role) <= 3 else role.replace("_", " ").title()
+        name = full_names.get(role, role if len(role) <= 3 else role.replace("_", " ").title())
         row = store.one("SELECT * FROM users WHERE email=? COLLATE NOCASE", (email,))
         if row is None:
             store.create_user(email, name, is_bot=True, api_key=api_key)

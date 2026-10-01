@@ -56,6 +56,7 @@ code, pre { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
 .role-cto { background: #3b5ba5; }
 .role-coo { background: #7a4f9a; }
 .role-cmo { background: #b4552d; }
+.role-cpso { background: #1f8a6f; }
 .role-watchdog { background: #6b7b2c; }
 .role-bot { background: #5f6b78; }
 #keys { max-width: 32rem; margin: 3rem auto; padding: 1.5rem; background: var(--panel);
@@ -468,6 +469,7 @@ a.ref:hover { text-decoration: underline; }
         <button type="button" data-mention="COO">@COO</button>
         <button type="button" data-mention="CTO">@CTO</button>
         <button type="button" data-mention="CMO">@CMO</button>
+        <button type="button" data-mention="CPSO">@CPSO</button>
         <button type="button" data-mention="Watchdog">@Watchdog</button>
         <button type="button" data-mention="all">@all</button>
       </div>
@@ -679,7 +681,7 @@ function quoteBlock(name, text) {
 // its name, any other bot, or a person. The same sender always gets the same.
 function roleOf(name, isBot) {
   const n = String(name || "").trim().toLowerCase();
-  for (const r of ["cto", "coo", "cmo", "watchdog"]) if (n === r) return r;
+  for (const r of ["cto", "coo", "cmo", "cpso", "watchdog"]) if (n === r) return r;
   return isBot ? "bot" : "human";
 }
 
