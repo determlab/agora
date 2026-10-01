@@ -257,6 +257,14 @@ def test_all_hands_wakes_every_subscribed_bot_without_tagging(env):
                  narrow=[{"operator": "is", "operand": "mentioned"}])
     assert other_sent["id"] not in [m["id"] for m in got["messages"]]
 
+    # A bot not subscribed to 'All hands' is not in the room: it never sees
+    # the founder's post there, mentioned or not.
+    pm = store.create_user("pm-bot@chat.localhost", "PM", is_bot=True)
+    pm_api = Api(env["base"], pm["email"], pm["api_key"])
+    _, got = pm_api("GET", "messages", anchor="newest", num_before=10, num_after=0,
+                    narrow=[{"operator": "is", "operand": "mentioned"}])
+    assert sent["id"] not in [m["id"] for m in got["messages"]]
+
 
 def test_message_over_10000_characters_is_refused(env):
     cto = env["cto"]
