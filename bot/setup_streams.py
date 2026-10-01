@@ -33,7 +33,17 @@ e.g. `ops#44 routes`.
 **#pool** (issue #80, for ops#85's pool control) is where the founder and the
 COO command the pool daemon and it answers. Its bot, **Pool**, is the
 daemon's voice (not a worker's: workers still have none) and is subscribed
-to #pool only; the COO bot is the one role bot there.
+to #pool (and #all, below) only; the COO bot is the one role bot there.
+
+**#all** (ops#238) replaces the old all-hands idea (agora#55, Zulip era): a
+private room where the founder talks to every role at once. Its members are
+the founder and every role bot — COO, CTO, CMO — plus PM and Pool; the
+Watchdog is not a member (it has no voice of its own there and no reason to
+read it). The existing mention rule (`read --mentions` / `wait` in
+bot/zulip.py, driven by Zulip's own `@**Name**`) wakes a role only when it is
+tagged by name, or every member at once via Zulip's wildcard `@**all**`; an
+untagged message wakes nobody. Each role answers in the same topic it was
+woken in, and speaks only when mentioned.
 
 The topic inside a stream is still the issue number, e.g. `#141 record
 shape`; a decision gets a ledger id, e.g. `D12 event queue resume`
@@ -45,8 +55,9 @@ stream_subscribers) rather than trusting a previous run's exit code, so it
 stays correct even if a stream or bot was created by hand in between.
 
 Usage:
-  .venv/Scripts/python.exe bot/setup_streams.py            # create what's missing
-  .venv/Scripts/python.exe bot/setup_streams.py --check     # verify only, exit 1 if incomplete
+  .venv/Scripts/python.exe bot/setup_streams.py                   # create what's missing
+  .venv/Scripts/python.exe bot/setup_streams.py --check            # verify only, exit 1 if incomplete
+  .venv/Scripts/python.exe bot/setup_streams.py --check --json     # same, one JSON object on stdout
 
 Needs an ADMIN account's credentials (realm-admin actions: creating streams,
 subscribing other users), not a bot's — ZULIP_ADMIN_EMAIL / ZULIP_ADMIN_API_KEY,
@@ -56,13 +67,14 @@ a key: bot/.env is gitignored, same as the bot credentials already there.
 
 from __future__ import annotations
 
+import json
 import os
 import sys
 
 from zulip_client import ZulipClient, ZulipError
 
 # stream name -> is it a role stream (a bot belongs here) or the watchdog-only one
-STREAMS = ["cto", "cmo", "coo", "status", "feature", "pool", "PM"]
+STREAMS = ["cto", "cmo", "coo", "status", "feature", "pool", "PM", "all"]
 
 # (bot full_name, short_name). short_name is also the stream the bot owns —
 # short_name becomes the email's local part (Zulip's own convention:
@@ -100,12 +112,18 @@ PM_STREAM = "PM"
 PM_BOT = ("PM", "pm")
 PM_ROLE_BOTS = {"COO", "CTO"}
 
+# The all-hands stream (ops#238): the founder and every role bot, plus PM and
+# Pool. The Watchdog is deliberately not a member — --check fails if it is.
+ALL_STREAM = "all"
+
 
 def bot_streams(full_name: str, short_name: str) -> set[str]:
     """The streams a role bot must be in, and the only ones: its own, plus
     #feature for the CTO and COO (issue #56), plus #pool for the COO (#80),
-    plus #PM for the COO and CTO (#104)."""
-    return ({short_name} | ({FEATURE_STREAM} if full_name in FEATURE_BOTS else set())
+    plus #PM for the COO and CTO (#104), plus #all for every role bot
+    (#238)."""
+    return ({short_name, ALL_STREAM}
+            | ({FEATURE_STREAM} if full_name in FEATURE_BOTS else set())
             | ({POOL_STREAM} if full_name in POOL_ROLE_BOTS else set())
             | ({PM_STREAM} if full_name in PM_ROLE_BOTS else set()))
 
@@ -231,8 +249,9 @@ def run_setup(client: ZulipClient) -> None:
     # subscribes the admin already; this covers a #feature made by hand.
     # So is #pool (issue #80): he is who commands the pool daemon there.
     # So is #PM (issue #104): he reads the feature requests there too.
+    # So is #all (ops#238): it is where he talks to every role at once.
     me = client.own_user()
-    for name in (FEATURE_STREAM, POOL_STREAM, PM_STREAM):
+    for name in (FEATURE_STREAM, POOL_STREAM, PM_STREAM, ALL_STREAM):
         subscribed = ensure_subscribed(client, stream_ids[name], me["email"], me["user_id"])
         print(
             f"[setup] founder ({me['email']}) in #{name}: "
@@ -240,7 +259,9 @@ def run_setup(client: ZulipClient) -> None:
         )
 
     for (full_name, short_name), own in (
-        (WATCHDOG_BOT, WATCHDOG_STREAMS), (POOL_BOT, {POOL_STREAM}), (PM_BOT, {PM_STREAM})
+        (WATCHDOG_BOT, WATCHDOG_STREAMS),
+        (POOL_BOT, {POOL_STREAM, ALL_STREAM}),
+        (PM_BOT, {PM_STREAM, ALL_STREAM}),
     ):
         email, user_id, created = ensure_bot(client, full_name, short_name)
         print(f"[setup] bot {full_name}: {'created' if created else 'already exists'} ({email})")
@@ -264,8 +285,15 @@ def run_setup(client: ZulipClient) -> None:
 # -- check --------------------------------------------------------------
 
 
-def run_check(client: ZulipClient) -> bool:
+def run_check(client: ZulipClient, as_json: bool = False) -> bool:
     ok = True
+    lines: list[str] = []
+
+    def say(msg: str) -> None:
+        lines.append(msg)
+        if not as_json:
+            print(msg)
+
     all_streams = client.list_streams()
     streams = {s["name"]: s["stream_id"] for s in all_streams}
     private = {s["name"]: bool(s.get("invite_only")) for s in all_streams}
@@ -274,33 +302,33 @@ def run_check(client: ZulipClient) -> bool:
 
     for name in STREAMS:
         if name not in streams:
-            print(f"[check] stream #{name}: MISSING — run bot/setup_streams.py to create it")
+            say(f"[check] stream #{name}: MISSING — run bot/setup_streams.py to create it")
             ok = False
         elif not private[name]:
-            print(
+            say(
                 f"[check] stream #{name}: PUBLIC — must be private (any member could read "
                 f"and join it); run bot/setup_streams.py to convert it"
             )
             ok = False
         else:
-            print(f"[check] stream #{name}: OK, private (id={streams[name]})")
+            say(f"[check] stream #{name}: OK, private (id={streams[name]})")
 
     for full_name, short_name in ROLE_BOTS:
         bot = users.get(full_name)
         if bot is None:
-            print(f"[check] bot {full_name}: MISSING")
+            say(f"[check] bot {full_name}: MISSING")
             ok = False
             continue
-        print(f"[check] bot {full_name}: OK ({bot['email']})")
+        say(f"[check] bot {full_name}: OK ({bot['email']})")
 
         subscribed_to = [
             name for name, sid in streams.items() if bot["user_id"] in client.stream_subscribers(sid)
         ]
         expected = bot_streams(full_name, short_name)
         if set(subscribed_to) == expected:
-            print(f"[check]   subscriptions: OK ({subscribed_to})")
+            say(f"[check]   subscriptions: OK ({subscribed_to})")
         else:
-            print(f"[check]   subscriptions: WRONG — expected {sorted(expected)}, got {sorted(subscribed_to)}")
+            say(f"[check]   subscriptions: WRONG — expected {sorted(expected)}, got {sorted(subscribed_to)}")
             ok = False
 
     # The Watchdog bot (issue #49) must exist and be in exactly #status and
@@ -309,66 +337,75 @@ def run_check(client: ZulipClient) -> bool:
     wd_name, _ = WATCHDOG_BOT
     watchdog = users.get(wd_name)
     if watchdog is None:
-        print(f"[check] bot {wd_name}: MISSING — run bot/setup_streams.py to create it")
+        say(f"[check] bot {wd_name}: MISSING — run bot/setup_streams.py to create it")
         ok = False
     else:
-        print(f"[check] bot {wd_name}: OK ({watchdog['email']})")
+        say(f"[check] bot {wd_name}: OK ({watchdog['email']})")
         subscribed_to = [
             name for name, sid in streams.items() if watchdog["user_id"] in client.stream_subscribers(sid)
         ]
         if set(subscribed_to) == WATCHDOG_STREAMS:
-            print(f"[check]   subscriptions: OK ({sorted(subscribed_to)})")
+            say(f"[check]   subscriptions: OK ({sorted(subscribed_to)})")
         else:
-            print(
+            say(
                 f"[check]   subscriptions: WRONG — expected {sorted(WATCHDOG_STREAMS)}, "
                 f"got {sorted(subscribed_to)}"
             )
             ok = False
 
-    # The Pool bot (issue #80): in exactly #pool. Missing is a FAIL for the
-    # same reason: the founder's commands there would reach nobody.
+    # The Pool bot (issue #80): in exactly #pool and #all (#238). Missing is a
+    # FAIL for the same reason: the founder's commands there would reach nobody.
     pool_name, _ = POOL_BOT
+    pool_streams_expected = {POOL_STREAM, ALL_STREAM}
     pool = users.get(pool_name)
     if pool is None:
-        print(f"[check] bot {pool_name}: MISSING — run bot/setup_streams.py to create it")
+        say(f"[check] bot {pool_name}: MISSING — run bot/setup_streams.py to create it")
         ok = False
     else:
-        print(f"[check] bot {pool_name}: OK ({pool['email']})")
+        say(f"[check] bot {pool_name}: OK ({pool['email']})")
         subscribed_to = [
             name for name, sid in streams.items() if pool["user_id"] in client.stream_subscribers(sid)
         ]
-        if set(subscribed_to) == {POOL_STREAM}:
-            print(f"[check]   subscriptions: OK ({sorted(subscribed_to)})")
+        if set(subscribed_to) == pool_streams_expected:
+            say(f"[check]   subscriptions: OK ({sorted(subscribed_to)})")
         else:
-            print(f"[check]   subscriptions: WRONG — expected {[POOL_STREAM]}, got {sorted(subscribed_to)}")
+            say(
+                f"[check]   subscriptions: WRONG — expected {sorted(pool_streams_expected)}, "
+                f"got {sorted(subscribed_to)}"
+            )
             ok = False
 
-    # The PM bot (issue #104): in exactly #PM. Missing is a FAIL for the same
-    # reason: new feature requests would reach nobody.
+    # The PM bot (issue #104): in exactly #PM and #all (#238). Missing is a
+    # FAIL for the same reason: new feature requests would reach nobody.
     pm_name, _ = PM_BOT
+    pm_streams_expected = {PM_STREAM, ALL_STREAM}
     pm = users.get(pm_name)
     if pm is None:
-        print(f"[check] bot {pm_name}: MISSING — run bot/setup_streams.py to create it")
+        say(f"[check] bot {pm_name}: MISSING — run bot/setup_streams.py to create it")
         ok = False
     else:
-        print(f"[check] bot {pm_name}: OK ({pm['email']})")
+        say(f"[check] bot {pm_name}: OK ({pm['email']})")
         subscribed_to = [
             name for name, sid in streams.items() if pm["user_id"] in client.stream_subscribers(sid)
         ]
-        if set(subscribed_to) == {PM_STREAM}:
-            print(f"[check]   subscriptions: OK ({sorted(subscribed_to)})")
+        if set(subscribed_to) == pm_streams_expected:
+            say(f"[check]   subscriptions: OK ({sorted(subscribed_to)})")
         else:
-            print(f"[check]   subscriptions: WRONG — expected {[PM_STREAM]}, got {sorted(subscribed_to)}")
+            say(
+                f"[check]   subscriptions: WRONG — expected {sorted(pm_streams_expected)}, "
+                f"got {sorted(subscribed_to)}"
+            )
             ok = False
 
     # Per stream, over ALL bots in the realm (not only the ones named above),
     # since a stray bot is exactly the failure this check exists for:
     # #status holds the Watchdog bot and no other bot; a role stream holds its
     # own role bot, plus Watchdog in #coo only. #pool holds the Pool and COO
-    # bots and must hold the founder (issue #80). #feature holds the CTO and
-    # COO bots and the founder, and there every member counts, humans too
-    # (issue #56): the other streams leave humans unchecked, #feature is
-    # defined by who is in it.
+    # bots and must hold the founder (issue #80). #all holds every role bot
+    # plus PM and Pool and the founder, and must not hold the Watchdog (#238).
+    # #feature holds the CTO and COO bots and the founder, and there every
+    # member counts, humans too (issue #56): the other streams leave humans
+    # unchecked, #feature is defined by who is in it.
     watchdog_id = watchdog["user_id"] if watchdog else None
     role_bot_ids = {short: users[full]["user_id"] for full, short in ROLE_BOTS if full in users}
     founder_id = client.own_user()["user_id"]
@@ -391,6 +428,13 @@ def run_check(client: ZulipClient) -> bool:
             if pm is not None:
                 allowed.add(pm["user_id"])
             allowed.add(founder_id)
+        if name == ALL_STREAM:
+            allowed |= {role_bot_ids[short] for _, short in ROLE_BOTS if short in role_bot_ids}
+            if pool is not None:
+                allowed.add(pool["user_id"])
+            if pm is not None:
+                allowed.add(pm["user_id"])
+            allowed.add(founder_id)
         if name == FEATURE_STREAM:
             allowed |= {users[full]["user_id"] for full in FEATURE_BOTS if full in users}
             allowed.add(founder_id)
@@ -398,36 +442,47 @@ def run_check(client: ZulipClient) -> bool:
         stray = sorted(u["full_name"] for u in counted if u["user_id"] in subs and u["user_id"] not in allowed)
         if stray:
             what = "members" if name == FEATURE_STREAM else "bots"
-            print(f"[check] #{name}: FAIL — {what} that must not be subscribed: {stray}")
+            say(f"[check] #{name}: FAIL — {what} that must not be subscribed: {stray}")
             ok = False
         elif name == FEATURE_STREAM:
             # The bots' own rows above already fail a CTO or COO missing
             # here; the founder has no row, and without him nothing in
             # #feature wakes anyone.
             if founder_id in subs:
-                print(f"[check] #{name}: OK (the founder, {sorted(FEATURE_BOTS)} only)")
+                say(f"[check] #{name}: OK (the founder, {sorted(FEATURE_BOTS)} only)")
             else:
-                print(f"[check] #{name}: FAIL — the founder is not subscribed, so nobody posts here to wake the CTO and COO")
+                say(f"[check] #{name}: FAIL — the founder is not subscribed, so nobody posts here to wake the CTO and COO")
                 ok = False
         elif name == POOL_STREAM:
             if founder_id in subs:
-                print(f"[check] #{name}: OK (the founder, {sorted(POOL_ROLE_BOTS)} and {pool_name} bots only)")
+                say(f"[check] #{name}: OK (the founder, {sorted(POOL_ROLE_BOTS)} and {pool_name} bots only)")
             else:
-                print(f"[check] #{name}: FAIL — the founder is not subscribed, so nobody commands the pool here")
+                say(f"[check] #{name}: FAIL — the founder is not subscribed, so nobody commands the pool here")
                 ok = False
         elif name == PM_STREAM:
             if founder_id in subs:
-                print(f"[check] #{name}: OK (the founder, {sorted(PM_ROLE_BOTS)} and {pm_name} bots only)")
+                say(f"[check] #{name}: OK (the founder, {sorted(PM_ROLE_BOTS)} and {pm_name} bots only)")
             else:
-                print(f"[check] #{name}: FAIL — the founder is not subscribed to #{name}")
+                say(f"[check] #{name}: FAIL — the founder is not subscribed to #{name}")
+                ok = False
+        elif name == ALL_STREAM:
+            if founder_id in subs:
+                say(
+                    f"[check] #{name}: OK (the founder, {sorted(role_bot_ids)}, "
+                    f"{pool_name} and {pm_name} bots only)"
+                )
+            else:
+                say(f"[check] #{name}: FAIL — the founder is not subscribed to #{name}")
                 ok = False
         elif name == STATUS_STREAM:
             if watchdog_id is not None and watchdog_id in subs:
-                print(f"[check] #{name}: OK (only {wd_name} subscribed)")
+                say(f"[check] #{name}: OK (only {wd_name} subscribed)")
             else:
-                print(f"[check] #{name}: FAIL — {wd_name} is not subscribed, so nothing can post here")
+                say(f"[check] #{name}: FAIL — {wd_name} is not subscribed, so nothing can post here")
                 ok = False
 
+    if as_json:
+        print(json.dumps({"ok": ok, "checks": lines}, ensure_ascii=False))
     return ok
 
 
@@ -435,7 +490,7 @@ def main() -> None:
     client = load_admin_client()
     try:
         if "--check" in sys.argv:
-            ok = run_check(client)
+            ok = run_check(client, as_json="--json" in sys.argv)
             sys.exit(0 if ok else 1)
         run_setup(client)
     except ZulipError as e:

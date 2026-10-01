@@ -4,6 +4,7 @@ the way the server would, so setup and --check are tested as a pair."""
 
 from __future__ import annotations
 
+import json
 import os
 import sys
 
@@ -122,10 +123,11 @@ def test_setup_creates_watchdog_on_status_and_coo_only(capsys):
     assert wd["is_bot"] and wd["email"] == "watchdog-bot@x"
     assert _bot_streams(z, "Watchdog") == {"status", "coo"}
     # role bots: each in its own stream, plus #feature for CTO and COO (#56),
-    # plus #pool for the COO (#80), plus #PM for the COO and CTO (#104)
-    assert _bot_streams(z, "COO") == {"coo", "feature", "pool", "PM"}
-    assert _bot_streams(z, "CTO") == {"cto", "feature", "PM"}
-    assert _bot_streams(z, "CMO") == {"cmo"}
+    # plus #pool for the COO (#80), plus #PM for the COO and CTO (#104), plus
+    # #all for every role bot (#238)
+    assert _bot_streams(z, "COO") == {"coo", "feature", "pool", "PM", "all"}
+    assert _bot_streams(z, "CTO") == {"cto", "feature", "PM", "all"}
+    assert _bot_streams(z, "CMO") == {"cmo", "all"}
     capsys.readouterr()
     assert setup_streams.run_check(z)
     out = capsys.readouterr().out
@@ -323,8 +325,8 @@ def test_setup_creates_private_pool_with_founder_coo_and_pool_bot(capsys):
     assert z.streams["pool"]["invite_only"]
     assert _members(z, "pool") == {"Admin", "COO", "Pool"}
     assert _bot(z, "Pool")["email"] == "pool-bot@x"
-    assert _bot_streams(z, "Pool") == {"pool"}
-    assert _bot_streams(z, "PM") == {"PM"}  # issue #104: the PM bot, in #PM only
+    assert _bot_streams(z, "Pool") == {"pool", "all"}  # issue #238: also #all
+    assert _bot_streams(z, "PM") == {"PM", "all"}  # issue #104, #238: #PM and #all
     capsys.readouterr()
     assert setup_streams.run_check(z)
     assert "#pool: OK" in capsys.readouterr().out
@@ -369,3 +371,98 @@ def test_check_fails_when_the_pool_bot_is_elsewhere_or_the_founder_is_not_in_poo
     capsys.readouterr()
     assert not setup_streams.run_check(z)
     assert "#pool: FAIL — the founder is not subscribed" in capsys.readouterr().out
+
+
+# -- ops#238: a private #all stream with the founder and every role bot, plus
+# PM and Pool, woken only by @-mention; the Watchdog is not a member.
+
+
+def test_setup_creates_private_all_with_founder_and_every_bot_but_watchdog(capsys):
+    z = FakeZulip()
+    setup_streams.run_setup(z)
+    assert z.streams["all"]["invite_only"]
+    assert _members(z, "all") == {"Admin", "COO", "CTO", "CMO", "PM", "Pool"}
+    capsys.readouterr()
+    assert setup_streams.run_check(z)
+    out = capsys.readouterr().out
+    assert "#all: OK (the founder, ['cmo', 'coo', 'cto'], Pool and PM bots only)" in out
+
+
+def test_setup_is_idempotent_for_all():
+    z = FakeZulip()
+    setup_streams.run_setup(z)
+    before = _members(z, "all")
+    setup_streams.run_setup(z)
+    assert _members(z, "all") == before
+
+
+def test_check_fails_when_watchdog_is_in_all(capsys):
+    z = FakeZulip()
+    setup_streams.run_setup(z)
+    z.subs[z.streams["all"]["stream_id"]].add(_bot(z, "Watchdog")["user_id"])
+    capsys.readouterr()
+    assert not setup_streams.run_check(z)
+    assert "#all: FAIL — bots that must not be subscribed: ['Watchdog']" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("bot", ["COO", "CTO", "CMO", "PM", "Pool"])
+def test_check_fails_when_a_role_bot_is_missing_from_all(bot):
+    z = FakeZulip()
+    setup_streams.run_setup(z)
+    z.subs[z.streams["all"]["stream_id"]].discard(_bot(z, bot)["user_id"])
+    assert not setup_streams.run_check(z)
+
+
+def test_check_fails_when_the_founder_is_not_in_all(capsys):
+    z = FakeZulip()
+    setup_streams.run_setup(z)
+    z.subs[z.streams["all"]["stream_id"]].discard(1)
+    capsys.readouterr()
+    assert not setup_streams.run_check(z)
+    assert "#all: FAIL — the founder is not subscribed to #all" in capsys.readouterr().out
+
+
+def test_check_fails_when_all_stream_is_missing():
+    z = FakeZulip()
+    setup_streams.run_setup(z)
+    del z.streams["all"]
+    assert not setup_streams.run_check(z)
+
+
+def test_check_fails_on_public_all(capsys):
+    z = FakeZulip()
+    setup_streams.run_setup(z)
+    z.streams["all"]["invite_only"] = False
+    capsys.readouterr()
+    assert not setup_streams.run_check(z)
+    assert "#all: PUBLIC" in capsys.readouterr().out
+
+
+# -- --check --json (ops#238): one JSON object, no [check] lines on stdout
+
+
+def test_check_json_reports_ok_true_and_includes_the_text_lines(capsys):
+    z = FakeZulip()
+    setup_streams.run_setup(z)
+    capsys.readouterr()
+    ok = setup_streams.run_check(z, as_json=True)
+    assert ok is True
+    out = capsys.readouterr().out.strip()
+    payload = json.loads(out)
+    assert payload["ok"] is True
+    assert any("#all: OK" in line for line in payload["checks"])
+
+
+def test_check_json_emits_nothing_but_the_json_object(capsys):
+    z = FakeZulip()
+    setup_streams.run_setup(z)
+    z.subs[z.streams["all"]["stream_id"]].discard(1)
+    capsys.readouterr()
+    ok = setup_streams.run_check(z, as_json=True)
+    assert ok is False
+    out = capsys.readouterr().out
+    lines = out.splitlines()
+    assert len(lines) == 1
+    payload = json.loads(lines[0])
+    assert payload["ok"] is False
+    assert any("#all: FAIL" in line for line in payload["checks"])

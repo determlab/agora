@@ -44,6 +44,7 @@ CTO and you" — so the actual scheme is **four streams, not nine**:
 | `#coo` | the founder, the COO bot, the Watchdog bot (to wake the COO) | the COO bot and the Watchdog bot |
 | `#status` | the Watchdog bot (one pinned message it rewrites) | the Watchdog bot only |
 | `#feature` | the founder, the CTO bot (designs), the COO bot (process notes only) | the founder, the CTO bot and the COO bot, no one else |
+| `#all` | the founder, any role bot by `@`-mention, `@**all**` to reach everyone | the founder, the COO, CTO, CMO, PM and Pool bots — not the Watchdog (ops#238) |
 
 **`#feature`** (issue #56) is the big-feature path and the one exception to
 "each bot in its own stream only" — the founder: "open a channel for me, you
