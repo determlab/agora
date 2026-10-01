@@ -126,6 +126,7 @@ def test_setup_creates_watchdog_on_status_and_coo_only(capsys):
     assert _bot_streams(z, "COO") == {"coo", "feature", "pool", "PM"}
     assert _bot_streams(z, "CTO") == {"cto", "feature", "PM"}
     assert _bot_streams(z, "CMO") == {"cmo"}
+    assert _bot_streams(z, "CPSO") == {"cpso"}
     capsys.readouterr()
     assert setup_streams.run_check(z)
     out = capsys.readouterr().out
