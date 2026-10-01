@@ -54,6 +54,11 @@ and `chat\run.cmd`.
 **Warning: use `tailscale serve`, never `tailscale funnel`.** Funnel puts agora on the public
 internet, where the API key is the only lock and there is no rate limit on key guesses.
 
+Pairing a phone (ops#236): with `--allow-host` set, the page's "התחבר בטלפון" button shows a
+QR that logs the phone in with no copied key. The phone then holds the same permanent API key
+the PC does (in its own `localStorage`); there is no per-device key, so unpairing a phone means
+rotating that account's API key by hand in the database (there is no CLI command for it yet).
+
 ## The dashboard
 
 Start `up` (or `serve`) with `--dashboard-cmd "<command>"` and the server runs
