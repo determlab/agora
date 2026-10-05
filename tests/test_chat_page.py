@@ -1275,6 +1275,40 @@ def test_toggle_reaction_adds_then_removes_through_the_api():
     assert got["afterRemove"][3] == ""
 
 
+def test_toggle_reaction_does_not_double_count_a_live_event_that_wins_the_race():
+    """The sender is a subscriber of its own stream, so the live "reaction"
+    event for a tap can reach onReaction() before this same tap's own POST
+    promise resolves (both are separate in-flight requests). An earlier
+    version of toggleReaction appended its optimistic entry unconditionally
+    after the await, double-counting a reaction the live event had already
+    added. Regression test for that race, not just the happy path above."""
+    prelude = FAKE_DOM + """
+      const S = {me: {user_id: 1, full_name: "Me"}};
+      // The POST "resolves" only after delivering the live event first —
+      // exactly the ordering that broke the naive implementation.
+      async function api(method, path, params) {
+        onReaction({type: "reaction", op: "add", message_id: 7, user_id: 1,
+                   emoji_name: params.emoji_name, emoji_code: params.emoji_name,
+                   reaction_type: "unicode_emoji", user: {full_name: "Me"}});
+        return {};
+      }
+    """
+    got = _js(("toggleReaction", "renderReactions", "onReaction"), """
+      const node = document.createElement("div");
+      const box = document.createElement("div");
+      box.className = "reactions";
+      node.append(box);
+      $("messages").querySelector = () => node;
+      const m = {id: 7, reactions: []};
+      S.msgs = [m];  // onReaction() looks the message up here, same reference
+      await toggleReaction(m, "👍");
+      out.reactions = m.reactions.length;
+      out.chip = box.textContent;
+    """, prelude=prelude)
+    assert got["reactions"] == 1
+    assert got["chip"] == "👍 1"
+
+
 def test_a_live_reaction_event_updates_the_open_message_in_place():
     got = _js(("onReaction", "renderReactions"), """
       const node = document.createElement("div");

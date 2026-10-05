@@ -2735,16 +2735,29 @@ function wireReactBtn(btn, m) {
 }
 
 async function toggleReaction(m, name) {
-  const mine = (m.reactions || []).find((r) => r.user_id === S.me.user_id && r.emoji_name === name);
+  const mine = () => (m.reactions || []).find((r) => r.user_id === S.me.user_id && r.emoji_name === name);
+  const had = mine();
   try {
-    if (mine) {
+    if (had) {
       await api("DELETE", "messages/" + m.id + "/reactions", {emoji_name: name});
-      m.reactions = m.reactions.filter((r) => r !== mine);
+      // Re-checked after the await, never against `had`: the live event for
+      // this same removal may already have arrived and rebuilt the array
+      // while the request was in flight (the sender is a subscriber of its
+      // own stream, so it gets its own event back) — filtering by the stale
+      // reference would then be a silent no-op, not a bug, but re-deriving
+      // "mine" keeps this path symmetric with the add path below.
+      const now = mine();
+      if (now) m.reactions = m.reactions.filter((r) => r !== now);
     } else {
       await api("POST", "messages/" + m.id + "/reactions", {emoji_name: name});
-      m.reactions = [...(m.reactions || []), {emoji_name: name, emoji_code: name,
-                     reaction_type: "unicode_emoji", user_id: S.me.user_id,
-                     user: {id: S.me.user_id, full_name: S.me.full_name}}];
+      // Same race the other way: onReaction() may have already added this
+      // exact reaction from the live event while the POST was in flight.
+      // Appending unconditionally here would double it.
+      if (!mine()) {
+        m.reactions = [...(m.reactions || []), {emoji_name: name, emoji_code: name,
+                       reaction_type: "unicode_emoji", user_id: S.me.user_id,
+                       user: {id: S.me.user_id, full_name: S.me.full_name}}];
+      }
     }
   } catch (e) { toast("לא עלה: " + e.message, true); return; }
   const node = $("messages").querySelector('[data-id="' + m.id + '"]');
