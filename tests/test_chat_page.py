@@ -1111,9 +1111,8 @@ def test_77_typing_at_opens_a_picker_that_inserts_the_mention():
     for k in ('"ArrowDown"', '"ArrowUp"', '"Enter" || e.key === "Tab"', '"Escape"'):
         assert k in keys, k
     assert '"@**" + name + "** "' in _function("choosePick")
-    listener = script[script.index('$("compose").addEventListener("input"'):]
-    listener = listener[:listener.index("});") + 3]
-    assert "updatePick();" in listener
+    assert '$("compose").addEventListener("input", onComposeInput);' in script
+    assert "updatePick();" in _function("onComposeInput")
 
 
 def test_77_mention_buttons_have_a_label_and_compose_has_a_hint():
@@ -1210,6 +1209,7 @@ def test_77_a_toast_follows_each_action_and_says_success_only_when_the_server_di
       }
       function fitCompose() {}
       function sendTyping() {}
+      let lastTypingSent = 0;
       const S = {sending: false, open: {stream_id: 1, topic: "t"}};
     """
     sent = _js(("sendError", "send"), """
@@ -1410,6 +1410,54 @@ def test_typing_indicator_is_blank_with_no_room_open():
       const S = {open: null, typing: new Map()};
     """)
     assert got["text"] == ""
+
+
+def test_typing_input_handler_restarts_after_an_idle_stop_and_stops_once():
+    """ops#249 batch 1, found in CTO review on the PR: (1) the idle "stop"
+    must reset lastTypingSent, or typing again within 8s of the original
+    "start" sends no new "start" and the indicator stays wrongly off;
+    (2) emptying the box must send "stop" only once, not on every
+    subsequent input event."""
+    prelude = """
+      const els = {compose: {value: ""}};
+      const $ = (id) => els[id] || (els[id] = {});
+      function fitCompose() {}
+      function updatePick() {}
+      const sent = [];
+      function sendTyping(op) { sent.push(op); }
+      let lastTypingSent = 0;
+      let typingIdle = 0;
+      const timers = [];
+      let nextId = 1;
+      function setTimeout(f, ms) { const id = nextId++; timers.push([id, f, ms]); return id; }
+      function clearTimeout(id) { const i = timers.findIndex((t) => t[0] === id); if (i >= 0) timers.splice(i, 1); }
+    """
+    got = _js(("onComposeInput",), """
+      $("compose").value = "hi";
+      onComposeInput();
+      out.afterFirstStart = [...sent];
+      // The idle timer fires (simulated: nothing here advances real time):
+      // sends "stop" and must reset lastTypingSent.
+      const [, fire] = timers[timers.length - 1];
+      fire();
+      out.lastTypingSentAfterIdle = lastTypingSent;
+      // Typing again, still well inside the original 8s throttle window:
+      // must send a fresh "start" now that the server was told "stop".
+      sent.length = 0;
+      onComposeInput();
+      out.afterResume = [...sent];
+      // Emptying the box: "stop" exactly once across repeated input events.
+      sent.length = 0;
+      $("compose").value = "";
+      onComposeInput();
+      onComposeInput();
+      onComposeInput();
+      out.afterEmpty = [...sent];
+    """, prelude=prelude)
+    assert got["afterFirstStart"] == ["start"]
+    assert got["lastTypingSentAfterIdle"] == 0
+    assert got["afterResume"] == ["start"]
+    assert got["afterEmpty"] == ["stop"]
 
 
 # -- ops#249 batch 1: "tap the quote to jump to it"

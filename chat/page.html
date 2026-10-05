@@ -2480,6 +2480,8 @@ function newTopicItem(s) {
 }
 
 function closeTopic() {
+  clearTimeout(typingIdle);
+  lastTypingSent = 0;  // same state the idle-stop resets (ops#249 review)
   sendTyping("stop");
   S.open = null;
   S.msgs = [];
@@ -2859,6 +2861,7 @@ async function send() {
       type: "stream", to: S.open.stream_id, topic: S.open.topic, content: text});
     // Cleared, and reported sent, only once the server returned the new id.
     if (box.value === text) box.value = "";
+    lastTypingSent = 0;  // same state the idle-stop resets (ops#249 review)
     sendTyping("stop");
     toast("נשלח · id " + sent.id);
   } catch (e) {
@@ -2948,20 +2951,28 @@ $("compose").addEventListener("keydown", (e) => {
   }
 });
 let typingIdle = 0;
-$("compose").addEventListener("input", () => {
+function onComposeInput() {
   fitCompose();
   updatePick();
   clearTimeout(typingIdle);
   if ($("compose").value.trim()) {
     // Throttled to well inside the server's TTL, so one keystroke every few
     // seconds while actually composing never lets the indicator lapse.
+    // `lastTypingSent` doubles as "do we believe the server still has us
+    // marked typing": every path that tells the server "stop" resets it to
+    // 0, so the very next keystroke sends a fresh "start" rather than
+    // trusting a throttle window a "stop" already invalidated.
     const now = Date.now();
     if (now - lastTypingSent > 8000) { lastTypingSent = now; sendTyping("start"); }
-    typingIdle = setTimeout(() => sendTyping("stop"), 4000);
-  } else {
+    typingIdle = setTimeout(() => { lastTypingSent = 0; sendTyping("stop"); }, 4000);
+  } else if (lastTypingSent) {
+    // Only once per start: an empty box firing further input events (e.g.
+    // repeated backspace past empty) must not keep POSTing "stop".
+    lastTypingSent = 0;
     sendTyping("stop");
   }
-});
+}
+$("compose").addEventListener("input", onComposeInput);
 $("compose").addEventListener("blur", closePick);
 $("send-btn").addEventListener("click", send);
 
