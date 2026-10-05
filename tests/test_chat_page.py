@@ -240,6 +240,36 @@ def test_notification_wiring_is_stronger_for_a_mention_than_a_plain_message():
     assert "notifyMessage(m, isOpen);" in _function("onMessage")
 
 
+# -- ops#255: the keyboard must not pop open on its own on a phone
+
+
+def test_255_isTouch_reflects_the_pointer_media_query():
+    found = re.search(r"const isTouch = .*;", _markup().script)
+    assert found, "isTouch helper not found"
+    got = _js((), """
+      let coarse = true;
+      globalThis.matchMedia = (q) => ({matches: coarse && q === "(pointer: coarse)"});
+      out.touch = isTouch();
+      coarse = false;
+      out.mouse = isTouch();
+    """, prelude=found.group(0))
+    assert got == {"touch": True, "mouse": False}
+
+
+def test_255_automatic_compose_focus_is_guarded_but_a_tap_driven_one_is_not():
+    # The three automatic triggers the issue names — load, reconnect and
+    # switching stream or topic all run through openTopic(); a send runs
+    # through send()'s finally — must not focus on a touch device.
+    assert 'if (!isTouch()) $("compose").focus();' in _function("openTopic")
+    assert 'if (!isTouch()) box.focus();' in _function("send")
+    # A tap the person made meaning to type next (quoting, a mention button,
+    # picking one from the "@" autocomplete) still focuses unconditionally —
+    # the issue's "reply and edit actions may focus" carve-out.
+    insert_text, choose_pick = _function("insertText"), _function("choosePick")
+    assert "box.focus();" in insert_text and "isTouch" not in insert_text
+    assert "box.focus();" in choose_pick and "isTouch" not in choose_pick
+
+
 def test_the_csp_hash_survives_a_crlf_checkout(tmp_path):
     crlf = tmp_path / "page.html"
     crlf.write_bytes(PAGE.read_bytes().replace(b"\r\n", b"\n").replace(b"\n", b"\r\n"))
@@ -1214,6 +1244,7 @@ def test_77_a_toast_follows_each_action_and_says_success_only_when_the_server_di
       }
       function fitCompose() {}
       function sendTyping() {}
+      const isTouch = () => false;
       let lastTypingSent = 0;
       const S = {sending: false, open: {stream_id: 1, topic: "t"}};
     """

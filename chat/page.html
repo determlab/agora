@@ -622,6 +622,11 @@ a.ref:hover { text-decoration: underline; }
 // markup: a message is untrusted input. The CSP the server sends allows this
 // one inline script by its hash and nothing else.
 const $ = (id) => document.getElementById(id);
+// A touch device (phone, tablet): the compose box must never grab focus on
+// its own there, or the keyboard pops open uninvited (ops#255). A tap on the
+// box, or on something the person tapped meaning to type next (reply, edit,
+// a mention), still focuses it — this only guards the automatic calls.
+const isTouch = () => matchMedia("(pointer: coarse)").matches;
 // Small createElement/textContent helper — no markup-parsing sink, ever: a
 // message is untrusted input, and the CSP allows only this one inline script.
 function el(tag, cls, text) {
@@ -2533,7 +2538,7 @@ async function openTopic(streamId, stream, topic) {
   }
   if (!S.open || S.open.stream_id !== streamId || S.open.topic !== topic) return;
   addMessages(got.messages, true);
-  $("compose").focus();
+  if (!isTouch()) $("compose").focus();
 }
 
 // -- messages
@@ -2878,7 +2883,7 @@ async function send() {
     box.disabled = false;
     $("send-btn").disabled = false;
     fitCompose();
-    box.focus();
+    if (!isTouch()) box.focus();
   }
 }
 
