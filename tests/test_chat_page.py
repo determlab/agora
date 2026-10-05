@@ -186,6 +186,58 @@ def test_the_csp_allows_the_pages_own_inline_script_by_hash_and_nothing_else(wor
     digest = base64.b64encode(hashlib.sha256(script.encode("utf-8")).digest()).decode()
     assert f"script-src 'sha256-{digest}'" in csp
     assert headers["X-Content-Type-Options"] == "nosniff"
+    # ops#249 batch 1: a service worker is registered from this page, so its
+    # script fetch needs its own allowance — worker-src, not script-src,
+    # governs it, and script-src's hash-only allowance would otherwise block it.
+    assert "worker-src 'self';" in csp
+
+
+# -- ops#249 batch 1: the PWA shell (manifest, service worker, icons) and
+# the phone-notification wiring that needs them.
+
+
+def test_the_pwa_shell_is_served_and_linked_from_the_page(world):
+    status, headers, raw = _request(world["run"], "GET", "/manifest.json")
+    assert status == 200 and headers["Content-Type"] == "application/manifest+json"
+    manifest = json.loads(raw)
+    assert manifest["name"] and manifest["display"] == "standalone"
+    icon_paths = {i["src"] for i in manifest["icons"]}
+    assert icon_paths == {"/icon-192.png", "/icon-512.png"}
+    for path in icon_paths:
+        status, headers, raw = _request(world["run"], "GET", path)
+        assert status == 200 and headers["Content-Type"] == "image/png"
+        assert raw[:8] == b"\x89PNG\r\n\x1a\n"
+    status, headers, raw = _request(world["run"], "GET", "/sw.js")
+    assert status == 200 and "javascript" in headers["Content-Type"]
+    assert b"showNotification" not in raw  # the SW relays clicks; the page shows notifications
+    assert b"self.addEventListener(\"notificationclick\"" in raw
+    text = PAGE.read_text(encoding="utf-8")
+    assert '<link rel="manifest" href="/manifest.json">' in text
+    assert 'navigator.serviceWorker.register("/sw.js")' in _markup().script
+
+
+def test_a_foreign_host_cannot_fetch_the_pwa_shell_either(world):
+    # Same Host-rebinding protection as the page itself (D4's spirit): a
+    # static asset still answers only this server's own two local names or
+    # an --allow-host name, never any other Host header.
+    run = world["run"]
+    port = run.server.server_address[1]
+    status, _, _ = _request(run, "GET", "/manifest.json", Host=f"evil.example:{port}")
+    assert status == 403
+    status, _, _ = _request(run, "GET", "/sw.js", Host=f"127.0.0.1:{port}")
+    assert status == 200
+
+
+def test_notification_wiring_is_stronger_for_a_mention_than_a_plain_message():
+    src = _function("notifyMessage")
+    assert "if (S.me && m.sender_id === S.me.user_id) return;" in src
+    # The split this issue asks for: "mentioned" (the founder tagged) is
+    # requireInteraction + renotify + a longer vibration; a plain message is
+    # none of those.
+    assert 'const strong = (m.flags || []).includes("mentioned");' in src
+    assert "requireInteraction: strong" in src and "renotify: strong" in src
+    assert "vibrate: strong ? [200, 100, 200, 100, 200] : [80]" in src
+    assert "notifyMessage(m, isOpen);" in _function("onMessage")
 
 
 def test_the_csp_hash_survives_a_crlf_checkout(tmp_path):
@@ -1179,6 +1231,198 @@ def test_77_a_toast_follows_each_action_and_says_success_only_when_the_server_di
                  'report("members-status", privateReport(', 'report("create-status", createReport(',
                  'report("create-status", "לא נוצר: "', 'report("members-status", "לא נוסף: "'):
         assert call in script, call
+
+
+# -- ops#249 batch 1: one-tap emoji reactions
+
+
+def test_reaction_chips_group_by_emoji_and_mark_mine():
+    got = _js(("renderReactions",), """
+      const node = document.createElement("div");
+      const box = document.createElement("div");
+      box.className = "reactions";
+      node.append(box);
+      const m = {id: 5, reactions: [
+        {emoji_name: "👍", emoji_code: "👍", reaction_type: "unicode_emoji", user_id: 1},
+        {emoji_name: "👍", emoji_code: "👍", reaction_type: "unicode_emoji", user_id: 2},
+        {emoji_name: "🎉", emoji_code: "🎉", reaction_type: "unicode_emoji", user_id: 2}]};
+      renderReactions(node, m);
+      out.chips = box.children.map((c) => [c.className, c.textContent]);
+    """, prelude=FAKE_DOM + "const S = {me: {user_id: 1}};")
+    assert got["chips"] == [["reaction-chip mine", "👍 2"], ["reaction-chip", "🎉 1"]]
+
+
+def test_toggle_reaction_adds_then_removes_through_the_api():
+    prelude = API_STUB + FAKE_DOM + """
+      const S = {me: {user_id: 1, full_name: "Me"}};
+    """
+    got = _js(("toggleReaction", "renderReactions"), """
+      const node = document.createElement("div");
+      const box = document.createElement("div");
+      box.className = "reactions";
+      node.append(box);
+      $("messages").querySelector = () => node;  // stand in for the real lookup by data-id
+      const m = {id: 7, reactions: []};
+      await toggleReaction(m, "👍");
+      out.afterAdd = [calls[0], [...m.reactions].map((r) => r.emoji_name), box.textContent];
+      await toggleReaction(m, "👍");
+      out.afterRemove = [calls[1][0], calls[1][1], m.reactions.length, box.textContent];
+    """, prelude=prelude)
+    out_add = got["afterAdd"]
+    assert out_add[0] == ["POST", "messages/7/reactions", {"emoji_name": "👍"}]
+    assert out_add[1] == ["👍"] and "👍 1" in out_add[2]
+    assert got["afterRemove"][:3] == ["DELETE", "messages/7/reactions", 0]
+    assert got["afterRemove"][3] == ""
+
+
+def test_a_live_reaction_event_updates_the_open_message_in_place():
+    got = _js(("onReaction", "renderReactions"), """
+      const node = document.createElement("div");
+      const box = document.createElement("div");
+      box.className = "reactions";
+      node.append(box);
+      $("messages").querySelector = () => node;
+      S.msgs = [{id: 9, reactions: []}];
+      onReaction({type: "reaction", op: "add", message_id: 9, user_id: 2, emoji_name: "🙏",
+                 emoji_code: "🙏", reaction_type: "unicode_emoji", user: {full_name: "COO"}});
+      out.afterAdd = [S.msgs[0].reactions.length, box.textContent];
+      onReaction({type: "reaction", op: "remove", message_id: 9, user_id: 2, emoji_name: "🙏",
+                 emoji_code: "🙏", reaction_type: "unicode_emoji", user: {full_name: "COO"}});
+      out.afterRemove = [S.msgs[0].reactions.length, box.textContent];
+      // A message not in S.msgs (a different, unopened topic) is a no-op,
+      // not an error: the event is simply not for anything on screen.
+      onReaction({type: "reaction", op: "add", message_id: 404, user_id: 2, emoji_name: "🙏",
+                 emoji_code: "🙏", reaction_type: "unicode_emoji", user: {full_name: "COO"}});
+      out.noCrash = true;
+    """, prelude=FAKE_DOM + "const S = {me: {user_id: 1}};")
+    assert got["afterAdd"] == [1, "🙏 1"]
+    assert got["afterRemove"] == [0, ""]
+    assert got["noCrash"] is True
+
+
+def test_one_tap_reacts_a_long_press_opens_the_picker():
+    prelude = FAKE_DOM + """
+      const timers = [];
+      let nextId = 1;
+      function setTimeout(f, ms) { const id = nextId++; timers.push([id, f, ms]); return id; }
+      function clearTimeout(id) { const i = timers.findIndex((t) => t[0] === id); if (i >= 0) timers.splice(i, 1); }
+      let pickedWith = null, toggledWith = null;
+      function openReactPicker(btn, m) { pickedWith = m; }
+      function toggleReaction(m, name) { toggledWith = [m.id, name]; }
+    """
+    got = _js(("wireReactBtn",), """
+      const btn = document.createElement("button");
+      const m = {id: 3};
+      wireReactBtn(btn, m);
+      // A quick tap: pointerdown then pointerup well before the long-press delay.
+      btn.on.pointerdown();
+      btn.on.pointerup();
+      btn.on.click();
+      out.tap = [toggledWith, pickedWith];
+      toggledWith = null;
+      // A long press: pointerdown, the delayed callback fires (simulated —
+      // nothing here advances real time), then the eventual click is a no-op.
+      btn.on.pointerdown();
+      const [, fire] = timers[timers.length - 1];
+      fire();
+      btn.on.click();
+      out.hold = [toggledWith, pickedWith];
+    """, prelude=prelude)
+    assert got["tap"] == [[3, "👍"], None]
+    assert got["hold"] == [None, {"id": 3}]
+
+
+# -- ops#249 batch 1: the typing / "working on it" indicator
+
+
+def test_typing_indicator_shows_only_for_the_open_room_and_clears_on_stop():
+    prelude = """
+      const els = {};
+      const $ = (id) => els[id] || (els[id] = {textContent: ""});
+      const S = {open: {stream_id: 1, topic: "t"}, typing: new Map()};
+      const TYPING_TTL_MS = 15000;
+    """
+    got = _js(("typingKey", "onTyping", "renderTyping", "clearTyping"), """
+      onTyping({op: "start", status: "typing", stream_id: 1, topic: "t",
+               sender: {user_id: 5, full_name: "CTO"}});
+      out.oneTyper = $("typing").textContent;
+      onTyping({op: "start", status: "working", stream_id: 1, topic: "t",
+               sender: {user_id: 6, full_name: "COO"}});
+      out.twoTypers = $("typing").textContent;
+      // A different room's event never shows here.
+      onTyping({op: "start", status: "typing", stream_id: 2, topic: "other",
+               sender: {user_id: 7, full_name: "CMO"}});
+      out.unaffectedByOtherRoom = $("typing").textContent;
+      onTyping({op: "stop", status: "typing", stream_id: 1, topic: "t",
+               sender: {user_id: 5, full_name: "CTO"}});
+      out.afterOneStops = $("typing").textContent;
+      clearTyping(1, "t", 6);
+      out.afterClear = $("typing").textContent;
+    """, prelude=prelude)
+    assert got["oneTyper"] == "CTO מקליד/ה…"
+    assert got["twoTypers"] == "CTO מקליד/ה… · COO עובד/ת על זה…"
+    assert got["unaffectedByOtherRoom"] == got["twoTypers"]
+    assert got["afterOneStops"] == "COO עובד/ת על זה…"
+    assert got["afterClear"] == ""
+
+
+def test_typing_indicator_is_blank_with_no_room_open():
+    got = _js(("renderTyping",), """
+      renderTyping();
+      out.text = $("typing").textContent;
+    """, prelude="""
+      const els = {};
+      const $ = (id) => els[id] || (els[id] = {textContent: ""});
+      const S = {open: null, typing: new Map()};
+    """)
+    assert got["text"] == ""
+
+
+# -- ops#249 batch 1: "tap the quote to jump to it"
+
+
+def test_jump_to_quote_scrolls_when_loaded_fetches_when_not_and_toasts_when_missing():
+    # `apiImpl` is mutated from the test body; `api` (what jumpToQuote
+    # actually calls) stays a single top-level function so jumpToQuote's
+    # closure resolves it — a stub redeclared inside the async IIFE below
+    # would be invisible to a function defined outside it.
+    prelude = FAKE_DOM + """
+      El.prototype.scrollIntoView = function () { this.scrolled = true; };
+      const S = {open: {stream_id: 1, stream: "feature", topic: "t"}, shown: new Set()};
+      function addMessages(list) { for (const m of list) S.shown.add(m.id); }
+      const calls = [];
+      let apiImpl = async () => ({});
+      async function api(method, path) { calls.push([method, path]); return apiImpl(); }
+    """
+    got = _js(("jumpToQuote",), """
+      const found = document.createElement("div");
+      found.dataset.id = "5";
+      $("messages").querySelector = (sel) => (sel === '[data-id="5"]' ? found : null);
+      await jumpToQuote(5);
+      out.found = [found.scrolled, found.classList.contains("jump-flash"), calls.length];
+    """, prelude=prelude)
+    assert got["found"] == [True, True, 0]  # loaded already: never asks the server
+
+    # Not currently loaded: fetched from the server, then found by a second lookup.
+    fetched = _js(("jumpToQuote",), """
+      const node = document.createElement("div");
+      let lookups = 0;
+      $("messages").querySelector = () => { lookups += 1; return lookups > 1 ? node : null; };
+      apiImpl = async () => ({message: {id: 12, display_recipient: "feature", subject: "t"}});
+      await jumpToQuote(12);
+      out.scrolled = node.scrolled;
+      out.calls = calls;
+    """, prelude=prelude)
+    assert fetched["calls"] == [["GET", "messages/12"]]
+    assert fetched["scrolled"] is True
+
+    missing = _js(("jumpToQuote",), """
+      $("messages").querySelector = () => null;
+      apiImpl = async () => { throw new Error("gone"); };
+      await jumpToQuote(99);
+      out.toasted = toasts;
+    """, prelude=prelude)
+    assert missing["toasted"] == [["ההודעה המקורית לא נמצאה בנושא הזה.", True]]
 
 
 # -- issue #85: clickable links (URLs and repo#N refs)

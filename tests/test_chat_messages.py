@@ -137,6 +137,79 @@ def test_react(env):
     assert status == 400 and body["code"] == "REACTION_ALREADY_EXISTS"
 
 
+def test_unreact_removes_only_the_callers_own_reaction(env):
+    """ops#249 batch 1: a reaction is a per-user toggle, not a message-wide
+    flag — removing it never touches anyone else's."""
+    cto, coo = env["cto"], env["coo"]
+    env["store"].subscribe(env["coo_user"]["id"], env["feature"])
+    _, sent = cto("POST", "messages", type="stream", to="feature", topic="t", content="ok?")
+    mid = sent["id"]
+    cto("POST", f"messages/{mid}/reactions", emoji_name="thumbs_up")
+    coo("POST", f"messages/{mid}/reactions", emoji_name="thumbs_up")
+    status, body = cto("DELETE", f"messages/{mid}/reactions", emoji_name="thumbs_up")
+    assert status == 200 and body["result"] == "success", body
+    _, got = cto("GET", "messages", anchor=mid, num_before=0, num_after=0)
+    [left] = got["messages"][0]["reactions"]
+    assert left["user"]["email"] == "coo-bot@chat.localhost"
+    # Removing a reaction that is not there is a 400, not a silent no-op
+    # (D3: the caller must be able to tell "removed" from "nothing happened").
+    status, body = cto("DELETE", f"messages/{mid}/reactions", emoji_name="thumbs_up")
+    assert status == 400 and body["code"] == "REACTION_DOES_NOT_EXIST"
+
+
+def test_get_message_by_id_for_an_agent_to_quote(env):
+    """ops#249 batch 1: GET /messages/{id} is the agent path behind
+    bot/zulip.py send --reply-to, and the page's "jump to the quoted
+    message" when it fell outside the loaded window."""
+    cto, coo = env["cto"], env["coo"]
+    env["store"].subscribe(env["coo_user"]["id"], env["feature"])
+    _, sent = cto("POST", "messages", type="stream", to="feature", topic="t",
+                  content="the original")
+    status, body = coo("GET", f"messages/{sent['id']}")
+    assert status == 200, body
+    assert body["message"]["content"] == "the original"
+    assert body["message"]["id"] == sent["id"]
+    # Same visibility rule as every other message read: not subscribed, not
+    # visible — not even by id.
+    outsider = Api(env["base"], "outsider-bot@chat.localhost", "whatever")
+    env["store"].create_user("outsider-bot@chat.localhost", "Outsider", is_bot=True,
+                             api_key="whatever")
+    status, body = outsider("GET", f"messages/{sent['id']}")
+    assert status == 400 and body["result"] == "error"
+
+
+def test_typing_start_shows_until_stop_or_timeout(env):
+    """ops#249 batch 1: a typing/working indicator per stream+topic ("room"),
+    pushed as an event and also readable directly (GET /typing) for a page
+    that opens the room after the "start" already happened."""
+    cto, coo = env["cto"], env["coo"]
+    env["store"].subscribe(env["coo_user"]["id"], env["feature"])
+    status, body = cto("POST", "typing", type="stream", to="feature", topic="t",
+                       op="start", status="working")
+    assert status == 200 and body["result"] == "success", body
+    status, got = coo("GET", "typing", stream="feature", topic="t")
+    assert status == 200
+    cto_id = env["store"].user_by_ref("cto-bot@chat.localhost")["id"]
+    assert got["typing"] == [{"user_id": cto_id, "full_name": "CTO", "status": "working"}]
+    # The typer themself is never listed as typing to themself.
+    status, got = cto("GET", "typing", stream="feature", topic="t")
+    assert got["typing"] == []
+    status, body = cto("POST", "typing", type="stream", to="feature", topic="t", op="stop")
+    assert status == 200
+    status, got = coo("GET", "typing", stream="feature", topic="t")
+    assert got["typing"] == []
+
+
+def test_typing_requires_a_visible_stream_and_a_topic(env):
+    cto, coo = env["cto"], env["coo"]
+    status, body = coo("POST", "typing", type="stream", to="feature", topic="t", op="start")
+    assert status == 400 and body["code"] == "STREAM_DOES_NOT_EXIST"
+    status, body = cto("POST", "typing", type="stream", to="feature", op="start")
+    assert status == 400 and body["code"] == "REQUEST_VARIABLE_MISSING"
+    status, body = cto("POST", "typing", type="stream", to="feature", topic="t", op="sideways")
+    assert status == 400
+
+
 def test_non_subscriber_refused_on_invite_only_stream(env):
     cto, coo = env["cto"], env["coo"]
     _, sent = cto("POST", "messages", type="stream", to="feature", topic="t", content="secret")
