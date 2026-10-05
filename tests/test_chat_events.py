@@ -203,6 +203,47 @@ def test_edits_and_reactions_are_events_too(run):
     assert [e["type"] for e in _poll(cto, only_messages)] == ["message"]
 
 
+def test_reaction_remove_is_an_event_too(run):
+    """ops#249 batch 1: DELETE reactions publishes op=remove, the same way
+    POST already publishes op=add — a live page can toggle its own chip
+    without waiting for a reload."""
+    cto = run.api(run.cto)
+    mid = _post(cto, "ok?")
+    cto("POST", f"messages/{mid}/reactions", emoji_name="thumbs_up", emoji_code="1f44d")
+    qid = _register(cto)
+    cto("DELETE", f"messages/{mid}/reactions", emoji_name="thumbs_up", emoji_code="1f44d")
+    [ev] = _poll(cto, qid)
+    assert (ev["type"], ev["op"], ev["message_id"], ev["emoji_name"]) == \
+        ("reaction", "remove", mid, "thumbs_up")
+
+
+def test_typing_events_reach_every_subscriber_but_not_a_stranger(run):
+    """ops#249 batch 1: a 'typing' event rides the same queue, filtered the
+    same way as every other event type — only a subscriber of the stream
+    sees it, and only a queue that asked for it."""
+    cto, coo = run.api(run.cto), run.api(run.coo)
+    run.store.subscribe(run.coo["id"], run.feature)
+    qid = coo("POST", "register", event_types=["typing"])[1]["queue_id"]
+    only_messages = coo("POST", "register", event_types=["message"])[1]["queue_id"]
+    status, body = cto("POST", "typing", type="stream", to="feature", topic="t",
+                       op="start", status="working")
+    assert status == 200, body
+    [ev] = _poll(coo, qid)
+    assert (ev["type"], ev["op"], ev["status"], ev["topic"]) == \
+        ("typing", "start", "working", "t")
+    assert ev["sender"]["email"] == "cto-bot@chat.localhost"
+    assert _poll(coo, only_messages) == []  # did not ask for "typing"
+    cto("POST", "typing", type="stream", to="feature", topic="t", op="stop")
+    [stop_ev] = _poll(coo, qid, last=ev["id"])
+    assert stop_ev["op"] == "stop"
+    # A stranger (not subscribed to #feature) never sees it, same as a message.
+    pm_bot = run.store.create_user("pm-bot@chat.localhost", "PM", is_bot=True)
+    pm = run.api(pm_bot)
+    stray_qid = pm("POST", "register", event_types=["typing"])[1]["queue_id"]
+    cto("POST", "typing", type="stream", to="feature", topic="t", op="start")
+    assert _poll(pm, stray_qid) == []
+
+
 def test_register_narrow_filters_messages(run):
     cto = run.api(run.cto)
     run.store.subscribe(run.cto["id"], run.store.create_stream("cto"))

@@ -55,6 +55,7 @@ import shlex
 import socket
 import sqlite3
 import string
+import struct
 import subprocess
 import sys
 import threading
@@ -62,6 +63,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import zlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 HOST = "127.0.0.1"
@@ -99,6 +101,9 @@ PAIR_RATE_LIMIT = 10  # ops#236: failed /pair/redeem attempts per PAIR_RATE_WIND
 PAIR_RATE_WINDOW = 60.0
 NO_ALLOW_HOST = ("no --allow-host configured: set AGORA_ALLOW_HOST and run "
                  "tailscale serve --bg 8095")
+# ops#249 batch 1: a "start" with no renewal and no "stop" clears itself out
+# after this long — no sweep thread, a reader just ignores a stale row.
+TYPING_TTL = 15.0
 
 
 def default_dashboard_cmd() -> str:
@@ -164,6 +169,10 @@ CREATE TABLE IF NOT EXISTS read_floor (
     PRIMARY KEY (user_id, stream_id));
 CREATE TABLE IF NOT EXISTS pairs (
     user_id INTEGER PRIMARY KEY, code_hash TEXT NOT NULL, created INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS typing (
+    stream_id INTEGER NOT NULL, topic TEXT COLLATE NOCASE NOT NULL,
+    user_id INTEGER NOT NULL, started INTEGER NOT NULL, status TEXT NOT NULL DEFAULT 'typing',
+    PRIMARY KEY (stream_id, topic, user_id));
 """
 
 
@@ -1095,6 +1104,98 @@ class Chat:
                 "emoji_name": name, "emoji_code": code, "reaction_type": rtype})
         return {}
 
+    # DELETE /messages/{id}/reactions (ops#249 batch 1): removes the
+    # caller's own reaction, keyed the same way POST adds one — never by
+    # "any reaction on this message", only the caller's.
+    def unreact(self, me: dict, mid: int, p: dict) -> dict:
+        row = self._visible_message(me, mid)
+        name = p.get("emoji_name")
+        if not name:
+            raise ApiError("Missing 'emoji_name' argument", "REQUEST_VARIABLE_MISSING")
+        code, rtype = p.get("emoji_code") or name, p.get("reaction_type") or "unicode_emoji"
+        with self.s.tx():
+            gone = self.s.db.execute(
+                "DELETE FROM reactions WHERE message_id=? AND user_id=? AND emoji_code=? "
+                "AND reaction_type=?", (mid, me["id"], code, rtype)).rowcount
+            if not gone:
+                raise ApiError("Reaction does not exist.", "REACTION_DOES_NOT_EXIST")
+            self._publish("reaction", row, lambda user: {
+                "type": "reaction", "op": "remove", "message_id": mid, "user_id": me["id"],
+                "user": {"user_id": me["id"], "email": me["email"],
+                         "full_name": me["full_name"]},
+                "emoji_name": name, "emoji_code": code, "reaction_type": rtype})
+        return {}
+
+    # GET /messages/{id} (ops#249 batch 1): one message by id, for an agent
+    # quoting it (``bot/zulip.py send --reply-to``) and for the page's "tap
+    # the quote to jump to it" when the original fell outside the window a
+    # topic loads.
+    def get_message(self, me: dict, mid: int) -> dict:
+        return {"message": self.message_json(self._visible_message(me, mid), me)}
+
+    # -- typing / working indicators (ops#249 batch 1), per stream+topic.
+    # Best-effort and self-expiring rather than swept by a thread: a reader
+    # ignores a ``started`` older than TYPING_TTL, so a sender that crashed
+    # or lost its network without ever sending "stop" still clears itself
+    # out within that many seconds, with nothing else watching for it.
+
+    # POST /typing
+    def set_typing(self, me: dict, p: dict) -> dict:
+        kind = p.get("type", "stream")
+        if kind not in ("stream", "channel"):
+            raise ApiError(f"Invalid 'type' {kind!r}: only stream typing is served")
+        to = p.get("to")
+        if to is None:
+            raise ApiError("Missing 'to' argument: the stream", "REQUEST_VARIABLE_MISSING")
+        topic = p.get("topic")
+        if not topic or not str(topic).strip():
+            raise ApiError("Missing 'topic' argument", "REQUEST_VARIABLE_MISSING")
+        op = p.get("op", "start")
+        if op not in ("start", "stop"):
+            raise ApiError(f"Invalid 'op' {op!r}: use 'start' or 'stop'")
+        status = p.get("status", "typing")
+        if status not in ("typing", "working"):
+            raise ApiError(f"Invalid 'status' {status!r}: use 'typing' or 'working'")
+        refs = _json_list(to)
+        if len(refs) != 1:
+            raise ApiError("'to' must name exactly one stream")
+        stream = self.s.visible_stream(me, refs[0])
+        now = int(time.time())
+        with self.s.tx():
+            if op == "start":
+                self.s.x("INSERT OR REPLACE INTO typing (stream_id, topic, user_id, started, "
+                         "status) VALUES (?,?,?,?,?)",
+                         (stream["stream_id"], topic, me["id"], now, status))
+            else:
+                self.s.x("DELETE FROM typing WHERE stream_id=? AND topic=? AND user_id=?",
+                         (stream["stream_id"], topic, me["id"]))
+            # Housekeeping, not correctness: a row a reader would already
+            # ignore (older than the TTL) is dropped so the table does not
+            # grow from starts that were never followed by a stop.
+            self.s.x("DELETE FROM typing WHERE started < ?", (now - int(TYPING_TTL) - 60,))
+            self._publish("typing", {"type": "stream", "stream_id": stream["stream_id"]},
+                          lambda user: {"type": "typing", "op": op, "status": status,
+                                       "stream_id": stream["stream_id"], "topic": topic,
+                                       "sender": {"user_id": me["id"], "email": me["email"],
+                                                 "full_name": me["full_name"]}})
+        return {}
+
+    # GET /typing: who is typing right now in a stream+topic — for a page
+    # that just opened it, where a "start" sent before its queue existed
+    # would otherwise never be seen.
+    def typing_now(self, me: dict, p: dict) -> dict:
+        stream = self.s.visible_stream(me, p.get("stream") or p.get("to") or "")
+        topic = p.get("topic")
+        if not topic or not str(topic).strip():
+            raise ApiError("Missing 'topic' argument", "REQUEST_VARIABLE_MISSING")
+        floor = int(time.time()) - TYPING_TTL
+        rows = self.s.q("SELECT * FROM typing WHERE stream_id=? AND topic=? COLLATE NOCASE "
+                        "AND started >= ? AND user_id != ?",
+                        (stream["stream_id"], topic, floor, me["id"]))
+        return {"typing": [{"user_id": r["user_id"],
+                            "full_name": self.s.user(r["user_id"])["full_name"],
+                            "status": r["status"]} for r in rows]}
+
     # -- streams, subscriptions, bots: what bot/setup_streams.py calls
 
     @staticmethod
@@ -1372,8 +1473,16 @@ class Chat:
             return self.fetch(me, p)
         if m and not m.group(2) and method == "PATCH":
             return self.edit(me, int(m.group(1)), p)
+        if m and not m.group(2) and method == "GET":
+            return self.get_message(me, int(m.group(1)))
         if m and m.group(2) and method == "POST":
             return self.react(me, int(m.group(1)), p)
+        if m and m.group(2) and method == "DELETE":
+            return self.unreact(me, int(m.group(1)), p)
+        if path == "typing" and method == "POST":
+            return self.set_typing(me, p)
+        if path == "typing" and method == "GET":
+            return self.typing_now(me, p)
         if path == "register" and method == "POST":
             return self.register(me, p)
         if path == "events" and method == "GET":
@@ -1435,6 +1544,59 @@ class Chat:
                        "BAD_REQUEST", 404)
 
 
+# -- PWA install + phone notifications (ops#249 batch 1): a manifest, a
+# service worker and two icons, all generated here rather than checked in as
+# binary files — zlib and struct are both standard library (D2), so a flat
+# square icon needs no image library, and nothing here is a build step.
+
+ICON_RGB = (31, 111, 120)  # --accent, chat/page.html
+
+
+def _png_square(size: int, rgb: tuple[int, int, int]) -> bytes:
+    """One flat-colour PNG, ``size``x``size``, 8-bit truecolor, no palette."""
+    def chunk(tag: bytes, data: bytes) -> bytes:
+        return struct.pack(">I", len(data)) + tag + data + \
+            struct.pack(">I", zlib.crc32(tag + data))
+    ihdr = struct.pack(">IIBBBBB", size, size, 8, 2, 0, 0, 0)
+    row = b"\x00" + bytes(rgb) * size  # filter byte 0 (none), then `size` RGB pixels
+    raw = zlib.compress(row * size, 9)
+    return b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", ihdr) + chunk(b"IDAT", raw) + chunk(b"IEND", b"")
+
+
+MANIFEST = json.dumps({
+    "name": "Agora Chat", "short_name": "Agora", "start_url": "/", "scope": "/",
+    "display": "standalone", "background_color": "#eef1ed", "theme_color": "#1f6f78",
+    "icons": [
+        {"src": "/icon-192.png", "sizes": "192x192", "type": "image/png",
+         "purpose": "any maskable"},
+        {"src": "/icon-512.png", "sizes": "512x512", "type": "image/png",
+         "purpose": "any maskable"}],
+}).encode("utf-8")
+
+# No offline cache: this is a live chat, not an offline-first app. The one
+# job this buys is showNotification() — several phone browsers refuse the
+# plain `new Notification()` constructor outside a service worker.
+SW_JS = b"""\
+self.addEventListener("install", () => self.skipWaiting());
+self.addEventListener("activate", (event) => event.waitUntil(self.clients.claim()));
+self.addEventListener("fetch", () => {});
+self.addEventListener("notificationclick", (event) => {
+  event.notification.close();
+  event.waitUntil(self.clients.matchAll({type: "window"}).then((list) => {
+    for (const c of list) if ("focus" in c) return c.focus();
+    if (self.clients.openWindow) return self.clients.openWindow("/");
+  }));
+});
+"""
+
+STATIC_ASSETS = {
+    "/manifest.json": (MANIFEST, "application/manifest+json"),
+    "/sw.js": (SW_JS, "text/javascript; charset=utf-8"),
+    "/icon-192.png": (_png_square(192, ICON_RGB), "image/png"),
+    "/icon-512.png": (_png_square(512, ICON_RGB), "image/png"),
+}
+
+
 def load_page(path: str = PAGE) -> tuple[bytes, str]:
     """The page and its Content-Security-Policy.
 
@@ -1451,7 +1613,7 @@ def load_page(path: str = PAGE) -> tuple[bytes, str]:
         return " ".join("'sha256-" + base64.b64encode(hashlib.sha256(
             block.encode("utf-8")).digest()).decode("ascii") + "'" for block in found) or "'none'"
     csp = (f"default-src 'self'; script-src {hashes('script')}; style-src {hashes('style')}; "
-           f"base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
+           f"worker-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
     return html.encode("utf-8"), csp
 
 
@@ -1513,17 +1675,26 @@ class Handler(BaseHTTPRequestHandler):
                            f"answers only its own page, http://127.0.0.1:"
                            f"{self.server.server_address[1]}/", "FORBIDDEN", 403)
 
-    def _serve_page(self) -> None:
-        # The Host check keeps a DNS-rebound name (evil.example resolving to
-        # 127.0.0.1) from loading the page as its own origin.
+    def _check_host(self) -> None:
+        # Keeps a DNS-rebound name (evil.example resolving to 127.0.0.1)
+        # from loading this page, or its static assets, as its own origin.
         host = (self.headers.get("Host") or "").lower()
         if host not in self._local():
             raise ApiError(f"Forbidden: Host {host!r}. Open http://127.0.0.1:"
                            f"{self.server.server_address[1]}/ instead", "FORBIDDEN", 403)
+
+    def _serve_page(self) -> None:
+        self._check_host()
         data, csp = load_page()
         self._send(200, data, "text/html; charset=utf-8", Content_Security_Policy=csp,
                    X_Content_Type_Options="nosniff", Cache_Control="no-store",
                    Referrer_Policy="no-referrer")
+
+    def _serve_static(self, path: str) -> None:
+        self._check_host()
+        data, content_type = STATIC_ASSETS[path]
+        self._send(200, data, content_type, Cache_Control="no-cache",
+                   X_Content_Type_Options="nosniff")
 
     def _body_length(self) -> int:
         raw = self.headers.get("Content-Length") or "0"
@@ -1549,6 +1720,9 @@ class Handler(BaseHTTPRequestHandler):
             self._check_origin()
             if url.path == "/" and method == "GET":
                 self._serve_page()  # static, no auth: it holds no data
+                return
+            if method == "GET" and url.path in STATIC_ASSETS:
+                self._serve_static(url.path)  # static, no auth: ops#249's PWA shell
                 return
             if not url.path.startswith("/api/v1/"):
                 raise ApiError(f"Endpoint not found: {url.path} (the API is under /api/v1/)",

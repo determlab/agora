@@ -4,6 +4,13 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>agora · צ'אט</title>
+<link rel="manifest" href="/manifest.json">
+<link rel="apple-touch-icon" href="/icon-192.png">
+<meta name="theme-color" content="#1f6f78">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="agora">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <style>
 :root {
   color-scheme: light;
@@ -161,6 +168,23 @@ button.archived-name:hover { color: var(--text); }
 .quote-text { white-space: pre-wrap; overflow-wrap: anywhere; }
 .quote-btn { flex: none; font-size: 12px; opacity: 0; transition: opacity .15s; }
 .msg:hover .quote-btn, .quote-btn:focus { opacity: 1; }
+.quote.jumpable { cursor: pointer; }
+.msg.jump-flash .bubble { outline: 2px solid var(--accent); outline-offset: 2px; }
+/* Reactions: always visible (not hover-only), so a tap works on the phone
+   the founder actually reads this on, with no hover state to discover. */
+.react-btn { flex: none; font-size: 14px; }
+.reactions { display: flex; flex-wrap: wrap; gap: .25rem; margin: .2rem .25rem 0; }
+.msg.mine .reactions { justify-content: flex-end; }
+.reaction-chip { display: inline-flex; align-items: center; gap: .25rem; border: 1px solid var(--line);
+  background: var(--bubble); border-radius: 999px; padding: 0 .45rem; font-size: 12px; line-height: 1.5rem; }
+.reaction-chip.mine { border-color: var(--accent); background: var(--accent-soft); }
+.react-picker { position: fixed; z-index: 20; display: flex; gap: .15rem; background: var(--panel);
+  border: 1px solid var(--line); border-radius: 999px; padding: .25rem .35rem;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, .25); }
+.react-picker button { border: 0; background: none; font-size: 18px; line-height: 1; padding: .15rem .3rem;
+  border-radius: 6px; }
+.react-picker button:hover, .react-picker button:focus { background: var(--accent-soft); }
+#typing { padding: 0 1rem; font-size: 12px; color: var(--muted); min-height: 1.2rem; }
 #new-pill { position: absolute; left: 50%; transform: translateX(-50%); bottom: 10rem;
   border: 0; border-radius: 999px; padding: .3rem .9rem; background: var(--accent);
   color: var(--accent-text); box-shadow: 0 2px 6px rgba(0, 0, 0, .25); }
@@ -462,10 +486,13 @@ a.ref:hover { text-decoration: underline; }
       <span id="topic-title" dir="auto">בחרו נושא</span>
       <span id="live" class="down" role="status"><span class="dot" aria-hidden="true"></span><span id="live-text">לא מחובר</span></span>
       <button type="button" id="members-btn" class="btn" disabled>חברים</button>
+      <button type="button" id="notify-btn" class="icon" title="הפעלו התראות בטלפון"
+              aria-label="התראות" aria-pressed="false">&#128276;</button>
       <button type="button" id="theme-btn" class="icon" title="כהה / בהיר" aria-label="כהה / בהיר">&#9681;</button>
     </div>
     <div id="messages"></div>
     <button type="button" id="new-pill" hidden>הודעות חדשות &#8595;</button>
+    <div id="typing" dir="auto" aria-live="polite"></div>
     <div id="write">
       <div id="mentions">
         <span id="mention-label">הזכר:</span>
@@ -580,7 +607,10 @@ a.ref:hover { text-decoration: underline; }
           <div class="body" dir="auto"></div>
         </div>
         <button type="button" class="icon quote-btn">ציטוט</button>
+        <button type="button" class="icon react-btn" title="הוסיפו ריאקציה (לחיצה ארוכה לבחירה)"
+                aria-label="הוסיפו ריאקציה">&#128077;+</button>
       </div>
+      <div class="reactions"></div>
     </div>
   </div>
 </template>
@@ -986,14 +1016,20 @@ function textDir(text) {
 
 // Zulip's quote: "@_**Name** said:" (or "[said](link):"), a ```quote fence,
 // then the reply. Anything else is not a quote and renders as plain text.
+// The "[said](#near/ID)" link is this page's own convention (ops#249 batch
+// 1), not Zulip's real narrow URL: there is no narrow router here, only a
+// machine-parseable marker so "tap the quote to jump to it" has an id to
+// jump to. A quote sent before this existed simply has no id, and is not a
+// jump target — not an error.
 function parseQuote(text) {
-  const m = /^@_\*\*([^*|]+)(?:\|\d+)?\*\*[^\n]*:\n```quote\n([\s\S]*?)\n```(?:\n|$)([\s\S]*)$/.exec(String(text));
-  return m ? {sender: m[1], quote: m[2], rest: m[3]} : null;
+  const m = /^@_\*\*([^*|]+)(?:\|\d+)?\*\*(?: \[said\]\(#near\/(\d+)\))?[^\n]*:\n```quote\n([\s\S]*?)\n```(?:\n|$)([\s\S]*)$/
+    .exec(String(text));
+  return m ? {sender: m[1], id: m[2] ? Number(m[2]) : null, quote: m[3], rest: m[4]} : null;
 }
 
 // @_** (silent) so that quoting someone does not wake them.
-function quoteBlock(name, text) {
-  return "@_**" + name + "** said:\n```quote\n" + text + "\n```\n";
+function quoteBlock(name, text, id) {
+  return "@_**" + name + "**" + (id ? " [said](#near/" + id + ")" : "") + ":\n```quote\n" + text + "\n```\n";
 }
 
 // One colour per role, from what the page knows about a user: a role bot by
@@ -1252,7 +1288,8 @@ async function start() {
 // Register first, then load: a message sent in between arrives as an event
 // and the id set keeps it from showing twice.
 async function connect(gen) {
-  const reg = await api("POST", "register", {event_types: ["message", "dashboard"]});
+  const reg = await api("POST", "register",
+    {event_types: ["message", "dashboard", "reaction", "typing"]});
   if (gen !== S.gen) return;
   S.queue = reg.queue_id;
   S.lastEvent = reg.last_event_id;
@@ -1361,6 +1398,8 @@ async function poll(gen) {
     for (const ev of got.events) {
       S.lastEvent = Math.max(S.lastEvent, ev.id);
       if (ev.type === "message") onMessage(ev.message);
+      else if (ev.type === "reaction") onReaction(ev);
+      else if (ev.type === "typing") onTyping(ev);
       // Not awaited: a dashboard refresh must never hold up the message poll
       // loop, and loadDashboard() only ever replaces S.dashboard wholesale.
       else if (ev.type === "dashboard") loadDashboard();
@@ -2221,12 +2260,89 @@ function onMessage(m) {
       && S.open.topic.toLowerCase() === m.subject.toLowerCase();
   if (!mine) {
     if (isOpen) markTopicRead(m.stream_id, m.subject); else bumpUnread(m.stream_id, m.subject);
+    clearTyping(m.stream_id, m.subject, m.sender_id);  // a sent message ends any "typing" for its sender
   }
   renderStreams();
   updateTitle();
   if (isOpen) {
     addMessages([m], false);
   }
+  notifyMessage(m, isOpen);
+}
+
+// -- typing / working indicators (ops#249 batch 1), per stream+topic ("room").
+// S.typing: "streamId:topic-lower" -> Map(userId -> {name, status, until}).
+// `until` is set client-side from when the event (or the GET /typing seed)
+// arrived, not read from the server: the server's own TTL already decides
+// whether a row is live, so the client only needs to know when to stop
+// trusting an event it already has, without a second round trip.
+const TYPING_TTL_MS = 15000;
+S.typing = new Map();
+
+function typingKey(streamId, topic) { return streamId + ":" + topic.toLowerCase(); }
+
+function renderTyping() {
+  const box = $("typing");
+  if (!S.open) { box.textContent = ""; return; }
+  const entry = S.typing.get(typingKey(S.open.stream_id, S.open.topic));
+  if (!entry || entry.size === 0) { box.textContent = ""; return; }
+  const parts = [...entry.values()].map((t) =>
+    t.name + " " + (t.status === "working" ? "עובד/ת על זה…" : "מקליד/ה…"));
+  box.textContent = parts.join(" · ");
+}
+
+function onTyping(ev) {
+  const key = typingKey(ev.stream_id, ev.topic);
+  let entry = S.typing.get(key);
+  if (ev.op === "start") {
+    if (!entry) { entry = new Map(); S.typing.set(key, entry); }
+    entry.set(ev.sender.user_id, {name: ev.sender.full_name, status: ev.status,
+                                  until: Date.now() + TYPING_TTL_MS});
+  } else if (entry) {
+    entry.delete(ev.sender.user_id);
+  }
+  renderTyping();
+}
+
+function clearTyping(streamId, topic, userId) {
+  const entry = S.typing.get(typingKey(streamId, topic));
+  if (entry && entry.delete(userId)) renderTyping();
+}
+
+// A sweep rather than a timer per entry: simple, and a client-side miss here
+// only ever means a stale indicator lingers a few seconds longer, never a
+// wrong one appearing — the server's own TTL is what actually governs it.
+setInterval(() => {
+  const now = Date.now();
+  let changed = false;
+  for (const entry of S.typing.values()) {
+    for (const [uid, t] of entry) if (t.until < now) { entry.delete(uid); changed = true; }
+  }
+  if (changed) renderTyping();
+}, 3000);
+
+async function seedTyping(streamId, topic) {
+  try {
+    const got = await api("GET", "typing", {stream: streamId, topic});
+    const entry = new Map();
+    for (const t of got.typing) {
+      entry.set(t.user_id, {name: t.full_name, status: t.status, until: Date.now() + TYPING_TTL_MS});
+    }
+    S.typing.set(typingKey(streamId, topic), entry);
+    renderTyping();
+  } catch (e) { /* best-effort: an empty indicator is never wrong, only late */ }
+}
+
+let lastTypingSent = 0;
+
+// Best-effort, like every typing call: a failed POST here must never block
+// or error out composing a message.
+async function sendTyping(op, status) {
+  if (!S.open) return;
+  try {
+    await api("POST", "typing", {type: "stream", to: S.open.stream_id, topic: S.open.topic,
+                                 op, status: status || "typing"});
+  } catch (e) { /* best-effort */ }
 }
 
 function renderStreams() {
@@ -2364,6 +2480,9 @@ function newTopicItem(s) {
 }
 
 function closeTopic() {
+  clearTimeout(typingIdle);
+  lastTypingSent = 0;  // same state the idle-stop resets (ops#249 review)
+  sendTyping("stop");
   S.open = null;
   S.msgs = [];
   S.shown = new Set();
@@ -2371,6 +2490,7 @@ function closeTopic() {
   $("topic-title").textContent = "בחרו נושא";
   $("members-btn").disabled = true;
   $("members-btn").textContent = membersLabel(null);
+  renderTyping();
 }
 
 async function refreshCount(streamId) {
@@ -2382,6 +2502,11 @@ async function refreshCount(streamId) {
 }
 
 async function openTopic(streamId, stream, topic) {
+  const prev = S.open;
+  if (prev && (prev.stream_id !== streamId || prev.topic !== topic)) {
+    api("POST", "typing", {type: "stream", to: prev.stream_id, topic: prev.topic, op: "stop"})
+      .catch(() => {});
+  }
   S.open = {stream_id: streamId, stream, topic};
   S.shown = new Set();
   S.msgs = [];
@@ -2395,6 +2520,7 @@ async function openTopic(streamId, stream, topic) {
   $("app").classList.remove("side-open");
   S.collapsed.delete(streamId);
   renderStreams();
+  seedTyping(streamId, topic);
   let got;
   try {
     got = await api("GET", "messages", {
@@ -2510,19 +2636,176 @@ function messageNode(m, when, first) {
   const q = parseQuote(m.content);
   const body = node.querySelector(".body");
   if (q) {
-    node.querySelector(".quote").hidden = false;
-    node.querySelector(".quote-sender").textContent = q.sender;
-    const qt = node.querySelector(".quote-text");
+    const quoteEl = node.querySelector(".quote");
+    quoteEl.hidden = false;
+    quoteEl.querySelector(".quote-sender").textContent = q.sender;
+    const qt = quoteEl.querySelector(".quote-text");
     qt.dir = textDir(q.quote);
     qt.textContent = q.quote;
+    if (q.id) {
+      quoteEl.classList.add("jumpable");
+      quoteEl.tabIndex = 0;
+      quoteEl.setAttribute("role", "button");
+      quoteEl.setAttribute("aria-label", "קפצו להודעה המקורית");
+      quoteEl.addEventListener("click", () => jumpToQuote(q.id));
+      quoteEl.addEventListener("keydown", (e) => {
+        if (e.key === "Enter" || e.key === " ") { e.preventDefault(); jumpToQuote(q.id); }
+      });
+    }
     fillBody(body, q.rest);
   } else {
     fillBody(body, m.content);
   }
   node.querySelector(".quote-btn").addEventListener("click", () => {
-    insertText(quoteBlock(m.sender_full_name, q ? q.rest : m.content));
+    insertText(quoteBlock(m.sender_full_name, q ? q.rest : m.content, m.id));
   });
+  wireReactBtn(node.querySelector(".react-btn"), m);
+  renderReactions(node, m);
   return node;
+}
+
+// The quote block's own id (parseQuote's "[said](#near/ID)") is not always
+// in the currently loaded window — a topic loads at most 1000 messages — so
+// a miss asks the server directly rather than reporting "not found" for
+// "not fetched yet" (D3's shape).
+async function jumpToQuote(id) {
+  let node = $("messages").querySelector('[data-id="' + id + '"]');
+  if (!node && S.open) {
+    try {
+      const got = await api("GET", "messages/" + id);
+      const msg = got.message;
+      if (S.open && msg.display_recipient === S.open.stream
+          && msg.subject.toLowerCase() === S.open.topic.toLowerCase()) {
+        addMessages([msg], false);
+        node = $("messages").querySelector('[data-id="' + id + '"]');
+      }
+    } catch (e) { /* falls through to the "not found" toast below */ }
+  }
+  if (!node) { toast("ההודעה המקורית לא נמצאה בנושא הזה.", true); return; }
+  node.scrollIntoView({block: "center", behavior: "smooth"});
+  node.classList.add("jump-flash");
+  setTimeout(() => node.classList.remove("jump-flash"), 1500);
+}
+
+// -- reactions (ops#249 batch 1): one tap adds "👍" (the "yes" replacement
+// the issue asks for); a long press opens a short picker for anything else.
+
+const REACTION_SET = ["👍", "❤️", "😂", "😮", "😢", "🙏", "✅", "🎉"];
+let reactPicker = null;
+
+function closeReactPicker() {
+  if (reactPicker) { reactPicker.remove(); reactPicker = null; }
+}
+
+function openReactPicker(btn, m) {
+  closeReactPicker();
+  const pop = document.createElement("div");
+  pop.className = "react-picker";
+  pop.setAttribute("role", "menu");
+  for (const emoji of REACTION_SET) {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.textContent = emoji;
+    b.addEventListener("click", () => { toggleReaction(m, emoji); closeReactPicker(); });
+    pop.append(b);
+  }
+  document.body.append(pop);
+  const r = btn.getBoundingClientRect();
+  const above = r.top - pop.offsetHeight - 6;
+  pop.style.top = Math.max(4, above) + "px";
+  pop.style.left = Math.min(Math.max(4, r.left), window.innerWidth - pop.offsetWidth - 4) + "px";
+  reactPicker = pop;
+}
+
+document.addEventListener("click", (e) => {
+  if (reactPicker && !reactPicker.contains(e.target) && !e.target.closest(".react-btn")) closeReactPicker();
+});
+
+// pointerdown/up rather than a plain click, so the same button can mean "one
+// tap: 👍" and "hold: pick another" without two different controls.
+function wireReactBtn(btn, m) {
+  let timer = 0, held = false;
+  const start = () => {
+    held = false;
+    timer = setTimeout(() => { held = true; openReactPicker(btn, m); }, 450);
+  };
+  const cancel = () => clearTimeout(timer);
+  btn.addEventListener("pointerdown", start);
+  btn.addEventListener("pointerup", cancel);
+  btn.addEventListener("pointerleave", cancel);
+  btn.addEventListener("click", () => { if (!held) toggleReaction(m, "👍"); });
+}
+
+async function toggleReaction(m, name) {
+  const mine = () => (m.reactions || []).find((r) => r.user_id === S.me.user_id && r.emoji_name === name);
+  const had = mine();
+  try {
+    if (had) {
+      await api("DELETE", "messages/" + m.id + "/reactions", {emoji_name: name});
+      // Re-checked after the await, never against `had`: the live event for
+      // this same removal may already have arrived and rebuilt the array
+      // while the request was in flight (the sender is a subscriber of its
+      // own stream, so it gets its own event back) — filtering by the stale
+      // reference would then be a silent no-op, not a bug, but re-deriving
+      // "mine" keeps this path symmetric with the add path below.
+      const now = mine();
+      if (now) m.reactions = m.reactions.filter((r) => r !== now);
+    } else {
+      await api("POST", "messages/" + m.id + "/reactions", {emoji_name: name});
+      // Same race the other way: onReaction() may have already added this
+      // exact reaction from the live event while the POST was in flight.
+      // Appending unconditionally here would double it.
+      if (!mine()) {
+        m.reactions = [...(m.reactions || []), {emoji_name: name, emoji_code: name,
+                       reaction_type: "unicode_emoji", user_id: S.me.user_id,
+                       user: {id: S.me.user_id, full_name: S.me.full_name}}];
+      }
+    }
+  } catch (e) { toast("לא עלה: " + e.message, true); return; }
+  const node = $("messages").querySelector('[data-id="' + m.id + '"]');
+  if (node) renderReactions(node, m);
+}
+
+// Live reaction events from other readers (ops#176's shape: patch the one
+// message this changed, never a full re-render of the open topic).
+function onReaction(ev) {
+  const m = S.msgs.find((x) => x.id === ev.message_id);
+  if (!m) return;
+  m.reactions = m.reactions || [];
+  const same = (r) => r.user_id === ev.user_id && r.emoji_code === ev.emoji_code
+      && r.reaction_type === ev.reaction_type;
+  if (ev.op === "add") {
+    if (!m.reactions.some(same)) {
+      m.reactions.push({emoji_name: ev.emoji_name, emoji_code: ev.emoji_code,
+                        reaction_type: ev.reaction_type, user_id: ev.user_id, user: ev.user});
+    }
+  } else {
+    m.reactions = m.reactions.filter((r) => !same(r));
+  }
+  const node = $("messages").querySelector('[data-id="' + m.id + '"]');
+  if (node) renderReactions(node, m);
+}
+
+function renderReactions(node, m) {
+  const box = node.querySelector(".reactions");
+  box.replaceChildren();
+  const groups = new Map();  // "code|type" -> {name, count, mine}
+  for (const r of m.reactions || []) {
+    const key = r.emoji_code + "|" + r.reaction_type;
+    let g = groups.get(key);
+    if (!g) { g = {name: r.emoji_name, count: 0, mine: false}; groups.set(key, g); }
+    g.count++;
+    if (S.me && r.user_id === S.me.user_id) g.mine = true;
+  }
+  for (const g of groups.values()) {
+    const chip = document.createElement("button");
+    chip.type = "button";
+    chip.className = "reaction-chip" + (g.mine ? " mine" : "");
+    chip.textContent = g.name + " " + g.count;
+    chip.title = g.mine ? "הסירו את הריאקציה שלכם" : "הוסיפו את הריאקציה הזו";
+    chip.addEventListener("click", () => toggleReaction(m, g.name));
+    box.append(chip);
+  }
 }
 
 $("messages").addEventListener("scroll", () => {
@@ -2578,6 +2861,8 @@ async function send() {
       type: "stream", to: S.open.stream_id, topic: S.open.topic, content: text});
     // Cleared, and reported sent, only once the server returned the new id.
     if (box.value === text) box.value = "";
+    lastTypingSent = 0;  // same state the idle-stop resets (ops#249 review)
+    sendTyping("stop");
     toast("נשלח · id " + sent.id);
   } catch (e) {
     // The text stays in the box; the server's own msg says why.
@@ -2665,7 +2950,29 @@ $("compose").addEventListener("keydown", (e) => {
     send();
   }
 });
-$("compose").addEventListener("input", () => { fitCompose(); updatePick(); });
+let typingIdle = 0;
+function onComposeInput() {
+  fitCompose();
+  updatePick();
+  clearTimeout(typingIdle);
+  if ($("compose").value.trim()) {
+    // Throttled to well inside the server's TTL, so one keystroke every few
+    // seconds while actually composing never lets the indicator lapse.
+    // `lastTypingSent` doubles as "do we believe the server still has us
+    // marked typing": every path that tells the server "stop" resets it to
+    // 0, so the very next keystroke sends a fresh "start" rather than
+    // trusting a throttle window a "stop" already invalidated.
+    const now = Date.now();
+    if (now - lastTypingSent > 8000) { lastTypingSent = now; sendTyping("start"); }
+    typingIdle = setTimeout(() => { lastTypingSent = 0; sendTyping("stop"); }, 4000);
+  } else if (lastTypingSent) {
+    // Only once per start: an empty box firing further input events (e.g.
+    // repeated backspace past empty) must not keep POSTing "stop".
+    lastTypingSent = 0;
+    sendTyping("stop");
+  }
+}
+$("compose").addEventListener("input", onComposeInput);
 $("compose").addEventListener("blur", closePick);
 $("send-btn").addEventListener("click", send);
 
@@ -2938,6 +3245,7 @@ $("members-btn").addEventListener("click", () => {
 });
 document.addEventListener("keydown", (e) => {
   if (e.key === "Escape" && !e.defaultPrevented && $("members-panel").classList.contains("open")) closeMembers();
+  if (e.key === "Escape") closeReactPicker();
 });
 
 // -- chrome: sidebar on a narrow screen, the dashboard switch, theme, keys
@@ -3005,6 +3313,69 @@ function toggleTheme() {
 }
 $("theme-btn").addEventListener("click", toggleTheme);
 $("dash-theme").addEventListener("click", toggleTheme);  // the board hides #top, so it has its own
+
+// -- PWA install + phone notifications (ops#249 batch 1)
+
+if ("serviceWorker" in navigator) {
+  // Best-effort: a browser that refuses this still gets the chat, only
+  // without a home-screen install and without showNotification().
+  navigator.serviceWorker.register("/sw.js").catch(() => {});
+}
+
+const NOTIFY_PREF = "agora-chat-notify";
+
+function notifyAllowed() {
+  return typeof Notification !== "undefined" && Notification.permission === "granted"
+      && localStorage.getItem(NOTIFY_PREF) !== "off";
+}
+
+function updateNotifyBtn() {
+  const btn = $("notify-btn");
+  const on = typeof Notification !== "undefined" && Notification.permission === "granted";
+  btn.setAttribute("aria-pressed", String(on));
+  btn.title = on ? "התראות פעילות בטלפון הזה" : "הפעלו התראות בטלפון";
+}
+
+async function requestNotify() {
+  if (typeof Notification === "undefined") { toast("הדפדפן הזה לא תומך בהתראות.", true); return; }
+  const perm = await Notification.requestPermission();
+  localStorage.setItem(NOTIFY_PREF, perm === "granted" ? "on" : "off");
+  toast(perm === "granted" ? "התראות הופעלו." : "התראות נדחו.", perm !== "granted");
+  updateNotifyBtn();
+}
+
+$("notify-btn").addEventListener("click", requestNotify);
+updateNotifyBtn();
+
+// A message that is not on screen right now (a background tab, or a
+// different room than the one open) gets a phone notification. One that
+// @-mentions this reader (flags "mentioned" — the founder tagged, same flag
+// the mention highlight in the bubble already uses) is stronger: it
+// vibrates in a longer pattern, needs a tap to dismiss (requireInteraction)
+// and is never silently coalesced with the next one (renotify) — a normal
+// message is none of those, so the two are not just two different texts.
+function notifyMessage(m, isOpen) {
+  if (!notifyAllowed()) return;
+  if (S.me && m.sender_id === S.me.user_id) return;
+  if (isOpen && document.hasFocus() && document.visibilityState === "visible") return;
+  const strong = (m.flags || []).includes("mentioned");
+  const title = (strong ? "@" : "") + m.sender_full_name + " · #" + m.display_recipient
+      + " › " + m.subject;
+  const body = String(m.content).slice(0, 180);
+  const options = {
+    body, tag: "agora-" + m.stream_id + "-" + m.subject.toLowerCase(),
+    renotify: strong, requireInteraction: strong,
+    vibrate: strong ? [200, 100, 200, 100, 200] : [80],
+    silent: !strong && document.visibilityState === "visible",
+  };
+  if (navigator.serviceWorker && navigator.serviceWorker.ready) {
+    navigator.serviceWorker.ready.then((reg) => reg.showNotification(title, options)).catch(() => {});
+  } else {
+    // No service worker (desktop browsers mostly still allow this directly;
+    // several phone browsers refuse it outright, hence the SW path above).
+    try { new Notification(title, options); } catch (e) { /* refused: no notification, not a crash */ }
+  }
+}
 
 $("key-form").addEventListener("submit", (e) => {
   e.preventDefault();

@@ -186,6 +186,58 @@ def test_the_csp_allows_the_pages_own_inline_script_by_hash_and_nothing_else(wor
     digest = base64.b64encode(hashlib.sha256(script.encode("utf-8")).digest()).decode()
     assert f"script-src 'sha256-{digest}'" in csp
     assert headers["X-Content-Type-Options"] == "nosniff"
+    # ops#249 batch 1: a service worker is registered from this page, so its
+    # script fetch needs its own allowance — worker-src, not script-src,
+    # governs it, and script-src's hash-only allowance would otherwise block it.
+    assert "worker-src 'self';" in csp
+
+
+# -- ops#249 batch 1: the PWA shell (manifest, service worker, icons) and
+# the phone-notification wiring that needs them.
+
+
+def test_the_pwa_shell_is_served_and_linked_from_the_page(world):
+    status, headers, raw = _request(world["run"], "GET", "/manifest.json")
+    assert status == 200 and headers["Content-Type"] == "application/manifest+json"
+    manifest = json.loads(raw)
+    assert manifest["name"] and manifest["display"] == "standalone"
+    icon_paths = {i["src"] for i in manifest["icons"]}
+    assert icon_paths == {"/icon-192.png", "/icon-512.png"}
+    for path in icon_paths:
+        status, headers, raw = _request(world["run"], "GET", path)
+        assert status == 200 and headers["Content-Type"] == "image/png"
+        assert raw[:8] == b"\x89PNG\r\n\x1a\n"
+    status, headers, raw = _request(world["run"], "GET", "/sw.js")
+    assert status == 200 and "javascript" in headers["Content-Type"]
+    assert b"showNotification" not in raw  # the SW relays clicks; the page shows notifications
+    assert b"self.addEventListener(\"notificationclick\"" in raw
+    text = PAGE.read_text(encoding="utf-8")
+    assert '<link rel="manifest" href="/manifest.json">' in text
+    assert 'navigator.serviceWorker.register("/sw.js")' in _markup().script
+
+
+def test_a_foreign_host_cannot_fetch_the_pwa_shell_either(world):
+    # Same Host-rebinding protection as the page itself (D4's spirit): a
+    # static asset still answers only this server's own two local names or
+    # an --allow-host name, never any other Host header.
+    run = world["run"]
+    port = run.server.server_address[1]
+    status, _, _ = _request(run, "GET", "/manifest.json", Host=f"evil.example:{port}")
+    assert status == 403
+    status, _, _ = _request(run, "GET", "/sw.js", Host=f"127.0.0.1:{port}")
+    assert status == 200
+
+
+def test_notification_wiring_is_stronger_for_a_mention_than_a_plain_message():
+    src = _function("notifyMessage")
+    assert "if (S.me && m.sender_id === S.me.user_id) return;" in src
+    # The split this issue asks for: "mentioned" (the founder tagged) is
+    # requireInteraction + renotify + a longer vibration; a plain message is
+    # none of those.
+    assert 'const strong = (m.flags || []).includes("mentioned");' in src
+    assert "requireInteraction: strong" in src and "renotify: strong" in src
+    assert "vibrate: strong ? [200, 100, 200, 100, 200] : [80]" in src
+    assert "notifyMessage(m, isOpen);" in _function("onMessage")
 
 
 def test_the_csp_hash_survives_a_crlf_checkout(tmp_path):
@@ -365,7 +417,13 @@ def test_every_id_the_script_reaches_for_is_in_the_markup():
 
 
 def test_every_api_call_the_page_makes_is_a_route_the_server_serves(world):
-    calls = set(re.findall(r'api\("(GET|POST|DELETE)", "([\w/]+)"', _markup().script))
+    # The negative lookahead drops a call built by string concatenation
+    # (e.g. "messages/" + m.id + "/reactions"): the literal before the "+"
+    # is only a prefix, and checking it against the server would either
+    # report a false 404 or, worse, pass by the accident of path.strip("/")
+    # turning "streams/" into "streams" — a coverage claim this static scan
+    # cannot actually back up either way (D3's shape, one layer up).
+    calls = set(re.findall(r'api\("(GET|POST|DELETE)", "([\w/]+)"(?!\s*\+)', _markup().script))
     assert {("POST", "register"), ("GET", "events"), ("POST", "messages")} <= calls
     for method, path in calls:
         status, body = page_api(world["run"], world["human"], method, path,
@@ -404,18 +462,23 @@ def test_the_quote_helper_splits_sender_quote_and_reply():
       out.given = parseQuote("@_**CTO** said:\\n```quote\\nhi\\n```\\nok");
       out.zulip = parseQuote("@_**CTO|7** [said](#narrow/near/3):\\n```quote\\nשלום\\nשני\\n```\\n");
       out.round = parseQuote(quoteBlock("COO", "a\\nb") + "reply");
+      out.withId = parseQuote(quoteBlock("COO", "a\\nb", 42) + "reply");
       out.plain = parseQuote("hi ```quote\\nx\\n```");
     """)
-    assert got["given"] == {"sender": "CTO", "quote": "hi", "rest": "ok"}
-    assert got["zulip"] == {"sender": "CTO", "quote": "שלום\nשני", "rest": ""}
-    assert got["round"] == {"sender": "COO", "quote": "a\nb", "rest": "reply"}
+    assert got["given"] == {"sender": "CTO", "id": None, "quote": "hi", "rest": "ok"}
+    # "#narrow/near/3" is Zulip's own real link, not this page's "#near/ID"
+    # marker (ops#249): it still parses as a quote, just with no jump id.
+    assert got["zulip"] == {"sender": "CTO", "id": None, "quote": "שלום\nשני", "rest": ""}
+    assert got["round"] == {"sender": "COO", "id": None, "quote": "a\nb", "rest": "reply"}
+    assert got["withId"] == {"sender": "COO", "id": 42, "quote": "a\nb", "rest": "reply"}
     assert got["plain"] is None
 
 
 def test_a_quote_does_not_wake_the_person_quoted(world):
     run, human = world["run"], world["human"]
     # What quoteBlock() writes: the silent @_** form, which is not a mention.
-    assert '"@_**" + name + "** said:\\n```quote\\n"' in _function("quoteBlock")
+    src = _function("quoteBlock")
+    assert '"@_**" + name + "**" + (id ? " [said](#near/" + id + ")" : "") + ":\\n```quote\\n"' in src
     text = "@_**CTO** said:\n```quote\nhi\n```\nok"
     status, body = page_api(run, human, "POST", "messages", type="stream",
                             to="feature", topic="quote", content=text)
@@ -1048,7 +1111,8 @@ def test_77_typing_at_opens_a_picker_that_inserts_the_mention():
     for k in ('"ArrowDown"', '"ArrowUp"', '"Enter" || e.key === "Tab"', '"Escape"'):
         assert k in keys, k
     assert '"@**" + name + "** "' in _function("choosePick")
-    assert 'updatePick(); });' in script
+    assert '$("compose").addEventListener("input", onComposeInput);' in script
+    assert "updatePick();" in _function("onComposeInput")
 
 
 def test_77_mention_buttons_have_a_label_and_compose_has_a_hint():
@@ -1144,6 +1208,8 @@ def test_77_a_toast_follows_each_action_and_says_success_only_when_the_server_di
         return {result: "success", id: 42};
       }
       function fitCompose() {}
+      function sendTyping() {}
+      let lastTypingSent = 0;
       const S = {sending: false, open: {stream_id: 1, topic: "t"}};
     """
     sent = _js(("sendError", "send"), """
@@ -1165,6 +1231,280 @@ def test_77_a_toast_follows_each_action_and_says_success_only_when_the_server_di
                  'report("members-status", privateReport(', 'report("create-status", createReport(',
                  'report("create-status", "לא נוצר: "', 'report("members-status", "לא נוסף: "'):
         assert call in script, call
+
+
+# -- ops#249 batch 1: one-tap emoji reactions
+
+
+def test_reaction_chips_group_by_emoji_and_mark_mine():
+    got = _js(("renderReactions",), """
+      const node = document.createElement("div");
+      const box = document.createElement("div");
+      box.className = "reactions";
+      node.append(box);
+      const m = {id: 5, reactions: [
+        {emoji_name: "👍", emoji_code: "👍", reaction_type: "unicode_emoji", user_id: 1},
+        {emoji_name: "👍", emoji_code: "👍", reaction_type: "unicode_emoji", user_id: 2},
+        {emoji_name: "🎉", emoji_code: "🎉", reaction_type: "unicode_emoji", user_id: 2}]};
+      renderReactions(node, m);
+      out.chips = box.children.map((c) => [c.className, c.textContent]);
+    """, prelude=FAKE_DOM + "const S = {me: {user_id: 1}};")
+    assert got["chips"] == [["reaction-chip mine", "👍 2"], ["reaction-chip", "🎉 1"]]
+
+
+def test_toggle_reaction_adds_then_removes_through_the_api():
+    prelude = API_STUB + FAKE_DOM + """
+      const S = {me: {user_id: 1, full_name: "Me"}};
+    """
+    got = _js(("toggleReaction", "renderReactions"), """
+      const node = document.createElement("div");
+      const box = document.createElement("div");
+      box.className = "reactions";
+      node.append(box);
+      $("messages").querySelector = () => node;  // stand in for the real lookup by data-id
+      const m = {id: 7, reactions: []};
+      await toggleReaction(m, "👍");
+      out.afterAdd = [calls[0], [...m.reactions].map((r) => r.emoji_name), box.textContent];
+      await toggleReaction(m, "👍");
+      out.afterRemove = [calls[1][0], calls[1][1], m.reactions.length, box.textContent];
+    """, prelude=prelude)
+    out_add = got["afterAdd"]
+    assert out_add[0] == ["POST", "messages/7/reactions", {"emoji_name": "👍"}]
+    assert out_add[1] == ["👍"] and "👍 1" in out_add[2]
+    assert got["afterRemove"][:3] == ["DELETE", "messages/7/reactions", 0]
+    assert got["afterRemove"][3] == ""
+
+
+def test_toggle_reaction_does_not_double_count_a_live_event_that_wins_the_race():
+    """The sender is a subscriber of its own stream, so the live "reaction"
+    event for a tap can reach onReaction() before this same tap's own POST
+    promise resolves (both are separate in-flight requests). An earlier
+    version of toggleReaction appended its optimistic entry unconditionally
+    after the await, double-counting a reaction the live event had already
+    added. Regression test for that race, not just the happy path above."""
+    prelude = FAKE_DOM + """
+      const S = {me: {user_id: 1, full_name: "Me"}};
+      // The POST "resolves" only after delivering the live event first —
+      // exactly the ordering that broke the naive implementation.
+      async function api(method, path, params) {
+        onReaction({type: "reaction", op: "add", message_id: 7, user_id: 1,
+                   emoji_name: params.emoji_name, emoji_code: params.emoji_name,
+                   reaction_type: "unicode_emoji", user: {full_name: "Me"}});
+        return {};
+      }
+    """
+    got = _js(("toggleReaction", "renderReactions", "onReaction"), """
+      const node = document.createElement("div");
+      const box = document.createElement("div");
+      box.className = "reactions";
+      node.append(box);
+      $("messages").querySelector = () => node;
+      const m = {id: 7, reactions: []};
+      S.msgs = [m];  // onReaction() looks the message up here, same reference
+      await toggleReaction(m, "👍");
+      out.reactions = m.reactions.length;
+      out.chip = box.textContent;
+    """, prelude=prelude)
+    assert got["reactions"] == 1
+    assert got["chip"] == "👍 1"
+
+
+def test_a_live_reaction_event_updates_the_open_message_in_place():
+    got = _js(("onReaction", "renderReactions"), """
+      const node = document.createElement("div");
+      const box = document.createElement("div");
+      box.className = "reactions";
+      node.append(box);
+      $("messages").querySelector = () => node;
+      S.msgs = [{id: 9, reactions: []}];
+      onReaction({type: "reaction", op: "add", message_id: 9, user_id: 2, emoji_name: "🙏",
+                 emoji_code: "🙏", reaction_type: "unicode_emoji", user: {full_name: "COO"}});
+      out.afterAdd = [S.msgs[0].reactions.length, box.textContent];
+      onReaction({type: "reaction", op: "remove", message_id: 9, user_id: 2, emoji_name: "🙏",
+                 emoji_code: "🙏", reaction_type: "unicode_emoji", user: {full_name: "COO"}});
+      out.afterRemove = [S.msgs[0].reactions.length, box.textContent];
+      // A message not in S.msgs (a different, unopened topic) is a no-op,
+      // not an error: the event is simply not for anything on screen.
+      onReaction({type: "reaction", op: "add", message_id: 404, user_id: 2, emoji_name: "🙏",
+                 emoji_code: "🙏", reaction_type: "unicode_emoji", user: {full_name: "COO"}});
+      out.noCrash = true;
+    """, prelude=FAKE_DOM + "const S = {me: {user_id: 1}};")
+    assert got["afterAdd"] == [1, "🙏 1"]
+    assert got["afterRemove"] == [0, ""]
+    assert got["noCrash"] is True
+
+
+def test_one_tap_reacts_a_long_press_opens_the_picker():
+    prelude = FAKE_DOM + """
+      const timers = [];
+      let nextId = 1;
+      function setTimeout(f, ms) { const id = nextId++; timers.push([id, f, ms]); return id; }
+      function clearTimeout(id) { const i = timers.findIndex((t) => t[0] === id); if (i >= 0) timers.splice(i, 1); }
+      let pickedWith = null, toggledWith = null;
+      function openReactPicker(btn, m) { pickedWith = m; }
+      function toggleReaction(m, name) { toggledWith = [m.id, name]; }
+    """
+    got = _js(("wireReactBtn",), """
+      const btn = document.createElement("button");
+      const m = {id: 3};
+      wireReactBtn(btn, m);
+      // A quick tap: pointerdown then pointerup well before the long-press delay.
+      btn.on.pointerdown();
+      btn.on.pointerup();
+      btn.on.click();
+      out.tap = [toggledWith, pickedWith];
+      toggledWith = null;
+      // A long press: pointerdown, the delayed callback fires (simulated —
+      // nothing here advances real time), then the eventual click is a no-op.
+      btn.on.pointerdown();
+      const [, fire] = timers[timers.length - 1];
+      fire();
+      btn.on.click();
+      out.hold = [toggledWith, pickedWith];
+    """, prelude=prelude)
+    assert got["tap"] == [[3, "👍"], None]
+    assert got["hold"] == [None, {"id": 3}]
+
+
+# -- ops#249 batch 1: the typing / "working on it" indicator
+
+
+def test_typing_indicator_shows_only_for_the_open_room_and_clears_on_stop():
+    prelude = """
+      const els = {};
+      const $ = (id) => els[id] || (els[id] = {textContent: ""});
+      const S = {open: {stream_id: 1, topic: "t"}, typing: new Map()};
+      const TYPING_TTL_MS = 15000;
+    """
+    got = _js(("typingKey", "onTyping", "renderTyping", "clearTyping"), """
+      onTyping({op: "start", status: "typing", stream_id: 1, topic: "t",
+               sender: {user_id: 5, full_name: "CTO"}});
+      out.oneTyper = $("typing").textContent;
+      onTyping({op: "start", status: "working", stream_id: 1, topic: "t",
+               sender: {user_id: 6, full_name: "COO"}});
+      out.twoTypers = $("typing").textContent;
+      // A different room's event never shows here.
+      onTyping({op: "start", status: "typing", stream_id: 2, topic: "other",
+               sender: {user_id: 7, full_name: "CMO"}});
+      out.unaffectedByOtherRoom = $("typing").textContent;
+      onTyping({op: "stop", status: "typing", stream_id: 1, topic: "t",
+               sender: {user_id: 5, full_name: "CTO"}});
+      out.afterOneStops = $("typing").textContent;
+      clearTyping(1, "t", 6);
+      out.afterClear = $("typing").textContent;
+    """, prelude=prelude)
+    assert got["oneTyper"] == "CTO מקליד/ה…"
+    assert got["twoTypers"] == "CTO מקליד/ה… · COO עובד/ת על זה…"
+    assert got["unaffectedByOtherRoom"] == got["twoTypers"]
+    assert got["afterOneStops"] == "COO עובד/ת על זה…"
+    assert got["afterClear"] == ""
+
+
+def test_typing_indicator_is_blank_with_no_room_open():
+    got = _js(("renderTyping",), """
+      renderTyping();
+      out.text = $("typing").textContent;
+    """, prelude="""
+      const els = {};
+      const $ = (id) => els[id] || (els[id] = {textContent: ""});
+      const S = {open: null, typing: new Map()};
+    """)
+    assert got["text"] == ""
+
+
+def test_typing_input_handler_restarts_after_an_idle_stop_and_stops_once():
+    """ops#249 batch 1, found in CTO review on the PR: (1) the idle "stop"
+    must reset lastTypingSent, or typing again within 8s of the original
+    "start" sends no new "start" and the indicator stays wrongly off;
+    (2) emptying the box must send "stop" only once, not on every
+    subsequent input event."""
+    prelude = """
+      const els = {compose: {value: ""}};
+      const $ = (id) => els[id] || (els[id] = {});
+      function fitCompose() {}
+      function updatePick() {}
+      const sent = [];
+      function sendTyping(op) { sent.push(op); }
+      let lastTypingSent = 0;
+      let typingIdle = 0;
+      const timers = [];
+      let nextId = 1;
+      function setTimeout(f, ms) { const id = nextId++; timers.push([id, f, ms]); return id; }
+      function clearTimeout(id) { const i = timers.findIndex((t) => t[0] === id); if (i >= 0) timers.splice(i, 1); }
+    """
+    got = _js(("onComposeInput",), """
+      $("compose").value = "hi";
+      onComposeInput();
+      out.afterFirstStart = [...sent];
+      // The idle timer fires (simulated: nothing here advances real time):
+      // sends "stop" and must reset lastTypingSent.
+      const [, fire] = timers[timers.length - 1];
+      fire();
+      out.lastTypingSentAfterIdle = lastTypingSent;
+      // Typing again, still well inside the original 8s throttle window:
+      // must send a fresh "start" now that the server was told "stop".
+      sent.length = 0;
+      onComposeInput();
+      out.afterResume = [...sent];
+      // Emptying the box: "stop" exactly once across repeated input events.
+      sent.length = 0;
+      $("compose").value = "";
+      onComposeInput();
+      onComposeInput();
+      onComposeInput();
+      out.afterEmpty = [...sent];
+    """, prelude=prelude)
+    assert got["afterFirstStart"] == ["start"]
+    assert got["lastTypingSentAfterIdle"] == 0
+    assert got["afterResume"] == ["start"]
+    assert got["afterEmpty"] == ["stop"]
+
+
+# -- ops#249 batch 1: "tap the quote to jump to it"
+
+
+def test_jump_to_quote_scrolls_when_loaded_fetches_when_not_and_toasts_when_missing():
+    # `apiImpl` is mutated from the test body; `api` (what jumpToQuote
+    # actually calls) stays a single top-level function so jumpToQuote's
+    # closure resolves it — a stub redeclared inside the async IIFE below
+    # would be invisible to a function defined outside it.
+    prelude = FAKE_DOM + """
+      El.prototype.scrollIntoView = function () { this.scrolled = true; };
+      const S = {open: {stream_id: 1, stream: "feature", topic: "t"}, shown: new Set()};
+      function addMessages(list) { for (const m of list) S.shown.add(m.id); }
+      const calls = [];
+      let apiImpl = async () => ({});
+      async function api(method, path) { calls.push([method, path]); return apiImpl(); }
+    """
+    got = _js(("jumpToQuote",), """
+      const found = document.createElement("div");
+      found.dataset.id = "5";
+      $("messages").querySelector = (sel) => (sel === '[data-id="5"]' ? found : null);
+      await jumpToQuote(5);
+      out.found = [found.scrolled, found.classList.contains("jump-flash"), calls.length];
+    """, prelude=prelude)
+    assert got["found"] == [True, True, 0]  # loaded already: never asks the server
+
+    # Not currently loaded: fetched from the server, then found by a second lookup.
+    fetched = _js(("jumpToQuote",), """
+      const node = document.createElement("div");
+      let lookups = 0;
+      $("messages").querySelector = () => { lookups += 1; return lookups > 1 ? node : null; };
+      apiImpl = async () => ({message: {id: 12, display_recipient: "feature", subject: "t"}});
+      await jumpToQuote(12);
+      out.scrolled = node.scrolled;
+      out.calls = calls;
+    """, prelude=prelude)
+    assert fetched["calls"] == [["GET", "messages/12"]]
+    assert fetched["scrolled"] is True
+
+    missing = _js(("jumpToQuote",), """
+      $("messages").querySelector = () => null;
+      apiImpl = async () => { throw new Error("gone"); };
+      await jumpToQuote(99);
+      out.toasted = toasts;
+    """, prelude=prelude)
+    assert missing["toasted"] == [["ההודעה המקורית לא נמצאה בנושא הזה.", True]]
 
 
 # -- issue #85: clickable links (URLs and repo#N refs)
@@ -1253,8 +1593,10 @@ def test_85_a_hebrew_message_with_a_link_renders_as_dom_nodes_and_keeps_rtl_orde
 def test_page_registers_for_dashboard_events():
     # Extended, not replaced: the same register call still asks for "message"
     # (issue #82 says "extend an existing tool/call", D1's shape one layer up).
+    # ops#249 batch 1 extends it the same way, for "reaction" and "typing".
     script = _markup().script
-    assert re.search(r'api\("POST", "register", \{event_types: \["message", "dashboard"\]\}\)', script)
+    assert re.search(r'api\("POST", "register",\s*'
+                     r'\{event_types: \["message", "dashboard", "reaction", "typing"\]\}\)', script)
 
 
 def test_page_has_the_panel_and_the_switch():
@@ -1869,14 +2211,16 @@ def test_168_a_live_message_bumps_the_bubble_unless_its_topic_is_open_or_the_mes
     prelude = API_STUB + """
       const S = {me: {user_id: 9}, open: {stream_id: 1, stream: "feature", topic: "open-topic"},
                  topics: new Map([["feature", new Map()]]), archivedTopics: new Map(),
-                 unread: new Map()};
+                 unread: new Map(), typing: new Map()};
       let rendered = 0, titled = 0;
       function renderStreams() { rendered += 1; }
       function updateTitle() { titled += 1; }
       function renderArchive() {}
       function addMessages(list, toEnd) {}
+      function renderTyping() {}
     """
-    got = _js(("onMessage", "markTopicRead", "bumpUnread"), """
+    got = _js(("onMessage", "markTopicRead", "bumpUnread", "typingKey", "clearTyping",
+              "notifyAllowed", "notifyMessage"), """
       const msg = (subject, id, sender) => ({type: "stream", stream_id: 1,
         display_recipient: "feature", subject, id, sender_id: sender});
       onMessage(msg("closed-topic", 1, 5));

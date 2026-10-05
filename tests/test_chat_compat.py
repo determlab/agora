@@ -182,6 +182,66 @@ def test_an_edit_and_a_reaction_through_zulip_client(world):
     assert m["content"] == "final" and m["reactions"][0]["emoji_name"] == "thumbs_up"
 
 
+def test_zulip_send_reply_to_quotes_the_original(world):
+    """ops#249 batch 1: the agent path for reply-to — ``send --reply-to``
+    fetches the original by id and prepends the same quote block the
+    page's own quote button inserts, id included (so a browser reading it
+    back can jump to it). #feature is the one stream both role bots share
+    (D13); CTO and COO are each in their own stream otherwise."""
+    orig = _ok(zulip(world, "--as", "COO", "send", "--stream", "feature", "--topic",
+                     "#249 reply", "--text", "what do you think?"), "zulip.py send (original)")
+    mid = int(orig.stdout.rsplit("id=", 1)[1])
+    reply = _ok(zulip(world, "--as", "CTO", "send", "--stream", "feature", "--topic",
+                      "#249 reply", "--text", "looks right to me", "--reply-to", str(mid)),
+               "zulip.py send --reply-to")
+    assert "sent #feature" in reply.stdout
+    read = _ok(zulip(world, "--as", "CTO", "read", "--stream", "feature", "--topic",
+                     "#249 reply", "--json"), "zulip.py read --json")
+    rows = [json.loads(line) for line in read.stdout.splitlines()]
+    quoted = rows[-1]["content"]
+    assert f"[said](#near/{mid})" in quoted
+    assert "what do you think?" in quoted and quoted.endswith("looks right to me")
+
+
+def test_zulip_react_and_unreact(world):
+    """ops#249 batch 1: the agent path for a one-tap emoji reaction."""
+    sent = _ok(zulip(world, "--as", "COO", "send", "--stream", "feature", "--topic",
+                     "#249 react", "--text", "ship it?"), "zulip.py send")
+    mid = int(sent.stdout.rsplit("id=", 1)[1])
+    added = _ok(zulip(world, "--as", "CTO", "react", "--message", str(mid), "--emoji",
+                      "thumbs_up", "--json"), "zulip.py react")
+    assert json.loads(added.stdout) == {"ok": True, "message_id": mid, "emoji": "thumbs_up",
+                                        "removed": False}
+    cto = _client(world, "CTO")
+    got = cto._request("GET", "messages", {"anchor": mid, "num_before": 0, "num_after": 0})
+    assert got["messages"][0]["reactions"][0]["emoji_name"] == "thumbs_up"
+    removed = _ok(zulip(world, "--as", "CTO", "unreact", "--message", str(mid), "--emoji",
+                       "thumbs_up", "--json"), "zulip.py unreact")
+    assert json.loads(removed.stdout)["removed"] is True
+    got = cto._request("GET", "messages", {"anchor": mid, "num_before": 0, "num_after": 0})
+    assert got["messages"][0]["reactions"] == []
+    # Removing it again is a refusal, not a silent success (D3).
+    again = zulip(world, "--as", "CTO", "unreact", "--message", str(mid), "--emoji", "thumbs_up")
+    assert again.returncode != 0
+
+
+def test_zulip_typing_start_and_stop(world):
+    """ops#249 batch 1: the agent path for the "working on it" indicator."""
+    started = _ok(zulip(world, "--as", "CTO", "typing", "--stream", "feature", "--topic",
+                        "#249 typing", "--status", "working", "--json"), "zulip.py typing")
+    assert json.loads(started.stdout) == {"ok": True, "stream": "feature", "topic": "#249 typing",
+                                          "op": "start", "status": "working"}
+    coo = _client(world, "COO")
+    got = coo._request("GET", "typing", {"stream": "feature", "topic": "#249 typing"})
+    [row] = got["typing"]
+    assert row["status"] == "working" and row["full_name"] == "CTO"
+    stopped = _ok(zulip(world, "--as", "CTO", "typing", "--stream", "feature", "--topic",
+                        "#249 typing", "--stop", "--json"), "zulip.py typing --stop")
+    assert json.loads(stopped.stdout)["op"] == "stop"
+    got = coo._request("GET", "typing", {"stream": "feature", "topic": "#249 typing"})
+    assert got["typing"] == []
+
+
 def _queues(world, email: str) -> int:
     db = sqlite3.connect(world["db"])
     try:
