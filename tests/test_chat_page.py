@@ -365,7 +365,13 @@ def test_every_id_the_script_reaches_for_is_in_the_markup():
 
 
 def test_every_api_call_the_page_makes_is_a_route_the_server_serves(world):
-    calls = set(re.findall(r'api\("(GET|POST|DELETE)", "([\w/]+)"', _markup().script))
+    # The negative lookahead drops a call built by string concatenation
+    # (e.g. "messages/" + m.id + "/reactions"): the literal before the "+"
+    # is only a prefix, and checking it against the server would either
+    # report a false 404 or, worse, pass by the accident of path.strip("/")
+    # turning "streams/" into "streams" — a coverage claim this static scan
+    # cannot actually back up either way (D3's shape, one layer up).
+    calls = set(re.findall(r'api\("(GET|POST|DELETE)", "([\w/]+)"(?!\s*\+)', _markup().script))
     assert {("POST", "register"), ("GET", "events"), ("POST", "messages")} <= calls
     for method, path in calls:
         status, body = page_api(world["run"], world["human"], method, path,
@@ -404,18 +410,23 @@ def test_the_quote_helper_splits_sender_quote_and_reply():
       out.given = parseQuote("@_**CTO** said:\\n```quote\\nhi\\n```\\nok");
       out.zulip = parseQuote("@_**CTO|7** [said](#narrow/near/3):\\n```quote\\nשלום\\nשני\\n```\\n");
       out.round = parseQuote(quoteBlock("COO", "a\\nb") + "reply");
+      out.withId = parseQuote(quoteBlock("COO", "a\\nb", 42) + "reply");
       out.plain = parseQuote("hi ```quote\\nx\\n```");
     """)
-    assert got["given"] == {"sender": "CTO", "quote": "hi", "rest": "ok"}
-    assert got["zulip"] == {"sender": "CTO", "quote": "שלום\nשני", "rest": ""}
-    assert got["round"] == {"sender": "COO", "quote": "a\nb", "rest": "reply"}
+    assert got["given"] == {"sender": "CTO", "id": None, "quote": "hi", "rest": "ok"}
+    # "#narrow/near/3" is Zulip's own real link, not this page's "#near/ID"
+    # marker (ops#249): it still parses as a quote, just with no jump id.
+    assert got["zulip"] == {"sender": "CTO", "id": None, "quote": "שלום\nשני", "rest": ""}
+    assert got["round"] == {"sender": "COO", "id": None, "quote": "a\nb", "rest": "reply"}
+    assert got["withId"] == {"sender": "COO", "id": 42, "quote": "a\nb", "rest": "reply"}
     assert got["plain"] is None
 
 
 def test_a_quote_does_not_wake_the_person_quoted(world):
     run, human = world["run"], world["human"]
     # What quoteBlock() writes: the silent @_** form, which is not a mention.
-    assert '"@_**" + name + "** said:\\n```quote\\n"' in _function("quoteBlock")
+    src = _function("quoteBlock")
+    assert '"@_**" + name + "**" + (id ? " [said](#near/" + id + ")" : "") + ":\\n```quote\\n"' in src
     text = "@_**CTO** said:\n```quote\nhi\n```\nok"
     status, body = page_api(run, human, "POST", "messages", type="stream",
                             to="feature", topic="quote", content=text)
@@ -1048,7 +1059,9 @@ def test_77_typing_at_opens_a_picker_that_inserts_the_mention():
     for k in ('"ArrowDown"', '"ArrowUp"', '"Enter" || e.key === "Tab"', '"Escape"'):
         assert k in keys, k
     assert '"@**" + name + "** "' in _function("choosePick")
-    assert 'updatePick(); });' in script
+    listener = script[script.index('$("compose").addEventListener("input"'):]
+    listener = listener[:listener.index("});") + 3]
+    assert "updatePick();" in listener
 
 
 def test_77_mention_buttons_have_a_label_and_compose_has_a_hint():
@@ -1144,6 +1157,7 @@ def test_77_a_toast_follows_each_action_and_says_success_only_when_the_server_di
         return {result: "success", id: 42};
       }
       function fitCompose() {}
+      function sendTyping() {}
       const S = {sending: false, open: {stream_id: 1, topic: "t"}};
     """
     sent = _js(("sendError", "send"), """
@@ -1253,8 +1267,10 @@ def test_85_a_hebrew_message_with_a_link_renders_as_dom_nodes_and_keeps_rtl_orde
 def test_page_registers_for_dashboard_events():
     # Extended, not replaced: the same register call still asks for "message"
     # (issue #82 says "extend an existing tool/call", D1's shape one layer up).
+    # ops#249 batch 1 extends it the same way, for "reaction" and "typing".
     script = _markup().script
-    assert re.search(r'api\("POST", "register", \{event_types: \["message", "dashboard"\]\}\)', script)
+    assert re.search(r'api\("POST", "register",\s*'
+                     r'\{event_types: \["message", "dashboard", "reaction", "typing"\]\}\)', script)
 
 
 def test_page_has_the_panel_and_the_switch():
@@ -1869,14 +1885,16 @@ def test_168_a_live_message_bumps_the_bubble_unless_its_topic_is_open_or_the_mes
     prelude = API_STUB + """
       const S = {me: {user_id: 9}, open: {stream_id: 1, stream: "feature", topic: "open-topic"},
                  topics: new Map([["feature", new Map()]]), archivedTopics: new Map(),
-                 unread: new Map()};
+                 unread: new Map(), typing: new Map()};
       let rendered = 0, titled = 0;
       function renderStreams() { rendered += 1; }
       function updateTitle() { titled += 1; }
       function renderArchive() {}
       function addMessages(list, toEnd) {}
+      function renderTyping() {}
     """
-    got = _js(("onMessage", "markTopicRead", "bumpUnread"), """
+    got = _js(("onMessage", "markTopicRead", "bumpUnread", "typingKey", "clearTyping",
+              "notifyAllowed", "notifyMessage"), """
       const msg = (subject, id, sender) => ({type: "stream", stream_id: 1,
         display_recipient: "feature", subject, id, sender_id: sender});
       onMessage(msg("closed-topic", 1, 5));

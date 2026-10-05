@@ -6,6 +6,7 @@ connected (D1). A script is read fresh on every call.
 
 Usage:
   python bot/zulip.py send --stream coo --topic "#141 record shape" --text "..."
+  python bot/zulip.py send --stream coo --topic "#141 record shape" --text "..." --reply-to ID
   python bot/zulip.py read --stream coo --topic "#141 record shape" [--since ID]
   python bot/zulip.py read --mentions [--since ID]
   python bot/zulip.py --as POOL read --stream pool --since ID --json
@@ -14,6 +15,10 @@ Usage:
   python bot/zulip.py unread [--json]
   python bot/zulip.py mark-read --stream coo --topic "#141 record shape" [--json]
   python bot/zulip.py mark-read --stream coo [--json]   # every topic in the stream
+  python bot/zulip.py react --message ID --emoji thumbs_up [--json]      # ops#249
+  python bot/zulip.py unreact --message ID --emoji thumbs_up [--json]   # ops#249
+  python bot/zulip.py typing --stream coo --topic "#141 record shape" [--status working] [--json]
+  python bot/zulip.py typing --stream coo --topic "#141 record shape" --stop [--json]
 
 Posts and reads as the bot named by ``ZULIP_BOT_EMAIL`` / ``ZULIP_BOT_API_KEY``,
 or with ``--as COO`` as the bot in ``ZULIP_COO_EMAIL`` / ``ZULIP_COO_API_KEY``.
@@ -91,7 +96,29 @@ def _stream_exists(client: ZulipClient, stream: str) -> bool:
         return False
 
 
-def cmd_send(client: ZulipClient, stream: str, topic: str, text: str) -> int:
+# The page's own convention (chat/page.html's parseQuote/quoteBlock, ops#249
+# batch 1): "@_**Name** [said](#near/ID):" (the link is this app's own
+# marker, not a real Zulip narrow URL — there is no narrow router here),
+# then a ```quote fence, then the reply. A quote predating the link has no
+# id and is simply not a jump target; still parses.
+_QUOTE_RE = re.compile(
+    r"^@_\*\*([^*|]+)(?:\|\d+)?\*\*(?: \[said\]\(#near/(\d+)\))?[^\n]*:\n"
+    r"```quote\n(.*?)\n```\n?(.*)$", re.S)
+
+
+def _quote_rest(content: str) -> str:
+    """The reply half of ``content``, with any existing quote stripped —
+    quoting a quoted message quotes only the one message, not its chain."""
+    m = _QUOTE_RE.match(content)
+    return m.group(4) if m else content
+
+
+def quote_block(name: str, content: str, message_id: int) -> str:
+    return f"@_**{name}** [said](#near/{message_id}):\n```quote\n{_quote_rest(content)}\n```\n"
+
+
+def cmd_send(client: ZulipClient, stream: str, topic: str, text: str,
+            reply_to: int | None = None) -> int:
     stream = stream.lstrip("#")
     if stream not in _subscribed(client):
         if _stream_exists(client, stream):
@@ -101,6 +128,14 @@ def cmd_send(client: ZulipClient, stream: str, topic: str, text: str) -> int:
             print(f"refused: #{stream} does not exist, or {client.email} "
                   f"cannot see it. Nothing was sent.", file=sys.stderr)
         return 2
+    if reply_to:
+        try:
+            orig = client._request("GET", f"messages/{reply_to}")["message"]
+        except ZulipError as exc:
+            print(f"refused: cannot read message {reply_to} to quote: {exc}",
+                  file=sys.stderr)
+            return 2
+        text = quote_block(orig["sender_full_name"], orig["content"], reply_to) + text
     sent = client.send_message(stream, text, topic=topic)
     msg_id = sent.get("id")
     if not msg_id:
@@ -108,6 +143,40 @@ def cmd_send(client: ZulipClient, stream: str, topic: str, text: str) -> int:
               file=sys.stderr)
         return 1
     print(f"sent #{stream} › {topic} id={msg_id}")
+    return 0
+
+
+def cmd_react(client: ZulipClient, message_id: int, emoji: str, remove: bool,
+             as_json: bool = False) -> int:
+    """POST (add) or DELETE (remove) a reaction (ops#249 batch 1) — the
+    agent path for the page's one-tap emoji reaction. A ZulipError (no such
+    reaction to remove, a message this bot cannot see) propagates to
+    main()'s own handler, same as archive/unarchive."""
+    client._request("DELETE" if remove else "POST", f"messages/{message_id}/reactions",
+                    {"emoji_name": emoji})
+    if as_json:
+        print(json.dumps({"ok": True, "message_id": message_id, "emoji": emoji,
+                          "removed": remove}, ensure_ascii=False))
+    else:
+        print(f"{'removed' if remove else 'added'} {emoji} on message {message_id}")
+    return 0
+
+
+def cmd_typing(client: ZulipClient, stream: str, topic: str, stop: bool, status: str,
+              as_json: bool = False) -> int:
+    """POST /typing (ops#249 batch 1) — the agent path for "typing / working
+    on it". A ``start`` clears itself out server-side after a short timeout,
+    so an agent need not remember to send ``--stop`` when it is done; it is
+    still the faster way to clear the indicator right away."""
+    stream = stream.lstrip("#")
+    client._request("POST", "typing", {"type": "stream", "to": stream, "topic": topic,
+                                       "op": "stop" if stop else "start", "status": status})
+    if as_json:
+        print(json.dumps({"ok": True, "stream": stream, "topic": topic,
+                          "op": "stop" if stop else "start", "status": status},
+                         ensure_ascii=False))
+    else:
+        print(f"{'stopped' if stop else 'started'} {status} in #{stream} › {topic}")
     return 0
 
 
@@ -261,6 +330,9 @@ def main(argv: list[str] | None = None) -> int:
     send.add_argument("--stream", required=True)
     send.add_argument("--topic", required=True)
     send.add_argument("--text", required=True)
+    send.add_argument("--reply-to", type=int, metavar="ID",
+                      help="quote this message above the text (ops#249), same as the "
+                           "page's own quote button")
     read = sub.add_parser("read", help="print messages, oldest first")
     where = read.add_mutually_exclusive_group(required=True)
     where.add_argument("--stream")
@@ -282,6 +354,21 @@ def main(argv: list[str] | None = None) -> int:
         arc.add_argument("--json", action="store_true", help="one JSON object on stdout")
     unread = sub.add_parser("unread", help="print unread counts per stream and topic")
     unread.add_argument("--json", action="store_true", help="one JSON object on stdout")
+    for name, remove in (("react", False), ("unreact", True)):
+        rc = sub.add_parser(name, help=("remove" if remove else "add") + " an emoji reaction (ops#249)")
+        rc.add_argument("--message", type=int, required=True, metavar="ID")
+        rc.add_argument("--emoji", required=True, metavar="NAME",
+                        help="Zulip's emoji_name, e.g. thumbs_up")
+        rc.add_argument("--json", action="store_true", help="one JSON object on stdout")
+    typing_p = sub.add_parser("typing", help="set the typing/working indicator (ops#249)")
+    typing_p.add_argument("--stream", required=True)
+    typing_p.add_argument("--topic", required=True)
+    typing_p.add_argument("--status", choices=("typing", "working"), default="working",
+                          help="shown to readers as '<name> is typing/working on it' "
+                               "(default: working, the agent case)")
+    typing_p.add_argument("--stop", action="store_true",
+                          help="clear it now, rather than waiting for the server's timeout")
+    typing_p.add_argument("--json", action="store_true", help="one JSON object on stdout")
     mark = sub.add_parser("mark-read", help="mark a topic, or a whole stream, read")
     mark.add_argument("--stream", required=True)
     mark.add_argument("--topic", help="only this topic; every topic in the stream without it")
@@ -299,13 +386,22 @@ def main(argv: list[str] | None = None) -> int:
                     print(json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False))
                 raise
         if args.cmd == "send":
-            return cmd_send(client, args.stream, args.topic, args.text)
+            return cmd_send(client, args.stream, args.topic, args.text, args.reply_to)
         if args.cmd == "wait":
             return cmd_wait(client, args.as_name, args.session, args.seconds)
         if args.cmd == "unread":
             return cmd_unread(client, args.json)
         if args.cmd == "mark-read":
             return cmd_mark_read(client, args.stream, args.topic, args.json)
+        if args.cmd in ("react", "unreact"):
+            try:
+                return cmd_react(client, args.message, args.emoji, args.cmd == "unreact", args.json)
+            except ZulipError as exc:
+                if args.json:
+                    print(json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False))
+                raise
+        if args.cmd == "typing":
+            return cmd_typing(client, args.stream, args.topic, args.stop, args.status, args.json)
         return cmd_read(client, args.stream, args.topic, args.mentions, args.since,
                         args.json)
     except ZulipError as exc:
