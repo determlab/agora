@@ -607,10 +607,11 @@ a.ref:hover { text-decoration: underline; }
           <div class="body" dir="auto"></div>
         </div>
         <button type="button" class="icon quote-btn">ציטוט</button>
+      </div>
+      <div class="reactions">
         <button type="button" class="icon react-btn" title="הוסיפו ריאקציה (לחיצה ארוכה לבחירה)"
                 aria-label="הוסיפו ריאקציה">&#128077;+</button>
       </div>
-      <div class="reactions"></div>
     </div>
   </div>
 </template>
@@ -2788,7 +2789,10 @@ function onReaction(ev) {
 
 function renderReactions(node, m) {
   const box = node.querySelector(".reactions");
-  box.replaceChildren();
+  // The add-reaction button lives in this same row (ops#254); only the
+  // chips are rebuilt on every render, the button is kept and moved last.
+  const btn = box.querySelector(".react-btn");
+  for (const chip of box.querySelectorAll(".reaction-chip")) chip.remove();
   const groups = new Map();  // "code|type" -> {name, count, mine}
   for (const r of m.reactions || []) {
     const key = r.emoji_code + "|" + r.reaction_type;
@@ -2806,6 +2810,7 @@ function renderReactions(node, m) {
     chip.addEventListener("click", () => toggleReaction(m, g.name));
     box.append(chip);
   }
+  if (btn) box.append(btn);
 }
 
 $("messages").addEventListener("scroll", () => {

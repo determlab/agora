@@ -744,9 +744,14 @@ class El {
   append(...ns) {
     for (const n of ns) {
       const x = typeof n === "string" ? new Text_(n) : n;
+      if (x.parent) x.parent.childNodes = x.parent.childNodes.filter((c) => c !== x);
       x.parent = this;
       this.childNodes.push(x);
     }
+  }
+  remove() {
+    if (this.parent) this.parent.childNodes = this.parent.childNodes.filter((c) => c !== this);
+    this.parent = null;
   }
   replaceChildren(...ns) { this.childNodes = []; this.append(...ns); }
   get textContent() { return this.childNodes.map((c) => c.textContent).join(""); }
@@ -1364,6 +1369,40 @@ def test_one_tap_reacts_a_long_press_opens_the_picker():
     """, prelude=prelude)
     assert got["tap"] == [[3, "👍"], None]
     assert got["hold"] == [None, {"id": 3}]
+
+
+def test_254_the_reaction_row_sits_under_the_message_text():
+    # The row (chips, then the add-reaction button) is in the same message
+    # block as the text, directly under it — not beside it in .line, where
+    # the add-reaction button used to sit next to the quote button.
+    tpl = re.search(r'<template id="msg-tpl">(.*?)</template>',
+                    PAGE.read_text(encoding="utf-8"), re.S).group(1)
+    assert tpl.index('class="body"') < tpl.index('class="reactions"')
+    line = tpl[tpl.index('class="line"'):tpl.index('class="reactions"')]
+    assert "react-btn" not in line
+    assert "react-btn" in tpl[tpl.index('class="reactions"'):]
+
+    # Same for a message with no reactions yet: rendering an empty reactions
+    # list must still leave the always-there add-reaction button in the row
+    # after the text, not wipe it out along with the (absent) chips.
+    got = _js(("renderReactions",), """
+      const stack = document.createElement("div");
+      const body = document.createElement("div");
+      body.className = "body";
+      const box = document.createElement("div");
+      box.className = "reactions";
+      const btn = document.createElement("button");
+      btn.className = "react-btn";
+      box.append(btn);
+      stack.append(body, box);
+      renderReactions(stack, {id: 7, reactions: []});
+      out.order = stack.children.indexOf(body) < stack.children.indexOf(box);
+      out.btnPresent = box.children.includes(btn);
+      out.chips = box.querySelectorAll(".reaction-chip").length;
+    """, prelude=FAKE_DOM + "const S = {me: {user_id: 1}};")
+    assert got["order"] is True
+    assert got["btnPresent"] is True
+    assert got["chips"] == 0
 
 
 # -- ops#249 batch 1: the typing / "working on it" indicator
