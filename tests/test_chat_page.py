@@ -1733,7 +1733,7 @@ def _consts(*names: str) -> str:
 def _dash_prelude() -> str:
     return FAKE_DOM + _consts("DASH_LIMIT", "dashOpen", "approvalsNotes", "TOKVIEW", "VIEW", "tokView",
                               "ANSWER_HE", "CHECK_HE", "ROLE_STATE", "TOK_WIN", "approvalsIdx",
-                              "approvalsPending") + """
+                              "approvalsPending", "G_STATE_HE") + """
 const rerendered = [];
 function rerenderDash(cls) { rerendered.push(cls); }
 let mounted = null;
@@ -2008,6 +2008,77 @@ def test_week_card_is_one_big_number_in_hebrew():
                 "percent_of_company: 5.2, median_go_to_close_h: 1.3}));")
     assert _find(got["w"], "big")[0]["text"] == "34"
     assert "נקודות נסגרו (שבוע קודם: 27)" in got["w"]["text"] and "1.3h" in got["w"]["text"]
+
+
+# `gantt` as `python tools/dashboard.py --json --no-tokens` (ops) printed it on
+# 2026-10-06 (two goals trimmed): one dated row per state, one "not set".
+GANTT_DOC = {
+    "as_of": "2026-10-06T10:00:00Z",
+    "gantt": [
+        {"key": "pypi", "he": "שחרור PyPI", "start": "2026-10-05", "end": "2026-10-31", "percent": 0,
+         "state": "waiting_founder", "items_done": 0, "items_total": 3},
+        {"key": "arena", "he": "הזירה (arena)", "start": "2026-10-03", "end": "2026-10-12", "percent": 58,
+         "state": "in_work", "items_done": 14, "items_total": 24},
+        {"key": "launch", "he": "ההשקה", "start": "2026-11-01", "end": "2027-01-15", "percent": None,
+         "state": "unknown", "items_done": 0, "items_total": 0},
+        {"key": "conversations", "he": "5 שיחות", "start": "not set", "end": "not set", "percent": None,
+         "state": "unknown", "items_done": 0, "items_total": 0},
+        {"key": "stage1", "he": "שלב 1: הוכח", "start": "2026-09-09", "end": "2026-10-01", "percent": 100,
+         "state": "closed", "items_done": 4, "items_total": 4},
+    ],
+}
+
+
+def test_gantt_card_renders_one_row_per_goal_from_doc_gantt():
+    # ops#275: the board draws doc.gantt (ported from ops ganttCard, ops#250).
+    got = _dash(f"""
+      const doc = {json.dumps(GANTT_DOC)};
+      const card = renderGantt(doc.gantt, doc.as_of);
+      out.card = dump(card);
+      const bars = [], fills = [], today = [];
+      (function walk(n) {{
+        if (!(n instanceof El)) return;
+        if (n.classList.contains("g-bar")) bars.push([n.className, n.style.left, n.style.width]);
+        if (n.tagName === "I") fills.push(n.style.width);
+        if (n.classList.contains("g-today")) today.push(n.style.left);
+        n.childNodes.forEach(walk);
+      }})(card);
+      out.bars = bars; out.fills = fills; out.today = today;
+      out.missing = dump(renderGantt(undefined, doc.as_of));
+      out.empty = dump(renderGantt([], doc.as_of));
+    """, extra=("ganttDm", "renderGantt"), )
+    rows = _find(got["card"], "g-row")
+    assert [_find(r, "g-name")[0]["text"] for r in rows] == [g["he"] for g in GANTT_DOC["gantt"]]
+    assert [_find(r, "g-state")[0]["text"] for r in rows] == [
+        "מחכה למייסד", "בעבודה", "לא ידוע", "לא ידוע", "סגור"]
+    assert [_find(r, "g-pct")[0]["text"] for r in rows] == ["0%", "58%", "—", "—", "100%"]
+    # four dated rows get a bar coloured by state; "not set" gets a line of text
+    assert [b[0] for b in got["bars"]] == ["g-bar waiting_founder", "g-bar in_work", "g-bar unknown",
+                                           "g-bar closed"]
+    assert "התאריך לא נקבע" in _text(rows[3]) and not _find(rows[3], "g-track")
+    # one shared axis: 2026-09-09 (left 0%) to 2027-01-15 (right 100%)
+    assert got["bars"][3][1] == "0.0%" and got["bars"][2][1] != "0.0%"
+    assert float(got["bars"][2][1][:-1]) + float(got["bars"][2][2][:-1]) == 100.0
+    assert got["fills"] == ["0%", "58%", "100%"]        # the null-percent row has no fill
+    assert len(got["today"]) == 4 and len(set(got["today"])) == 1
+    assert "5.10 – 31.10" in _text(rows[0]) and "1.11 – 15.1.27" in _text(rows[2])
+    assert "הקו המקווקו = היום · 6.10" in _text(got["card"])
+    assert "dashboard.py" in got["missing"]["text"] and "roadmap.md" in got["empty"]["text"]
+
+
+def test_wide_screen_shows_board_and_chat_side_by_side():
+    # ops#275: >= 1200 px shows both panes (class "both", switch hidden by CSS);
+    # under it the agora#100 one-pane rule stays; resize re-applies the view.
+    script = _markup().script
+    assert 'const WIDE = matchMedia("(min-width: 1200px)");' in script
+    body = re.search(r"function setView\(view\) \{.*?\n\}", script, re.S).group(0)
+    assert '$("app").classList.toggle("both", WIDE.matches)' in body
+    assert 'if (WIDE.matches) $("side").hidden = $("main").hidden = $("dash").hidden = false;' in body
+    assert 'WIDE.addEventListener("change", () => setView(viewNow));' in script
+    css = _css()
+    assert "display: none" in _rule("#app.both #view-switch", css)
+    assert "grid-column: 3" in _rule("#app.both #dash", css)
+    assert "dash-gantt" in [a.get("id") for _, a in _markup().elements]
 
 
 def test_progress_card_renders_stages_milestone_bars_chain_and_blocker():
