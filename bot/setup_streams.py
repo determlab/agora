@@ -100,6 +100,14 @@ PM_STREAM = "PM"
 PM_BOT = ("PM", "pm")
 PM_ROLE_BOTS = {"COO", "CTO"}
 
+# ops#274: the PM bot also reads the founder's room and the COO's stream. "All
+# hands" is invite-only and a bot cannot subscribe itself, so the one durable
+# way in is here, next to every other subscription. The room is not in STREAMS
+# (its other members are not this script's to police): only the PM's row and
+# #coo's stray-bot check know it.
+ALL_HANDS_STREAM = "All hands"
+PM_STREAMS = {PM_STREAM, ALL_HANDS_STREAM, "coo"}
+
 
 def bot_streams(full_name: str, short_name: str) -> set[str]:
     """The streams a role bot must be in, and the only ones: its own, plus
@@ -200,6 +208,12 @@ def run_setup(client: ZulipClient) -> None:
         stream_ids[name] = stream_id
         print(f"[setup] stream #{name}: {action} (id={stream_id})")
 
+    # ops#274: the founder's room, kept apart from stream_ids so the role bots'
+    # "subscribed elsewhere" warnings below do not police its members.
+    room_id, action = ensure_stream(client, ALL_HANDS_STREAM)
+    print(f"[setup] stream #{ALL_HANDS_STREAM}: {action} (id={room_id})")
+    lookup = {**stream_ids, ALL_HANDS_STREAM: room_id}
+
     for full_name, short_name in ROLE_BOTS:
         email, user_id, created = ensure_bot(client, full_name, short_name)
         print(f"[setup] bot {full_name}: {'created' if created else 'already exists'} ({email})")
@@ -240,12 +254,12 @@ def run_setup(client: ZulipClient) -> None:
         )
 
     for (full_name, short_name), own in (
-        (WATCHDOG_BOT, WATCHDOG_STREAMS), (POOL_BOT, {POOL_STREAM}), (PM_BOT, {PM_STREAM})
+        (WATCHDOG_BOT, WATCHDOG_STREAMS), (POOL_BOT, {POOL_STREAM}), (PM_BOT, PM_STREAMS)
     ):
         email, user_id, created = ensure_bot(client, full_name, short_name)
         print(f"[setup] bot {full_name}: {'created' if created else 'already exists'} ({email})")
         for name in sorted(own):
-            subscribed = ensure_subscribed(client, stream_ids[name], email, user_id)
+            subscribed = ensure_subscribed(client, lookup[name], email, user_id)
             print(
                 f"[setup]   subscribed {full_name} to #{name}: "
                 f"{'done now' if subscribed else 'already subscribed'}"
@@ -355,10 +369,10 @@ def run_check(client: ZulipClient) -> bool:
         subscribed_to = [
             name for name, sid in streams.items() if pm["user_id"] in client.stream_subscribers(sid)
         ]
-        if set(subscribed_to) == {PM_STREAM}:
+        if set(subscribed_to) == PM_STREAMS:
             print(f"[check]   subscriptions: OK ({sorted(subscribed_to)})")
         else:
-            print(f"[check]   subscriptions: WRONG — expected {[PM_STREAM]}, got {sorted(subscribed_to)}")
+            print(f"[check]   subscriptions: WRONG — expected {sorted(PM_STREAMS)}, got {sorted(subscribed_to)}")
             ok = False
 
     # Per stream, over ALL bots in the realm (not only the ones named above),
@@ -381,6 +395,8 @@ def run_check(client: ZulipClient) -> bool:
             allowed.add(role_bot_ids[name])
         if name in WATCHDOG_STREAMS and watchdog_id is not None:
             allowed.add(watchdog_id)
+        if name in PM_STREAMS and pm is not None:      # ops#274: the PM bot also reads #coo
+            allowed.add(pm["user_id"])
         counted = users.values()
         if name == POOL_STREAM:
             allowed |= {users[full]["user_id"] for full in POOL_ROLE_BOTS if full in users}

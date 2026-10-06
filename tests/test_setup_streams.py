@@ -325,10 +325,50 @@ def test_setup_creates_private_pool_with_founder_coo_and_pool_bot(capsys):
     assert _members(z, "pool") == {"Admin", "COO", "Pool"}
     assert _bot(z, "Pool")["email"] == "pool-bot@x"
     assert _bot_streams(z, "Pool") == {"pool"}
-    assert _bot_streams(z, "PM") == {"PM"}  # issue #104: the PM bot, in #PM only
+    assert _bot_streams(z, "PM") == {"PM", "All hands", "coo"}  # #104 + ops#274: #PM, the room, #coo
     capsys.readouterr()
     assert setup_streams.run_check(z)
     assert "#pool: OK" in capsys.readouterr().out
+
+
+def test_pm_bot_reads_all_hands_and_coo_and_a_second_run_keeps_it():
+    """ops#274: the PM bot is subscribed to 'All hands' and #coo by setup, and a rerun changes nothing."""
+    z = FakeZulip()
+    setup_streams.run_setup(z)
+    assert _bot_streams(z, "PM") == {"PM", "All hands", "coo"}
+    assert z.streams["All hands"]["invite_only"]
+    before = (z.list_streams(), z.list_users(), {k: set(v) for k, v in z.subs.items()})
+    setup_streams.run_setup(z)
+    assert (z.list_streams(), z.list_users(), z.subs) == before
+    assert setup_streams.run_check(z)
+
+
+def test_setup_uses_an_existing_all_hands_and_does_not_touch_other_members():
+    z = FakeZulip()
+    sid = z.add_public_stream("All hands")                 # founder made it by hand
+    z.users.append({"user_id": 900, "full_name": "Someone", "email": "s@x", "is_bot": True})
+    z.subs[sid].add(900)
+    setup_streams.run_setup(z)
+    assert z.streams["All hands"]["stream_id"] == sid      # reused, not duplicated
+    assert 900 in z.subs[sid]                              # other members left alone
+    assert "All hands" in _bot_streams(z, "PM")
+
+
+def test_check_fails_when_the_pm_bot_is_not_in_all_hands(capsys):
+    z = FakeZulip()
+    setup_streams.run_setup(z)
+    pm = _bot(z, "PM")
+    z.subs[z.streams["All hands"]["stream_id"]].discard(pm["user_id"])
+    assert not setup_streams.run_check(z)
+    assert "subscriptions: WRONG" in capsys.readouterr().out
+
+
+def test_check_still_fails_for_another_bot_in_coo():
+    z = FakeZulip()
+    setup_streams.run_setup(z)
+    cmo = _bot(z, "CMO")
+    z.subs[z.streams["coo"]["stream_id"]].add(cmo["user_id"])
+    assert not setup_streams.run_check(z)               # only the PM bot joined the allowance
 
 
 def test_setup_creates_the_pool_bot_once():
