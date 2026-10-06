@@ -401,11 +401,21 @@ def test_the_page_has_no_inline_handlers_or_styles_the_csp_would_block():
         assert not [a for a in attrs if a.startswith("on")], (tag, attrs)
 
 
-# -- the mention buttons
+# -- the @ picker's fixed names (the mention-button row is gone, ops#277)
 
 
-def test_each_mention_button_inserts_exactly_what_wakes_that_bot(world, monkeypatch):
-    names = [a["data-mention"] for _, a in _markup().elements if "data-mention" in a]
+def test_277_the_mention_button_row_is_gone():
+    text = PAGE.read_text(encoding="utf-8")
+    assert 'id="mentions"' not in text and 'id="mention-label"' not in text
+    assert "data-mention" not in text and "#mentions" not in text
+    p = Text()
+    p.feed(text)
+    assert "הזכר:" not in p.chunks
+
+
+def test_each_picker_name_inserts_exactly_what_wakes_that_bot(world, monkeypatch):
+    fixed = re.search(r"const names = \[([^\]]*)\];", _function("mentionNames")).group(1)
+    names = json.loads("[" + fixed + "]")
     assert names == ["COO", "CTO", "CMO", "CPSO", "Watchdog", "all"], names
     run, human, bots = world["run"], world["human"], world["bots"]
     # A stream that is nobody's own and not #feature: only a mention wakes here.
@@ -419,8 +429,8 @@ def test_each_mention_button_inserts_exactly_what_wakes_that_bot(world, monkeypa
                         "backfill": False}
         assert hook._poll_once((run.base, bot["email"], bot["api_key"]), name,
                                states[name], world["tmp"] / f"m-{name}.json") is None
-    # What the button inserts, as the page's script builds it.
-    assert '"@**" + btn.dataset.mention + "** "' in _markup().script
+    # What the picker inserts, as the page's script builds it.
+    assert '"@**" + name + "** "' in _function("choosePick")
     for name in [*names, None]:
         content = f"@**{name}** ping-{name}" if name else "no mention here"
         status, body = page_api(run, human, "POST", "messages", type="stream",
@@ -822,13 +832,12 @@ class El {
     return null;
   }
 }
-const MENTION_BTNS = ["COO", "CTO", "CMO", "Watchdog", "all"].map((n) => ({dataset: {mention: n}}));
 const document = {
   activeElement: null,
   createElement: (t) => new El(t),
   createElementNS: (ns, t) => { const e = new El(t); e.ns = ns; return e; },
   createTextNode: (t) => new Text_(t),
-  querySelectorAll: () => MENTION_BTNS,
+  querySelectorAll: () => [],
 };
 const els = {};
 const $ = (id) => els[id] || (els[id] = new El(id === "compose" ? "textarea" : "div"));
@@ -948,7 +957,7 @@ def test_77_the_ui_speaks_hebrew_right_to_left_and_keeps_technical_terms_english
         latin = set(re.findall(r"[A-Za-z_]+", chunk)) - technical
         assert not latin, (chunk, latin)
     text = " ".join(p.chunks)
-    for he in ("שלח", "חברים", "בחרו נושא", "ציטוט", "הזכר:", "ערוצים", "שכח מפתח"):
+    for he in ("שלח", "חברים", "בחרו נושא", "ציטוט", "ערוצים", "שכח מפתח"):
         assert he in text, he
     # The labels the script writes are Hebrew too.
     for he in ('"+ נושא חדש"', '"פרטי"', '"בוט" : "אדם"', '"נשלח · id "', '"מחובר"'):
@@ -1135,7 +1144,7 @@ def test_77_typing_at_opens_a_picker_that_inserts_the_mention():
     """, prelude=prelude)
     assert dom["items"] == ["Dana Levi", "Watchdog"] and dom["shown"] is True
     assert dom["opts"] == [["active", "true", "DDana Levi"], ["", "false", "WWatchdog"]]
-    assert dom["names"] == ["COO", "CTO", "CMO", "Watchdog", "all", "Dana Levi"]
+    assert dom["names"] == ["COO", "CTO", "CMO", "CPSO", "Watchdog", "all", "Dana Levi"]
     assert dom["value"] == "hi @**Dana Levi** " and dom["caret"] == len("hi @**Dana Levi** ")
     assert dom["closed"] is True and dom["none"] is None
     # The keys: arrows move, Enter/Tab pick (and do not send), Escape closes.
@@ -1150,13 +1159,11 @@ def test_77_typing_at_opens_a_picker_that_inserts_the_mention():
     assert "updatePick();" in _function("onComposeInput")
 
 
-def test_77_mention_buttons_have_a_label_and_compose_has_a_hint():
+def test_77_compose_has_a_hint():
     m = _markup()
-    ids = [a.get("id") or a.get("data-mention") for _, a in m.elements]
-    assert ids.index("mention-label") < ids.index("COO")
+    ids = [a.get("id") for _, a in m.elements]
     p = Text()
     p.feed(PAGE.read_text(encoding="utf-8"))
-    assert "הזכר:" in p.chunks
     [hint] = [c for c in p.chunks if "Shift+Enter" in c]
     assert "@" in hint and "Enter שולח" in hint and ids.index("compose") < ids.index("hint")
 
