@@ -189,10 +189,6 @@ button.archived-name:hover { color: var(--text); }
   border: 0; border-radius: 999px; padding: .3rem .9rem; background: var(--accent);
   color: var(--accent-text); box-shadow: 0 2px 6px rgba(0, 0, 0, .25); }
 #write { border-top: 1px solid var(--line); background: var(--panel); padding: .5rem 1rem; }
-#mentions { display: flex; flex-wrap: wrap; align-items: center; gap: .25rem; margin-bottom: .35rem; }
-#mention-label { font-size: 12px; color: var(--muted); }
-#mentions button { border: 1px solid var(--line); background: var(--bg); border-radius: 999px;
-  padding: .05rem .6rem; font-size: 12px; }
 #compose-row { display: flex; gap: .5rem; align-items: flex-end; }
 #compose-wrap { flex: 1; display: flex; position: relative; }
 #compose { flex: 1; min-height: 2.6rem; max-height: 40vh; resize: none; border-radius: 10px; }
@@ -523,15 +519,6 @@ a.ref:hover { text-decoration: underline; }
     <button type="button" id="new-pill" hidden>הודעות חדשות &#8595;</button>
     <div id="typing" dir="auto" aria-live="polite"></div>
     <div id="write">
-      <div id="mentions">
-        <span id="mention-label">הזכר:</span>
-        <button type="button" data-mention="COO">@COO</button>
-        <button type="button" data-mention="CTO">@CTO</button>
-        <button type="button" data-mention="CMO">@CMO</button>
-        <button type="button" data-mention="CPSO">@CPSO</button>
-        <button type="button" data-mention="Watchdog">@Watchdog</button>
-        <button type="button" data-mention="all">@all</button>
-      </div>
       <div id="compose-row">
         <div id="compose-wrap">
           <ul id="picker" role="listbox" aria-label="בחירת שם להזכרה" hidden></ul>
@@ -2979,10 +2966,11 @@ async function send() {
   }
 }
 
-// -- the @ picker: the mention buttons' names and everyone the server lists.
+// -- the @ picker: the role bots, @all, and everyone the server lists.
+// (ops#277 removed the row of mention buttons; the picker keeps their names.)
 
 function mentionNames() {
-  const names = [...document.querySelectorAll("[data-mention]")].map((b) => b.dataset.mention);
+  const names = ["COO", "CTO", "CMO", "CPSO", "Watchdog", "all"];
   for (const u of S.users.values()) {
     if (S.me && u.user_id === S.me.user_id) continue;
     if (!names.includes(u.full_name)) names.push(u.full_name);
@@ -3077,10 +3065,6 @@ function onComposeInput() {
 $("compose").addEventListener("input", onComposeInput);
 $("compose").addEventListener("blur", closePick);
 $("send-btn").addEventListener("click", send);
-
-for (const btn of document.querySelectorAll("[data-mention]")) {
-  btn.addEventListener("click", () => insertText("@**" + btn.dataset.mention + "** "));
-}
 
 // -- streams: create, members, private
 
