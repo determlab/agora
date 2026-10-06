@@ -431,6 +431,35 @@ a.ref:hover { text-decoration: underline; }
 .stage-row { display: flex; flex-wrap: wrap; gap: 6px; flex-direction: row !important; }
 .stage-row .chip.cur { background: var(--accent); color: var(--accent-text); }
 .prog-chain { margin-top: 14px; }
+/* Gantt: one bar per founder goal from doc.gantt (ported from ops
+   tools/dashboard-page.html, ops#250; agora's colour tokens, ops#275). */
+.gantt { display: grid; gap: 12px; }
+.g-row { display: grid; gap: 4px; }
+.g-head { display: flex; justify-content: space-between; gap: 8px; align-items: baseline; font-size: 13.5px; }
+.g-name { font-weight: 600; flex: 1; min-width: 0; unicode-bidi: plaintext; }
+.g-state { font-size: 11px; font-weight: 600; border-radius: 6px; padding: 1px 7px; white-space: nowrap;
+  background: var(--code); color: var(--muted); }
+.g-state.closed { background: color-mix(in srgb, var(--ok) 18%, transparent); color: var(--ok); }
+.g-state.in_work { background: var(--accent-soft); color: var(--accent); }
+.g-state.waiting_founder { background: color-mix(in srgb, var(--wait) 20%, transparent); color: var(--wait); }
+.g-pct { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.g-track { position: relative; height: 14px; border-radius: 999px; background: var(--panel);
+  border: 1px solid var(--line); direction: ltr; }
+.g-bar { position: absolute; top: 0; bottom: 0; border-radius: 999px; overflow: hidden;
+  background: var(--code); border: 1.5px solid var(--muted); box-sizing: border-box; }
+.g-bar i { display: block; height: 100%; background: var(--muted); }
+.g-bar.closed { border-color: var(--ok); } .g-bar.closed i { background: var(--ok); }
+.g-bar.in_work { border-color: var(--accent); } .g-bar.in_work i { background: var(--accent); }
+.g-bar.waiting_founder { border-color: var(--wait); } .g-bar.waiting_founder i { background: var(--wait); }
+.g-today { position: absolute; top: -4px; bottom: -4px; border-left: 2px dashed var(--accent); }
+.g-dates, .g-notset { font-size: 12px; color: var(--muted); }
+.g-row .g-dates { direction: ltr; }  /* the axis runs left to right: the dates read the same way */
+/* ops#275: on a wide screen (>= 1200 px, set by setView through WIDE) the
+   board and the chat sit side by side and the switch is not needed; under
+   1200 px the agora#100 rule stays: one of the two, picked by the switch. */
+#app.both { grid-template-columns: 16rem minmax(0, 1fr) minmax(0, 1fr); }
+#app.both #view-switch { display: none; }
+#app.both #dash { grid-column: 3; border-inline-start: 1px solid var(--line); }
 @media (max-width: 700px) {
   #dash { padding: .5rem; }
   .sync { margin-inline-start: 0; flex-basis: 100%; }
@@ -528,6 +557,7 @@ a.ref:hover { text-decoration: underline; }
     <div id="dash-kpis" class="kpis" aria-label="במבט אחד"></div>
     <div class="cards">
       <section class="dash-card card wide" id="dash-timeline"><h3></h3><div class="dash-body"><div class="muted">טוען…</div></div></section>
+      <section class="dash-card card wide" id="dash-gantt"><h3></h3><div class="dash-body"><div class="muted">טוען…</div></div></section>
       <section class="dash-card card" id="dash-approvals"><h3></h3><div class="dash-body"><div class="muted">טוען…</div></div></section>
       <section class="dash-card card" id="dash-live"><h3></h3><div class="dash-body"><div class="muted">טוען…</div></div></section>
       <section class="dash-card card" id="dash-roles"><h3></h3><div class="dash-body"><div class="muted">טוען…</div></div></section>
@@ -2021,6 +2051,67 @@ function renderProgress(p) {
   return wrap;
 }
 
+// Gantt (ops#275, ported from ops tools/dashboard-page.html ganttCard, ops#250):
+// one row per goal in doc.gantt — name, state chip, percent closed, and a bar
+// from start to end on one shared date axis, filled to the percent, with a
+// dashed "today" line at doc.as_of. "not set" dates get a line of text.
+const G_STATE_HE = {closed: "סגור", in_work: "בעבודה", waiting_founder: "מחכה למייסד", unknown: "לא ידוע"};
+function ganttDm(iso, asOf) {
+  if (!iso) return "—";
+  const d = new Date(iso + (iso.length === 10 ? "T00:00:00Z" : ""));
+  if (isNaN(d)) return "—";
+  const s = d.getUTCDate() + "." + (d.getUTCMonth() + 1);
+  const year = new Date(asOf || iso).getUTCFullYear();
+  return d.getUTCFullYear() !== year ? s + "." + String(d.getUTCFullYear()).slice(2) : s;
+}
+function renderGantt(g, asOf) {
+  const wrap = el("div");
+  if (!Array.isArray(g)) { wrap.append(el("div", "muted", "אין נתון במסמך: צריך dashboard.py עדכני (ops#250)")); return wrap; }
+  if (!g.length) { wrap.append(el("div", "muted", "היעדים עוד לא הוגדרו ב-roadmap.md.")); return wrap; }
+  const day = (s) => Date.parse(s + "T00:00:00Z");
+  const isDated = (x) => !!x.start && !!x.end && x.start !== "not set" && x.end !== "not set"
+    && !isNaN(day(x.start)) && !isNaN(day(x.end));
+  const dated = g.filter(isDated);
+  const t0 = dated.length ? Math.min(...dated.map((x) => day(x.start))) : null;
+  const t1 = dated.length ? Math.max(...dated.map((x) => day(x.end))) : null;
+  const now = Date.parse(asOf);
+  const pos = (ms) => 100 * Math.min(1, Math.max(0, (ms - t0) / ((t1 - t0) || 1)));
+  const rows = el("div", "gantt");
+  for (const x of g) {
+    const row = el("div", "g-row");
+    const head = el("div", "g-head");
+    head.append(el("span", "g-name", x.he || x.key || ""),
+                el("span", "g-state " + (G_STATE_HE[x.state] ? x.state : "unknown"), G_STATE_HE[x.state] || String(x.state ?? "")),
+                el("span", "g-pct", x.percent == null ? "—" : x.percent + "%"));
+    row.append(head);
+    if (!isDated(x)) {
+      row.append(el("div", "g-notset", "התאריך לא נקבע"));
+    } else {
+      const left = pos(day(x.start)), right = pos(day(x.end));
+      const track = el("div", "g-track");
+      const bar = el("div", "g-bar " + (G_STATE_HE[x.state] ? x.state : "unknown"));
+      bar.style.left = left.toFixed(1) + "%";
+      bar.style.width = Math.max(1.5, right - left).toFixed(1) + "%";
+      if (x.percent != null) {
+        const fill = el("i");
+        fill.style.width = Math.max(0, Math.min(100, Number(x.percent) || 0)) + "%";
+        bar.append(fill);
+      }
+      track.append(bar);
+      if (now >= t0 && now <= t1) {
+        const today = el("div", "g-today");
+        today.style.left = pos(now).toFixed(1) + "%";
+        track.append(today);
+      }
+      row.append(track, el("div", "g-dates", ganttDm(x.start, asOf) + " – " + ganttDm(x.end, asOf)));
+    }
+    rows.append(row);
+  }
+  wrap.append(rows);
+  if (t0 != null) wrap.append(el("div", "muted g-dates", "הקו המקווקו = היום · " + ganttDm(asOf, asOf)));
+  return wrap;
+}
+
 function mountCard(id, node) {
   $(id).querySelector(".dash-body").replaceChildren(node);
 }
@@ -2160,6 +2251,7 @@ function renderDashboard(d) {
   // left end in RTL), not at midnight.
   const tl = $("dash-timeline").querySelector(".tl");
   if (tl && tl.scrollWidth > tl.clientWidth) tl.scrollLeft = -tl.scrollWidth;
+  mountCard("dash-gantt", renderGantt(doc.gantt, doc.as_of));
   mountCard("dash-live", renderLive(doc.live));
   mountCard("dash-approvals", renderApprovals(Array.isArray(doc.next_moves) ? doc.next_moves : []));
   setCount("dash-approvals", Array.isArray(doc.next_moves) ? doc.next_moves.length : null);
@@ -3273,26 +3365,35 @@ const DASH_TITLES = {
   "dash-roles": "מי עובד על מה", "dash-queue": "התור לפי עדיפות", "dash-prs": "PRs פתוחים",
   "dash-week": "השבוע", "dash-products": "מוצרים", "dash-stuck": "תקוע",
   "dash-progress": "התמונה הגדולה", "dash-tokens": "טוקנים", "dash-timeline": "ציר הזמן של היום",
+  "dash-gantt": "התקדמות לפי יעדים",
 };
 for (const [id, title] of Object.entries(DASH_TITLES)) {
   $(id).querySelector("h3").textContent = title;
 }
 
-// Chat and the board are never shown together (founder's ruling on agora#100):
-// the switch hides the channel list and chat and gives the board the full
-// width, at every viewport size.
+// Under 1200 px chat and the board are never shown together (founder's ruling
+// on agora#100): the switch hides the channel list and chat and gives the
+// board the full width. From 1200 px up (founder, ops#275) both are shown side
+// by side and the switch is hidden; the stored view still decides what a
+// narrower window shows, so a reload or a resize keeps the right layout.
+const WIDE = matchMedia("(min-width: 1200px)");
+let viewNow = "chat";
 function setView(view) {
+  viewNow = view;
   $("side").hidden = view !== "chat";
   $("main").hidden = view !== "chat";
   $("dash").hidden = view !== "dash";
+  $("app").classList.toggle("both", WIDE.matches);
+  if (WIDE.matches) $("side").hidden = $("main").hidden = $("dash").hidden = false;
   $("view-chat").classList.toggle("active", view === "chat");
   $("view-dash").classList.toggle("active", view === "dash");
   $("view-chat").setAttribute("aria-pressed", String(view === "chat"));
   $("view-dash").setAttribute("aria-pressed", String(view === "dash"));
   // ops#220: a reload opens the view you were on.
   try { localStorage.setItem(VIEW, view); } catch (e) { /* private window: the switch still works */ }
-  if (view === "dash" && S.dashboard) renderDashboard(S.dashboard);  // fresh "N min ago" and "now" line
+  if (!$("dash").hidden && S.dashboard) renderDashboard(S.dashboard);  // fresh "N min ago" and "now" line
 }
+WIDE.addEventListener("change", () => setView(viewNow));
 $("view-chat").addEventListener("click", () => setView("chat"));
 $("view-dash").addEventListener("click", () => setView("dash"));
 
