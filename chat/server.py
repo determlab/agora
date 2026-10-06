@@ -1911,10 +1911,12 @@ def ensure_streams(store: Store) -> tuple[list[str], list[str]]:
     wanted = [(full, plan.bot_streams(full, short)) for full, short in plan.ROLE_BOTS]
     wanted.append((plan.WATCHDOG_BOT[0], plan.WATCHDOG_STREAMS))
     wanted.append((plan.POOL_BOT[0], {plan.POOL_STREAM}))
-    wanted.append((plan.PM_BOT[0], {plan.PM_STREAM}))
+    wanted.append((plan.PM_BOT[0], plan.PM_STREAMS))
     missing = []
     with store.tx():
-        for name in plan.STREAMS:
+        # ops#274: the PM bot reads "All hands"; it is not in plan.STREAMS (its members are not
+        # policed), so make sure it exists before the PM bot is subscribed to it.
+        for name in (*plan.STREAMS, plan.ALL_HANDS_STREAM):
             row = store.stream_by_ref(name)
             if row is None:
                 store.create_stream(name, invite_only=True)

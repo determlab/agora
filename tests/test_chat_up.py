@@ -160,7 +160,8 @@ def test_up_serves_add_human_joins_every_stream_posts_to_feature_and_check_passe
                        "--json", "--db", db, "--env", env, "--port", port)
         assert made.returncode == 0, made.stderr
         human = json.loads(made.stdout)
-        assert sorted(human["streams"]) == sorted(STREAMS) and human["env_written"] == str(env)
+        # ops#274: `up` also makes the founder's room "All hands", and a human joins every stream
+        assert sorted(human["streams"]) == sorted(STREAMS + ["All hands"]) and human["env_written"] == str(env)
         written = chat._read_env(str(env))
         assert written["ZULIP_FOUNDER_EMAIL"] == HUMAN
         assert written["ZULIP_FOUNDER_API_KEY"] == human["api_key"]
