@@ -7,6 +7,8 @@ rooms-scratch/
 
 # bot/ — Zulip stack (issue #37). Secrets + coo-bot API key, never committed.
 bot/.env
+# bot/wake.py state and per-role logs (ops#293)
+bot/.wake/
 
 # chat/ — our own chat server (issue #61). The SQLite database is local state.
 chat/data/
