@@ -3,6 +3,8 @@
 The founder writes ``@**CTO** <question>`` in Zulip (or DMs the CTO bot) and a
 CTO session opens on its own, answers in that stream and topic, and closes
 when idle. Same for COO, PM, CMO and CPSO. No session sits waiting for him.
+The PA works the same way from the founder's PA folder (``PA_DIR``), and any
+founder message in ``#pa`` calls it, mention or not (ops#293 item 7).
 
 How it works:
   - One long-poll per role bot (``ZULIP_<ROLE>_EMAIL`` / ``_API_KEY``), each
@@ -18,9 +20,14 @@ How it works:
     conversation: the first message spawns it (``AGENT["spawn"]``), later ones
     resume it (``AGENT["resume"]``), one message per turn, queued while a turn
     runs.
-  - Idle close: 15 minutes after the founder's last message, or at 4 hours of
-    age, the conversation gets one last turn — post one line in the topic,
-    what was agreed and where it is written — and is forgotten. The next
+  - A fresh conversation's first prompt carries the topic's last 20 messages
+    before the new one, so the previous session's close line is the handoff
+    (no ``--resume`` across sessions, ops#293 4b).
+  - Idle close: 15 minutes after the founder's last message in the topic
+    (a mention or not), or at 4 hours of age, the conversation gets one last
+    turn — post one line in the topic, what was agreed and where it is
+    written — and is forgotten. At 4 h a running turn is stopped first and the
+    close turn runs once it has exited; a close turn gets 2 minutes. The next
     mention opens a fresh one.
 
 Security (type B — this starts processes from chat input): only the founder's
@@ -69,12 +76,18 @@ AGENT: dict[str, Any] = {
     "resume": ["claude", "-p", "--model", "{model}", "--resume", "{session_id}"],
     "cwd": os.environ.get("WAKE_OPS_DIR", r"C:\PlayGround\ops"),
     # CLAUDE.md, session rules (ops#289): COO and CTO on Opus, the rest on Sonnet.
-    "models": {"COO": "opus", "CTO": "opus", "PM": "sonnet", "CMO": "sonnet", "CPSO": "sonnet"},
+    # The PA (ops#293 item 7) runs in PA_DIR from bot/.env, on Sonnet.
+    "models": {"COO": "opus", "CTO": "opus", "PM": "sonnet", "CMO": "sonnet", "CPSO": "sonnet",
+               "PA": "sonnet"},
+    # A founder message in this stream calls the role without a mention.
+    "home_streams": {"PA": "pa"},
 }
 ROLES = tuple(AGENT["models"])
 
 IDLE_SECONDS = 15 * 60
 MAX_AGE_SECONDS = 4 * 60 * 60
+CLOSE_TURN_SECONDS = 2 * 60  # the close turn, and a stopped turn's exit, get this long
+HISTORY_MESSAGES = 20
 TICK_SECONDS = 30.0
 BACKFILL_LIMIT = 1000
 
@@ -128,10 +141,26 @@ def load_config(env_path: Path = DOTENV) -> dict[str, Any]:
             bots[role] = (email, key)
         else:
             missing.append(role)
+    cwd = {role: AGENT["cwd"] for role in ROLES}
+    skipped: dict[str, str] = {}
+    pa_dir = get("PA_DIR")
+    if "PA" not in bots:
+        pass  # no PA bot: already named in "missing"
+    elif not pa_dir:
+        skipped["PA"] = ("PA_DIR missing in bot/.env — add the path of the founder's PA "
+                         "folder (the one holding its CLAUDE.md), e.g. PA_DIR=C:\\PlayGround\\pa.")
+    elif not Path(pa_dir).is_dir():
+        skipped["PA"] = (f"PA_DIR in bot/.env is {pa_dir!r}, which is not a folder — set it "
+                         "to the founder's PA folder (the one holding its CLAUDE.md).")
+    else:
+        cwd["PA"] = pa_dir
+    for role in skipped:
+        bots.pop(role, None)
     if not bots:
         raise ConfigError("no role bot credentials in bot/.env — add ZULIP_<ROLE>_EMAIL and "
                           "ZULIP_<ROLE>_API_KEY for at least one of " + ", ".join(ROLES) + ".")
-    return {"founder_id": int(raw), "site": site, "bots": bots, "missing": missing}
+    return {"founder_id": int(raw), "site": site, "bots": bots, "missing": missing,
+            "skipped": skipped, "cwd": cwd}
 
 
 # -- state -------------------------------------------------------------------
@@ -163,18 +192,52 @@ def build_command(kind: str, role: str, session_id: str) -> list[str]:
     return [part.format(model=model, session_id=session_id) for part in AGENT[kind]]
 
 
+def _proc_start_time(pid: int) -> int | None:
+    """When the process with this pid was created, in the OS's own units, or
+    None if it does not exist or cannot be read. Stored with the pid, it tells
+    our process from another one that got the same pid later."""
+    if pid <= 0:
+        return None
+    if os.name == "nt":
+        import ctypes
+        from ctypes import wintypes
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+        kernel32.OpenProcess.restype = wintypes.HANDLE
+        kernel32.GetProcessTimes.argtypes = [wintypes.HANDLE] + [ctypes.POINTER(wintypes.FILETIME)] * 4
+        kernel32.GetProcessTimes.restype = wintypes.BOOL
+        kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+        handle = kernel32.OpenProcess(0x1000, False, pid)  # QUERY_LIMITED_INFORMATION
+        if not handle:
+            return None
+        try:
+            times = [wintypes.FILETIME() for _ in range(4)]
+            if not kernel32.GetProcessTimes(handle, *(ctypes.byref(t) for t in times)):
+                return None
+            return (times[0].dwHighDateTime << 32) | times[0].dwLowDateTime
+        finally:
+            kernel32.CloseHandle(handle)
+    try:  # Linux: field 22 of /proc/<pid>/stat, after the "(comm)" that may hold spaces
+        stat = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8", errors="replace")
+        return int(stat.rpartition(")")[2].split()[19])
+    except (OSError, ValueError, IndexError):
+        return None
+
+
 class Spawner:
     """Starts the agent with the prompt on stdin. ``alive`` and ``stop`` take
-    a pid so they still work after a restart, when no handle is left."""
+    a pid and its create time so they still work after a restart, when no
+    handle is left: a pid whose create time does not match is someone else's,
+    counts as dead and is never killed."""
 
     def __init__(self, log_dir: Path = STATE_DIR):
         self.log_dir = log_dir
         self.procs: dict[int, subprocess.Popen] = {}
 
-    def start(self, argv: list[str], prompt: str, role: str) -> int:
+    def start(self, argv: list[str], prompt: str, role: str, cwd: str | None = None) -> int:
         self.log_dir.mkdir(parents=True, exist_ok=True)
         with open(self.log_dir / f"{role}.log", "ab") as log:
-            proc = subprocess.Popen(argv, cwd=AGENT["cwd"], stdin=subprocess.PIPE,
+            proc = subprocess.Popen(argv, cwd=cwd or AGENT["cwd"], stdin=subprocess.PIPE,
                                     stdout=log, stderr=subprocess.STDOUT)
         try:
             proc.stdin.write(prompt.encode("utf-8"))
@@ -184,24 +247,36 @@ class Spawner:
         self.procs[proc.pid] = proc
         return proc.pid
 
-    def alive(self, pid: int | None) -> bool:
+    def created(self, pid: int) -> int | None:
+        return _proc_start_time(pid)
+
+    def _ours(self, pid: int, created: int | None) -> bool:
+        """No handle (a restart): the pid is ours only if its create time
+        still matches the one stored at spawn."""
+        return created is not None and _proc_start_time(pid) == created
+
+    def alive(self, pid: int | None, created: int | None = None) -> bool:
         if not pid:
             return False
         proc = self.procs.get(pid)
         if proc is not None:
             return proc.poll() is None
-        return _hook()._pid_alive(pid)
+        return self._ours(pid, created) and _hook()._pid_alive(pid)
 
-    def stop(self, pid: int) -> None:
+    def stop(self, pid: int, created: int | None = None) -> None:
         proc = self.procs.get(pid)
         try:
             if proc is not None:
                 proc.terminate()
-            else:
+            elif self._ours(pid, created):
                 import signal
                 os.kill(pid, signal.SIGTERM)
         except OSError:
             pass
+
+
+def _any_pid_alive(pid: int) -> bool:
+    return _hook()._pid_alive(pid)
 
 
 def registry_live(role: str, alive: Callable[[int], bool]) -> int | None:
@@ -234,13 +309,30 @@ def _send_hint(role: str, stream: str, topic: str) -> str:
             f'--topic {json.dumps(topic)} --text "..."')
 
 
-def message_prompt(role: str, msg: dict[str, Any], first: bool) -> str:
+def _who(msg: dict[str, Any]) -> str:
+    return str(msg.get("sender_full_name") or msg.get("sender_email") or msg.get("sender_id"))
+
+
+def history_block(stream: str, topic: str, history: list[dict[str, Any]]) -> str:
+    """The topic's last messages before the new one: the handoff (ops#293 4b)."""
+    if not history:
+        return ""
+    lines = "\n".join(f"- {_who(m)}: {m.get('content', '')}" for m in history)
+    return (f"The last {len(history)} messages in #{stream} › {topic} before this one, "
+            f"oldest first. A previous session's close line among them is your handoff: "
+            f"read the file or issue it names.\n\n{lines}\n\n")
+
+
+def message_prompt(role: str, msg: dict[str, Any], first: bool,
+                   history: str = "") -> str:
     stream, topic = _where(msg, role)
     sender = msg.get("sender_full_name") or msg.get("sender_email") or "the founder"
     origin = ("a direct message" if msg.get("type") != "stream"
               else f"#{stream} › {topic}")
-    head = (f"You are the {role} (read agents/{role.lower()}.md). The founder called you "
-            f"from Zulip; this session was opened for that and closes when he goes quiet.\n\n"
+    who = ("You are the founder's PA (the CLAUDE.md in this folder says how you work)"
+           if role == "PA" else f"You are the {role} (read agents/{role.lower()}.md)")
+    head = (f"{who}. The founder called you from Zulip; this session was opened for "
+            f"that and closes when he goes quiet.\n\n{history}"
             if first else "")
     return (f"{head}Message from {sender} in {origin}:\n\n{msg.get('content', '')}\n\n"
             f"Answer in #{stream} › {topic} with:\n  {_send_hint(role, stream, topic)}\n")
@@ -254,13 +346,19 @@ def close_prompt(role: str, stream: str, topic: str) -> str:
 
 # -- the decisions -----------------------------------------------------------
 
+History = Callable[[str, str, str, int], list[dict[str, Any]]]
+
+
 class Waker:
     """Every decision, with Zulip, the clock and processes injected so the
-    tests drive it with fakes. Owns the state; ``save`` after each change."""
+    tests drive it with fakes. Owns the state; ``save`` after each change.
+    ``history(role, stream, topic, n)`` returns the topic's newest ``n``
+    messages, oldest first (None: no handoff, as in a dry run)."""
 
     def __init__(self, founder_id: int, state_path: Path, spawner: Any,
                  clock: Callable[[], float] = time.time, dry_run: bool = False,
-                 emit: Callable[[dict[str, Any]], None] = lambda d: None):
+                 emit: Callable[[dict[str, Any]], None] = lambda d: None,
+                 history: History | None = None, cwd: dict[str, str] | None = None):
         self.founder_id = founder_id
         self.state_path = state_path
         self.state = load_state(state_path)
@@ -268,6 +366,8 @@ class Waker:
         self.clock = clock
         self.dry_run = dry_run
         self.emit = emit
+        self.history = history
+        self.cwd = cwd or {}
 
     def role(self, role: str) -> dict[str, Any]:
         return self.state["roles"].setdefault(role, {})
@@ -275,6 +375,9 @@ class Waker:
     def save(self) -> None:
         if not self.dry_run:
             save_state(self.state_path, self.state)
+
+    def _alive(self, sess: dict[str, Any]) -> bool:
+        return self.spawner.alive(sess.get("pid"), sess.get("pid_created"))
 
     def _decide(self, role: str, action: str, reason: str, msg: dict[str, Any] | None,
                 **extra: Any) -> dict[str, Any]:
@@ -304,22 +407,31 @@ class Waker:
         if msg.get("sender_id") != self.founder_id:
             who = msg.get("sender_email") or msg.get("sender_id")
             return self._decide(role, "skip", f"sender {who} is not the founder", msg)
-        if "mentioned" not in flags and msg.get("type") != "private":
-            return self._decide(role, "skip", f"not a mention of or a DM to {role}", msg)
-        hand = registry_live(role, self.spawner.alive)
-        if hand:
-            return self._decide(role, "skip", f"live {role} session (pid {hand}); "
-                                "its hook delivers the message", msg)
         rs = self.role(role)
         sess = rs.get("session")
         now = self.clock()
+        home = AGENT["home_streams"].get(role)
+        in_home = bool(home) and msg.get("type") == "stream" and \
+            msg.get("display_recipient") == home
+        if "mentioned" not in flags and msg.get("type") != "private" and not in_home:
+            if sess and not sess.get("closing") and \
+                    _where(msg, role) == (sess.get("stream"), sess.get("topic")):
+                # The founder is still in the conversation's topic: not idle.
+                sess["last_founder_at"] = now
+                return self._decide(role, "skip", f"not a mention of {role}; extends the "
+                                    "open session's idle timer, not delivered", msg)
+            return self._decide(role, "skip", f"not a mention of or a DM to {role}", msg)
+        hand = registry_live(role, _any_pid_alive)
+        if hand:
+            return self._decide(role, "skip", f"live {role} session (pid {hand}); "
+                                "its hook delivers the message", msg)
         if sess and sess.get("closing"):
             sess.setdefault("pending", []).append(msg)
             return self._decide(role, "queue", "the session is closing; a fresh one "
                                 "opens with this message", msg)
         if sess:
             sess["last_founder_at"] = now
-            if self.spawner.alive(sess.get("pid")) or sess.get("dry"):
+            if self._alive(sess) or sess.get("dry"):
                 sess.setdefault("pending", []).append(msg)
                 return self._decide(role, "queue", f"{role} session is answering "
                                     f"(pid {sess.get('pid') or 'dry run'}); delivered when the turn ends", msg)
@@ -330,17 +442,37 @@ class Waker:
                                 msg, session_id=sess["id"])
         return self._spawn(role, [msg])
 
+    def _handoff(self, role: str, msgs: list[dict[str, Any]]) -> tuple[str, int | str]:
+        """The topic's last HISTORY_MESSAGES messages before ``msgs``, as a
+        prompt block, and how many (or why none)."""
+        if self.history is None:
+            return "", 0
+        stream, topic = _where(msgs[0], role)
+        new = {m.get("id") for m in msgs}
+        first = min(int(m.get("id") or 0) for m in msgs) or None
+        try:
+            rows = self.history(role, stream, topic, HISTORY_MESSAGES + len(msgs))
+        except (ZulipError, OSError, ValueError) as exc:
+            return f"(The topic's history could not be read: {exc}.)\n\n", f"error: {exc}"
+        rows = [m for m in rows if m.get("id") not in new
+                and (first is None or int(m.get("id") or 0) < first)]
+        rows = rows[-HISTORY_MESSAGES:]
+        return history_block(stream, topic, rows), len(rows)
+
     def _spawn(self, role: str, msgs: list[dict[str, Any]]) -> dict[str, Any]:
         now = self.clock()
         stream, topic = _where(msgs[-1], role)
         sid = str(uuid.uuid4())
         self.role(role)["session"] = {"id": sid, "stream": stream, "topic": topic,
                                       "started_at": now, "last_founder_at": now, "pid": None}
-        prompt = "\n---\n".join(message_prompt(role, m, first=(i == 0))
+        block, count = self._handoff(role, msgs)
+        prompt = "\n---\n".join(message_prompt(role, m, first=(i == 0),
+                                               history=block if i == 0 else "")
                                 for i, m in enumerate(msgs))
         self._run(role, "spawn", prompt)
         return self._decide(role, "spawn", f"founder called {role}; no live session",
                             msgs[-1], session_id=sid, model=AGENT["models"][role],
+                            cwd=self.cwd.get(role, AGENT["cwd"]), history=count,
                             command=build_command("spawn", role, sid))
 
     def _run(self, role: str, kind: str, prompt: str) -> None:
@@ -350,7 +482,43 @@ class Waker:
             sess["dry"] = True  # as if its turn were running: later messages queue
             return
         self.save()  # the session is on disk before its process exists: no double spawn
-        sess["pid"] = self.spawner.start(argv, prompt, role)
+        sess["pid"] = self.spawner.start(argv, prompt, role, self.cwd.get(role))
+        sess["pid_created"] = self.spawner.created(sess["pid"])
+
+    def _close_turn(self, role: str, sess: dict[str, Any], now: float) -> None:
+        sess["close_turn_at"] = now
+        self._run(role, "resume", close_prompt(role, sess["stream"], sess["topic"]))
+
+    def _finish(self, role: str, reason: str) -> list[dict[str, Any]]:
+        """Forget the session; a message that came in meanwhile opens a fresh one."""
+        rs = self.role(role)
+        pending = (rs.get("session") or {}).get("pending") or []
+        rs["session"] = None
+        out = [self._decide(role, "closed", reason, None)]
+        if pending:
+            out.append(self._spawn(role, pending))
+        self.save()
+        return out
+
+    def _tick_closing(self, role: str, sess: dict[str, Any], running: bool,
+                      now: float) -> list[dict[str, Any]]:
+        if sess.get("close_turn_at") is None:
+            # A turn stopped at 4 h: its process may still hold the session id,
+            # so the close turn waits until it has exited.
+            if not running:
+                self._close_turn(role, sess, now)
+                self.save()
+                return []
+            if now - sess.get("stopped_at", now) < CLOSE_TURN_SECONDS:
+                return []
+            return self._finish(role, "the stopped turn did not exit in 2 min; "
+                                "closed without a close line")
+        if not running:
+            return self._finish(role, "close turn done")
+        if now - sess["close_turn_at"] < CLOSE_TURN_SECONDS:
+            return []
+        self.spawner.stop(sess["pid"], sess.get("pid_created"))
+        return self._finish(role, "the close turn ran past 2 min; stopped")
 
     def tick(self) -> list[dict[str, Any]]:
         """Deliver queued messages when a turn ends; close idle or old sessions."""
@@ -360,25 +528,18 @@ class Waker:
             sess = rs.get("session")
             if not sess or sess.get("dry"):
                 continue
-            running = self.spawner.alive(sess.get("pid"))
+            running = self._alive(sess)
             if sess.get("closing"):
-                if running:
-                    continue
-                pending = sess.get("pending") or []
-                rs["session"] = None
-                if pending:
-                    out.append(self._spawn(role, pending))
-                else:
-                    out.append(self._decide(role, "closed", "close turn done", None))
-                self.save()
+                out += self._tick_closing(role, sess, running, now)
                 continue
             age, idle = now - sess["started_at"], now - sess["last_founder_at"]
             if age >= MAX_AGE_SECONDS or (idle >= IDLE_SECONDS and not running):
-                if running:
-                    self.spawner.stop(sess["pid"])
-                pending = sess.get("pending") or []
-                sess.update(closing=True, pending=pending)
-                self._run(role, "resume", close_prompt(role, sess["stream"], sess["topic"]))
+                sess.update(closing=True, pending=sess.get("pending") or [])
+                if running:  # 4 h: stop the turn; the close turn runs once it has exited
+                    self.spawner.stop(sess["pid"], sess.get("pid_created"))
+                    sess["stopped_at"] = now
+                else:
+                    self._close_turn(role, sess, now)
                 why = "4 h of age" if age >= MAX_AGE_SECONDS else "15 min without the founder"
                 out.append(self._decide(role, "close", why, None, session_id=sess["id"]))
                 self.save()
@@ -400,9 +561,9 @@ class Waker:
         for role in ROLES:
             rs = self.state["roles"].get(role, {})
             sess = rs.get("session")
-            hand = registry_live(role, self.spawner.alive)
+            hand = registry_live(role, _any_pid_alive)
             roles[role] = {
-                "live": bool(hand) or bool(sess and self.spawner.alive(sess.get("pid"))),
+                "live": bool(hand) or bool(sess and self._alive(sess)),
                 "opened_by": "hand" if hand else ("wake" if sess else None),
                 "session_id": sess.get("id") if sess else None,
                 "topic": f"#{sess['stream']} › {sess['topic']}" if sess else None,
@@ -418,19 +579,23 @@ def _queue_gone(exc: ZulipError) -> bool:
     return "BAD_EVENT_QUEUE_ID" in str(exc) or "Bad event queue" in str(exc)
 
 
-def backfill(client: ZulipClient, after: int | None, newest: int = 20
-             ) -> list[tuple[dict[str, Any], list[str]]]:
-    """Messages after ``after`` that mention this bot or are DMs to it, in
-    order, with the flags a queue event would carry. What a lost queue missed.
-    ``after=None``: the newest ``newest`` of them instead (a first dry run)."""
+def backfill(client: ZulipClient, after: int | None, newest: int = 20,
+             home: str | None = None) -> list[tuple[dict[str, Any], list[str]]]:
+    """Messages after ``after`` that mention this bot or are DMs to it (or
+    are in its ``home`` stream), in order, with the flags a queue event would
+    carry. What a lost queue missed. ``after=None``: the newest ``newest`` of
+    them instead (a first dry run)."""
     found: dict[int, tuple[dict[str, Any], list[str]]] = {}
     if after is None:
         window = {"anchor": "newest", "num_before": newest, "num_after": 0}
     else:
         window = {"anchor": after, "include_anchor": "false",
                   "num_before": 0, "num_after": BACKFILL_LIMIT}
-    for narrow, flag in (([{"operator": "is", "operand": "mentioned"}], "mentioned"),
-                         ([{"operator": "is", "operand": "dm"}], None)):
+    narrows = [([{"operator": "is", "operand": "mentioned"}], "mentioned"),
+               ([{"operator": "is", "operand": "dm"}], None)]
+    if home:
+        narrows.append(([{"operator": "stream", "operand": home}], None))
+    for narrow, flag in narrows:
         payload = client._request("GET", "messages", {
             "narrow": narrow, "apply_markdown": "false", **window})
         for m in payload.get("messages", []):
@@ -444,7 +609,17 @@ def backfill(client: ZulipClient, after: int | None, newest: int = 20
     return pairs[-newest:] if after is None else pairs
 
 
-def open_queue(client: ZulipClient, rs: dict[str, Any]
+def topic_history(client: ZulipClient, stream: str, topic: str, n: int
+                  ) -> list[dict[str, Any]]:
+    """The newest ``n`` messages in a stream's topic, oldest first."""
+    payload = client._request("GET", "messages", {
+        "narrow": [{"operator": "stream", "operand": stream},
+                   {"operator": "topic", "operand": topic}],
+        "anchor": "newest", "num_before": n, "num_after": 0, "apply_markdown": "false"})
+    return sorted(payload.get("messages", []), key=lambda m: m["id"])
+
+
+def open_queue(client: ZulipClient, rs: dict[str, Any], home: str | None = None
                ) -> tuple[list[tuple[dict[str, Any], list[str]]], list[dict[str, Any]]]:
     """Resume the saved queue, or register a new one. Returns (backfilled
     messages, first events). A saved queue that expired is replaced and the
@@ -462,7 +637,7 @@ def open_queue(client: ZulipClient, rs: dict[str, Any]
     if rs.get("last_message_id") is None:
         rs["last_message_id"] = reg.get("max_message_id", 0)
         return [], []
-    return backfill(client, int(rs["last_message_id"])), []
+    return backfill(client, int(rs["last_message_id"]), home=home), []
 
 
 def _message_pairs(events: list[dict[str, Any]]):
@@ -492,6 +667,25 @@ def _poller(role: str, client: ZulipClient, queue_id: str, last: int,
             out.put((role, queue_id, events))
 
 
+def open_until_up(start: Callable[[str], None], role: str, wait: Callable[[], None],
+                  sleep: Callable[[float], None] = time.sleep) -> None:
+    """``start(role)`` until Zulip answers. ``wait`` runs on every retry (the
+    tick and the lock), so idle close and the 4 h cap still hold while Zulip
+    is down."""
+    while True:
+        try:
+            return start(role)
+        except (ZulipError, OSError, ValueError) as exc:
+            print(f"wake: {role} cannot open its queue ({exc}); retrying in 30 s")
+            wait()
+            sleep(30)
+
+
+def announce_skipped(cfg: dict[str, Any], waker: Waker) -> None:
+    for role, reason in cfg.get("skipped", {}).items():
+        waker._decide(role, "skip", reason, None)
+
+
 def run(cfg: dict[str, Any], waker: Waker) -> int:
     hook = _hook()
     lock = STATE_DIR / "wake.lock"
@@ -504,7 +698,7 @@ def run(cfg: dict[str, Any], waker: Waker) -> int:
 
     def start(role: str) -> None:
         rs = waker.role(role)
-        pairs, events = open_queue(clients[role], rs)
+        pairs, events = open_queue(clients[role], rs, AGENT["home_streams"].get(role))
         for msg, flags in pairs:
             waker.on_message(role, msg, flags)
         process_batch(waker, role, events)
@@ -513,16 +707,16 @@ def run(cfg: dict[str, Any], waker: Waker) -> int:
                                inbox)).start()
         print(f"wake: {role} listening (queue {rs['queue_id']}, event {rs['last_event_id']})")
 
+    def wait() -> None:
+        hook._hold_lock(lock)
+        waker.tick()
+
     def start_until_up(role: str) -> None:
         # Zulip down (it boots beside us in up.cmd, or restarted): keep trying.
-        while True:
-            try:
-                return start(role)
-            except (ZulipError, OSError, ValueError) as exc:
-                print(f"wake: {role} cannot open its queue ({exc}); retrying in 30 s")
-                hook._hold_lock(lock)
-                time.sleep(30)
+        open_until_up(start, role, wait)
 
+    waker.history = lambda role, stream, topic, n: topic_history(clients[role], stream, topic, n)
+    announce_skipped(cfg, waker)
     try:
         for role in clients:
             start_until_up(role)
@@ -552,11 +746,13 @@ def dry_run(cfg: dict[str, Any], waker: Waker) -> int:
     """What the waiting messages would do, from history after each role's
     ``last_message_id`` (the last 20 mentions and DMs on a first run).
     Registers nothing, saves nothing, spawns nothing."""
+    announce_skipped(cfg, waker)
     for role, (email, key) in cfg["bots"].items():
         client = ZulipClient(cfg["site"], email, key, timeout=30.0)
         rs = waker.role(role)
         after = rs.get("last_message_id")
-        pairs = backfill(client, None if after is None else int(after))
+        pairs = backfill(client, None if after is None else int(after),
+                         home=AGENT["home_streams"].get(role))
         for msg, flags in pairs:
             waker.on_message(role, msg, flags)
     waker.tick()
@@ -588,13 +784,13 @@ def main(argv: list[str] | None = None) -> int:
             print(f"error: {exc}", file=sys.stderr)
         return 2
     waker = Waker(cfg["founder_id"], STATE_DIR / "state.json", Spawner(),
-                  dry_run=args.dry_run, emit=emit)
+                  dry_run=args.dry_run, emit=emit, cwd=cfg["cwd"])
     try:
         if args.dry_run:
             return dry_run(cfg, waker)
         if args.json:
-            print(json.dumps({**waker.status(), "missing_bots": cfg["missing"]},
-                             ensure_ascii=False))
+            print(json.dumps({**waker.status(), "missing_bots": cfg["missing"],
+                              "skipped": cfg["skipped"]}, ensure_ascii=False))
             return 0
         return run(cfg, waker)
     except ZulipError as exc:
