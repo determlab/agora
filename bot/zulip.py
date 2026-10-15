@@ -74,8 +74,13 @@ def load_client(as_name: str | None) -> ZulipClient:
         prefix = "ZULIP_" + re.sub(r"[^A-Z0-9]+", "_", as_name.upper()).strip("_")
     email, api_key = get(f"{prefix}_EMAIL"), get(f"{prefix}_API_KEY")
     if not email or not api_key:
-        sys.exit(f"error: {prefix}_EMAIL and {prefix}_API_KEY are not set "
-                 f"(environment or bot/.env).")
+        msg = (f"error: {prefix}_EMAIL and {prefix}_API_KEY are not set "
+               f"(environment or bot/.env).")
+        if as_name and as_name.upper() == "PA":
+            msg += (f"\nAdd the two lines {prefix}_EMAIL=... and {prefix}_API_KEY=... to bot/.env; "
+                    f"`python bot/setup_streams.py` (the founder runs it) creates the PA bot and "
+                    f"prints them.")
+        sys.exit(msg)
     site = get("ZULIP_SITE", "http://zulip.localhost:8090")
     client = ZulipClient(site, email, api_key, timeout=30.0)
     client.email = email

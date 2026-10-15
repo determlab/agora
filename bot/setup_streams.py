@@ -62,7 +62,7 @@ import sys
 from zulip_client import ZulipClient, ZulipError
 
 # stream name -> is it a role stream (a bot belongs here) or the watchdog-only one
-STREAMS = ["cto", "cmo", "coo", "cpso", "status", "feature", "pool", "PM"]
+STREAMS = ["cto", "cmo", "coo", "cpso", "status", "feature", "pool", "PM", "pa"]
 
 # (bot full_name, short_name). short_name is also the stream the bot owns —
 # short_name becomes the email's local part (Zulip's own convention:
@@ -107,6 +107,15 @@ PM_ROLE_BOTS = {"COO", "CTO"}
 # #coo's stray-bot check know it.
 ALL_HANDS_STREAM = "All hands"
 PM_STREAMS = {PM_STREAM, ALL_HANDS_STREAM, "coo"}
+
+# ops#295: the founder's PA (his Claude Cowork session) is a bot of its own,
+# "PA", with its own stream and the founder's room, and nowhere else. It posts
+# and reads through `bot/zulip.py --as PA` (ZULIP_PA_EMAIL / ZULIP_PA_API_KEY).
+# A bot user, never a human account: no password, and the key goes only to the
+# gitignored bot/.env.
+PA_STREAM = "pa"
+PA_BOT = ("PA", "pa")
+PA_STREAMS = {PA_STREAM, ALL_HANDS_STREAM}
 
 
 def bot_streams(full_name: str, short_name: str) -> set[str]:
@@ -167,14 +176,19 @@ def ensure_stream(client: ZulipClient, name: str) -> tuple[int, str]:
     return streams[name], "created"
 
 
-def ensure_bot(client: ZulipClient, full_name: str, short_name: str) -> tuple[str, int, bool]:
+def ensure_bot(client: ZulipClient, full_name: str, short_name: str,
+               api_keys: dict[str, str] | None = None) -> tuple[str, int, bool]:
     """Returns (email, user_id, created). Matched by full_name — realm-
-    agnostic, unlike guessing the email domain from ZULIP_SITE."""
+    agnostic, unlike guessing the email domain from ZULIP_SITE. Zulip returns
+    a bot's api_key only when it is created: if ``api_keys`` is given, that
+    key is put in it under full_name (never printed or stored here)."""
     for u in client.list_users():
         if u.get("is_bot") and u["full_name"] == full_name:
             return u["email"], u["user_id"], False
     result = client.create_bot(full_name, short_name)
     user_id = result["user_id"]
+    if api_keys is not None and result.get("api_key"):
+        api_keys[full_name] = result["api_key"]
     for u in client.list_users():
         if u["user_id"] == user_id:
             return u["email"], user_id, True
@@ -201,7 +215,23 @@ def stream_id_to_name(client: ZulipClient, stream_id: int) -> str:
 # -- setup ------------------------------------------------------------------
 
 
+def print_env_lines(full_name: str, email: str, api_key: str | None) -> None:
+    """The two bot/.env lines for a bot's `zulip.py --as` (ops#295). Printed to
+    the terminal for the founder to paste, never written to a file: Zulip shows
+    a bot's key only on the run that makes the bot."""
+    prefix = "ZULIP_" + full_name.upper()
+    print("[setup]   add these two lines to bot/.env (gitignored):")
+    print(f"{prefix}_EMAIL={email}")
+    if api_key:
+        print(f"{prefix}_API_KEY={api_key}")
+    else:
+        # A comment, so pasting the block into .env cannot set a fake key.
+        print(f"# {prefix}_API_KEY: Zulip shows {full_name}'s key only on the run that makes the bot; "
+              f"copy it from Zulip Settings > Bots, or regenerate it there")
+
+
 def run_setup(client: ZulipClient) -> None:
+    api_keys: dict[str, str] = {}
     stream_ids: dict[str, int] = {}
     for name in STREAMS:
         stream_id, action = ensure_stream(client, name)
@@ -246,7 +276,8 @@ def run_setup(client: ZulipClient) -> None:
     # So is #pool (issue #80): he is who commands the pool daemon there.
     # So is #PM (issue #104): he reads the feature requests there too.
     me = client.own_user()
-    for name in (FEATURE_STREAM, POOL_STREAM, PM_STREAM):
+    # So is #pa (ops#295): the PA's own stream, which he reads and writes in.
+    for name in (FEATURE_STREAM, POOL_STREAM, PM_STREAM, PA_STREAM):
         subscribed = ensure_subscribed(client, stream_ids[name], me["email"], me["user_id"])
         print(
             f"[setup] founder ({me['email']}) in #{name}: "
@@ -254,10 +285,15 @@ def run_setup(client: ZulipClient) -> None:
         )
 
     for (full_name, short_name), own in (
-        (WATCHDOG_BOT, WATCHDOG_STREAMS), (POOL_BOT, {POOL_STREAM}), (PM_BOT, PM_STREAMS)
+        (WATCHDOG_BOT, WATCHDOG_STREAMS), (POOL_BOT, {POOL_STREAM}), (PM_BOT, PM_STREAMS),
+        (PA_BOT, PA_STREAMS),
     ):
-        email, user_id, created = ensure_bot(client, full_name, short_name)
+        email, user_id, created = ensure_bot(client, full_name, short_name, api_keys)
         print(f"[setup] bot {full_name}: {'created' if created else 'already exists'} ({email})")
+        if full_name == PA_BOT[0]:
+            # Right after create_bot: Zulip shows the key once, and a failed
+            # subscribe below must not lose it.
+            print_env_lines(full_name, email, api_keys.get(full_name))
         for name in sorted(own):
             subscribed = ensure_subscribed(client, lookup[name], email, user_id)
             print(
@@ -375,6 +411,24 @@ def run_check(client: ZulipClient) -> bool:
             print(f"[check]   subscriptions: WRONG — expected {sorted(PM_STREAMS)}, got {sorted(subscribed_to)}")
             ok = False
 
+    # The PA bot (ops#295): in exactly #pa and the founder's room. Missing is a
+    # FAIL: the founder's PA would have no voice in Zulip.
+    pa_name, _ = PA_BOT
+    pa = users.get(pa_name)
+    if pa is None:
+        print(f"[check] bot {pa_name}: MISSING — run bot/setup_streams.py to create it")
+        ok = False
+    else:
+        print(f"[check] bot {pa_name}: OK ({pa['email']})")
+        subscribed_to = [
+            name for name, sid in streams.items() if pa["user_id"] in client.stream_subscribers(sid)
+        ]
+        if set(subscribed_to) == PA_STREAMS:
+            print(f"[check]   subscriptions: OK ({sorted(subscribed_to)})")
+        else:
+            print(f"[check]   subscriptions: WRONG — expected {sorted(PA_STREAMS)}, got {sorted(subscribed_to)}")
+            ok = False
+
     # Per stream, over ALL bots in the realm (not only the ones named above),
     # since a stray bot is exactly the failure this check exists for:
     # #status holds the Watchdog bot and no other bot; a role stream holds its
@@ -397,6 +451,8 @@ def run_check(client: ZulipClient) -> bool:
             allowed.add(watchdog_id)
         if name in PM_STREAMS and pm is not None:      # ops#274: the PM bot also reads #coo
             allowed.add(pm["user_id"])
+        if name in PA_STREAMS and pa is not None:      # ops#295: the PA bot's own stream
+            allowed.add(pa["user_id"])
         counted = users.values()
         if name == POOL_STREAM:
             allowed |= {users[full]["user_id"] for full in POOL_ROLE_BOTS if full in users}
@@ -434,6 +490,12 @@ def run_check(client: ZulipClient) -> bool:
         elif name == PM_STREAM:
             if founder_id in subs:
                 print(f"[check] #{name}: OK (the founder, {sorted(PM_ROLE_BOTS)} and {pm_name} bots only)")
+            else:
+                print(f"[check] #{name}: FAIL — the founder is not subscribed to #{name}")
+                ok = False
+        elif name == PA_STREAM:
+            if founder_id in subs:
+                print(f"[check] #{name}: OK (the founder and the {pa_name} bot only)")
             else:
                 print(f"[check] #{name}: FAIL — the founder is not subscribed to #{name}")
                 ok = False

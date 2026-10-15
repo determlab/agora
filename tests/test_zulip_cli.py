@@ -309,3 +309,14 @@ def test_run_as_a_script_without_credentials_names_what_is_missing(tmp_path):
     assert done.returncode != 0
     assert done.stdout == ""
     assert "ZULIP_NOBODY_TEST_EMAIL" in done.stderr
+
+
+def test_as_pa_without_a_key_says_which_lines_to_add_and_the_setup_command(cli, monkeypatch):
+    """ops#295. The cli fixture points DOTENV at a missing file."""
+    for k in ("ZULIP_PA_EMAIL", "ZULIP_PA_API_KEY"):
+        monkeypatch.delenv(k, raising=False)
+    with pytest.raises(SystemExit) as exc:
+        cli.load_client("PA")
+    msg = str(exc.value)
+    assert "ZULIP_PA_EMAIL" in msg and "ZULIP_PA_API_KEY" in msg
+    assert "bot/.env" in msg and "bot/setup_streams.py" in msg
