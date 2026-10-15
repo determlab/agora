@@ -29,7 +29,7 @@ the status/roadmap tab, retiring the existing 8765 server.
 | `listener.py` | the actual bot: register once, long-poll `/json/events` forever, echo every non-bot message back with the event id it resumed from. |
 | `durability_test.py` | the proof: a real 3-minute gap with no polling, messages sent throughout by a second thread, then resume and check nothing was lost. |
 | `test_resume.py` | unit tests for `resume.py` (mocked data, no live server — `pytest bot/test_resume.py`). |
-| `wake.py` | a founder @mention of a role bot opens a fresh role session, which closes when idle (ops#293). See "Wake" below. |
+| `wake.py` | a founder @mention of a role bot (or a message in `#pa`) opens a fresh role session, which closes when idle (ops#293). See "Wake" below. |
 | `setup_streams.py` | idempotent: creates the streams and bots below, and subscribes each bot to its own stream only (plus `#feature` for the CTO and COO bots). `--check` verifies without creating and exits non-zero if anything is missing or wrong. |
 
 ## Streams and topics (issue #40)
@@ -252,8 +252,9 @@ for it.
 Write `@**CTO** <question>` in any stream (or DM the CTO bot) and a CTO
 session opens in the ops repo on its own, answers in that stream and topic,
 and closes when you go quiet. Same for `@**COO**`, `@**PM**`, `@**CMO**`,
-`@**CPSO**`. `tools/up.cmd` in ops starts it next to the chat server;
-`down.cmd` stops it.
+`@**CPSO**`, and `@**PA**` — the PA also answers any message of yours in
+`#pa`, untagged, and works in `PA_DIR` instead of the ops repo.
+`tools/up.cmd` in ops starts it next to the chat server; `down.cmd` stops it.
 
 ```
 python bot/wake.py                    # run: one long-poll per role bot, forever
@@ -262,47 +263,58 @@ python bot/wake.py --json             # status: which role sessions are live, la
 ```
 
 `--dry-run --json` prints one line per message:
-`{"role":"CTO","action":"spawn"|"skip"|"queue"|"resume","reason":...,"message_id":...}`.
+`{"role":"CTO","action":"spawn"|"deliver"|"queue"|"skip","reason":...,"message_id":...}`.
 
 **Needs in `bot/.env`:** `FOUNDER_ZULIP_ID` (the founder's numeric Zulip user
-id — the only sender that triggers anything; set by hand, never inferred) and
-`ZULIP_<ROLE>_EMAIL` / `ZULIP_<ROLE>_API_KEY` for each role bot. A role with
-no credentials is not listened for, and says so at start.
+id — the only sender that triggers anything; set by hand, never inferred),
+`ZULIP_<ROLE>_EMAIL` / `ZULIP_<ROLE>_API_KEY` for each role bot, and
+`PA_DIR` for the PA (without it a PA call is skipped with that fix). A role
+with no credentials is not listened for, and says so at start.
 
-**What it does with a founder mention or DM:**
+**What it does with a founder message:**
 
 | situation | action |
 |---|---|
 | sender is not `FOUNDER_ZULIP_ID` (a bot, anyone else) | `skip`, logged |
 | a session for that role you opened by hand is alive (Claude Code's registry names it after the role) | `skip` — its Stop-hook wait delivers it |
-| no open conversation for the role | `spawn`: `claude -p --model <opus or sonnet> --session-id <new uuid>` in `C:\PlayGround\ops` (`WAKE_OPS_DIR`) |
-| conversation open, its turn has ended | `resume`: `claude -p --resume <uuid>` |
-| conversation open, a turn is still running | `queue`; delivered as one resume when the turn ends |
+| a mention or DM, no open session for the role | `spawn`: `claude -p --model <opus or sonnet> --input-format stream-json …` in `C:\PlayGround\ops` (`WAKE_OPS_DIR`), or `PA_DIR` |
+| the role's session is open: a new mention or DM, or any message of yours in its topic (no tag needed) | `deliver`: written to the same process; resets the idle timer |
+| the session is closing | `queue`; a fresh session opens with it once the close is done |
 
-The command lives in one dict, `AGENT` at the top of `wake.py` — swap
-`claude` for another CLI there. Models follow ops CLAUDE.md: COO and CTO on
-Opus, PM, CMO and CPSO on Sonnet. Each role's output goes to
-`bot/.wake/<ROLE>.log`; state (queue ids, last event and message ids, open
+**One live process per role, never `--resume`** (ops#293 4b). Messages go to
+it on stdin, one stream-json line each, while it lives. A fresh session's
+first prompt is your message plus the topic's last 20 messages — which hold
+the previous session's close line, so that line and the file or issue it names
+are the handoff. The command lives in one dict, `AGENT` at the top of
+`wake.py` — swap `claude` for another CLI there. Models follow ops CLAUDE.md:
+COO and CTO on Opus; PM, CMO, CPSO and PA on Sonnet. Each role's output goes
+to `bot/.wake/<ROLE>.log`; state (queue ids, last event and message ids, open
 sessions) is `bot/.wake/state.json`, gitignored.
 
-**Idle close:** 15 minutes after your last message to that role, or at 4 hours
-of age (a running turn is stopped), the session gets one last turn: post one
-line in the topic — what was agreed and where it is written — then it is
-forgotten. The next mention opens a fresh one.
+**Idle close:** 15 minutes after your last message to that session (once its
+turn has ended), or at 4 hours of age, the session is asked to post one line
+in the topic — what was agreed and where it is written — and its stdin is
+closed. A close still running 2 minutes later is stopped. The next mention
+opens a fresh one.
 
-**Restart:** the saved queue is resumed from `last_event_id`; if Zulip expired
-it, a new queue is registered and the gap is read from history after the last
-handled message id. A message is acted on once: never re-spawned, never
-skipped. On the very first start only new messages count.
+**Restart:** the saved Zulip queue is resumed from `last_event_id`; if Zulip
+expired it, a new queue is registered and the gap is read from history after
+the last handled message id. A message is acted on once: never twice, never
+skipped. On the very first start only new messages count. Sessions started by
+an earlier `wake.py` are not ours any more: their stdin is gone, so they end
+on their own; they are never written to or stopped (a saved pid could belong
+to anything by then). Your next message opens a fresh one. While Zulip is
+down the 15 min and 4 h limits still run.
 
 **Security:** only `FOUNDER_ZULIP_ID` triggers (compared by id, not name).
-The message text goes into the prompt **on stdin**, never onto a command line;
-the argv is a fixed list with no shell, and its only placeholders are the
-model and a uuid `wake.py` made. No skip-permissions flag and no new
-permissions: the session runs under the ops repo's own settings, so a tool the
-ops settings do not allow is refused there. No password, no human account.
-A DM is answered in the role's own stream, topic `direct message`
-(`zulip.py send` posts to streams only).
+The message text goes to the process **on stdin**, never onto a command line;
+the argv is a fixed list with no shell, and its only placeholder is the
+model. No skip-permissions flag and no new permissions: the session runs
+under its working folder's own settings, so a tool those settings do not
+allow is refused there — including `python bot/zulip.py send`, which the
+session needs to answer. No password, no human account. A DM is answered in
+the role's own stream, topic `direct message` (`zulip.py send` posts to
+streams only).
 
 ## Memory limits (issue #57)
 
