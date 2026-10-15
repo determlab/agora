@@ -225,8 +225,9 @@ def print_env_lines(full_name: str, email: str, api_key: str | None) -> None:
     if api_key:
         print(f"{prefix}_API_KEY={api_key}")
     else:
-        print(f"{prefix}_API_KEY=<{full_name}'s key: Zulip shows it only on the first run; "
-              f"copy it from Zulip Settings > Bots, or regenerate it there>")
+        # A comment, so pasting the block into .env cannot set a fake key.
+        print(f"# {prefix}_API_KEY: Zulip shows {full_name}'s key only on the run that makes the bot; "
+              f"copy it from Zulip Settings > Bots, or regenerate it there")
 
 
 def run_setup(client: ZulipClient) -> None:
@@ -289,6 +290,10 @@ def run_setup(client: ZulipClient) -> None:
     ):
         email, user_id, created = ensure_bot(client, full_name, short_name, api_keys)
         print(f"[setup] bot {full_name}: {'created' if created else 'already exists'} ({email})")
+        if full_name == PA_BOT[0]:
+            # Right after create_bot: Zulip shows the key once, and a failed
+            # subscribe below must not lose it.
+            print_env_lines(full_name, email, api_keys.get(full_name))
         for name in sorted(own):
             subscribed = ensure_subscribed(client, lookup[name], email, user_id)
             print(
@@ -304,8 +309,6 @@ def run_setup(client: ZulipClient) -> None:
                     f"#{other_name} — expected only {sorted(own)}. Not "
                     f"removing automatically; a human should look at this."
                 )
-        if full_name == PA_BOT[0]:
-            print_env_lines(full_name, email, api_keys.get(full_name))
 
 
 # -- check --------------------------------------------------------------

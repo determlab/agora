@@ -439,6 +439,24 @@ def test_setup_prints_the_two_env_lines_but_the_key_only_when_created(capsys):
     second = capsys.readouterr().out
     assert "ZULIP_PA_EMAIL=pa-bot@x" in second
     assert "key-for-pa" not in second
+    # the rerun's key line is a comment, so it cannot be pasted as a real key
+    assert not any(l.startswith("ZULIP_PA_API_KEY") for l in second.splitlines())
+    assert "# ZULIP_PA_API_KEY" in second
+
+
+def test_setup_prints_the_key_before_subscribing_so_a_failed_subscribe_keeps_it(capsys):
+    z = FakeZulip()
+    real = z.subscribe
+
+    def boom(stream, principals):
+        if "pa-bot@x" in principals:
+            raise RuntimeError("subscribe failed")
+        return real(stream, principals)
+
+    z.subscribe = boom
+    with pytest.raises(RuntimeError):
+        setup_streams.run_setup(z)
+    assert "ZULIP_PA_API_KEY=key-for-pa" in capsys.readouterr().out
 
 
 def test_setup_then_check_passes_with_the_pa_bot(capsys):
