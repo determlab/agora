@@ -2575,3 +2575,86 @@ def test_pairing_a_phone_is_a_real_round_trip_through_the_server(tmp_path):
     finally:
         run.stop()
 
+
+
+# -- dictation (ops#323)
+
+# A DOM and a recogniser, just enough for setupDictation(). ``window`` carries
+# (or lacks) the Speech API, exactly the switch the page reads.
+DICTATION_STUB = """
+const els = {};
+function mk(id, extra) { return els[id] = Object.assign({
+  id, value: "", hidden: true, listeners: {}, attrs: {}, text: "",
+  classList: { toggle() {} },
+  setAttribute(k, v) { this.attrs[k] = v; },
+  addEventListener(t, f) { this.listeners[t] = f; }}, extra); }
+mk("mic-btn"); mk("compose", {hidden: false}); mk("send-error");
+const $ = (id) => els[id];
+const sent = [];
+$("send-btn") || mk("send-btn");
+els["send-btn"].listeners.click = () => sent.push(els.compose.value);
+function fitCompose() {}
+function sendError(m) { els["send-error"].text = m; }
+let made = [];
+class FakeSR { constructor() { made.push(this); }
+  start() { this.started = true; } stop() { this.onend && this.onend(); } }
+const res = (t, isFinal) => ({isFinal, 0: {transcript: t}});
+"""
+
+
+def test_the_mic_button_is_in_the_compose_row_and_starts_hidden():
+    m = _markup()
+    [mic] = [a for t, a in m.elements if a.get("id") == "mic-btn"]
+    assert "hidden" in mic and mic["type"] == "button"
+    assert "Google" in mic["title"], "the privacy note belongs in the tooltip"
+
+
+def test_the_mic_button_shows_only_when_the_speech_api_exists():
+    out = _js(("setupDictation",), """
+      global.window = {};
+      setupDictation();
+      out.without = $("mic-btn").hidden;
+      global.window = {webkitSpeechRecognition: FakeSR};
+      setupDictation();
+      out.prefixed = $("mic-btn").hidden;
+      els["mic-btn"].hidden = true;
+      global.window = {SpeechRecognition: FakeSR};
+      setupDictation();
+      out.standard = $("mic-btn").hidden;
+    """, DICTATION_STUB)
+    assert out == {"without": True, "prefixed": False, "standard": False}
+
+
+def test_the_transcript_lands_in_the_compose_box_in_hebrew_and_is_never_sent():
+    out = _js(("setupDictation",), """
+      global.window = {SpeechRecognition: FakeSR};
+      $("compose").value = "היי";
+      setupDictation();
+      $("mic-btn").listeners.click();
+      const r = made[0];
+      out.lang = r.lang; out.interim = r.interimResults; out.started = r.started;
+      r.onresult({resultIndex: 0, results: [res("מה", false)]});
+      out.live = $("compose").value;
+      r.onresult({resultIndex: 0, results: [res("מה שלומך", true)]});
+      out.final = $("compose").value;
+      r.onend();
+      out.sent = sent;
+    """, DICTATION_STUB)
+    assert out["lang"] == "he-IL" and out["interim"] and out["started"]
+    assert out["live"] == "היי מה"
+    assert out["final"] == "היי מה שלומך"
+    assert out["sent"] == [], "dictation must never send"
+
+
+def test_a_denied_microphone_says_so_and_a_second_press_stops():
+    out = _js(("setupDictation",), """
+      global.window = {SpeechRecognition: FakeSR};
+      setupDictation();
+      $("mic-btn").listeners.click();
+      made[0].onerror({error: "not-allowed"});
+      out.err = $("send-error").text;
+      $("mic-btn").listeners.click();   // stops (onend clears)
+      $("mic-btn").listeners.click();   // a fresh recogniser
+      out.n = made.length;
+    """, DICTATION_STUB)
+    assert out["err"] and out["n"] == 2
