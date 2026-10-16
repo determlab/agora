@@ -248,20 +248,22 @@ dialog .buttons { display: flex; justify-content: flex-end; gap: .5rem; margin-t
 @media (max-width: 700px) {
   body { padding: 0; }
   #app { grid-template-columns: 1fr; height: 100vh; height: 100dvh; border: 0; border-radius: 0;
-    padding-top: env(safe-area-inset-top, 0px); }
+    padding-top: env(safe-area-inset-top, 0px); --top-h: 3.75rem; --switch-w: 7.5rem; }
   #side { position: absolute; top: env(safe-area-inset-top, 0px); bottom: 0; right: 0; width: 16rem; z-index: 5; transform: translateX(100%);
     transition: transform .15s; box-shadow: 0 0 12px rgba(0, 0, 0, .3); }
   #app.side-open #side { transform: none; }
   #menu-btn { display: inline-block; }
   /* ops#325: one top bar row — menu, the room name, the live dot (its text
      is the dot's title); members, bell and theme sit in the side menu
-     (placeTools), and the chat / board switch sits at the bar's end. */
-  #top { min-height: 3.75rem; padding: .5rem; padding-inline-end: 8rem; }
+     (placeTools), and the chat / board switch sits at the bar's end.
+     --top-h and --switch-w (set on #app above) tie the bar, the switch and the board heading
+     together: change them here, not the rules below. */
+  #top { min-height: var(--top-h); padding: .5rem; padding-inline-end: calc(var(--switch-w) + .5rem); }
   #live-text { display: none; }
   #view-switch { position: absolute; z-index: 4; margin: 0; inset-inline-end: .5rem;
-    top: calc(env(safe-area-inset-top, 0px) + 1.875rem); transform: translateY(-50%); }
+    top: calc(env(safe-area-inset-top, 0px) + var(--top-h) / 2); transform: translateY(-50%); }
   #view-switch button { padding: 3px 8px; }
-  .dhead h2 { flex: 1; min-height: 3.25rem; display: flex; align-items: center; margin-inline-end: 7.5rem; }
+  .dhead h2 { flex: 1; min-height: 3.25rem; display: flex; align-items: center; margin-inline-end: var(--switch-w); }
 }
 /* A2 (#82), revised by the founder on agora#100: #dash (the human view of
    GET /api/v1/dashboard) and chat are never shown together. #view-switch
@@ -2624,6 +2626,7 @@ function closeTopic() {
   S.msgs = [];
   S.shown = new Set();
   S.newFrom = null;
+  S.unfolded.clear();
   $("messages").replaceChildren();
   $("topic-title").textContent = "בחרו נושא";
   $("members-btn").disabled = true;
@@ -2749,12 +2752,13 @@ function renderMessages() {
   }
   box.replaceChildren(...nodes);
   // A body that is "long" by count but fits in 6 lines at this width needs no button.
-  for (const b of box.querySelectorAll(".body.folded")) {
-    if (b.clientHeight && b.scrollHeight <= b.clientHeight + 1) {
-      b.classList.remove("folded");
-      const more = b.closest(".bubble").querySelector(".more-btn");
-      if (more) more.remove();
-    }
+  // Measure every body first, then unfold: one reflow, not one per message.
+  const fits = [...box.querySelectorAll(".body.folded")]
+    .filter((b) => b.clientHeight && b.scrollHeight <= b.clientHeight + 1);
+  for (const b of fits) {
+    b.classList.remove("folded");
+    const more = b.closest(".bubble").querySelector(".more-btn");
+    if (more) more.remove();
   }
 }
 

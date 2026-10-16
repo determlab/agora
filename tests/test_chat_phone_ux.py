@@ -155,6 +155,32 @@ def test_325_a_long_message_that_fits_in_6_lines_drops_its_button():
     assert got == {"folded": 1, "buttons": 1}
 
 
+def test_325_folding_measures_every_body_before_it_unfolds_any():
+    # CTO nit on PR 138: a read after a class change forces a reflow per message.
+    got = _js(("el", "dayLabel", "renderMessages"), """
+      renderMessages();
+      out.log = log.join("");
+    """, prelude=FAKE_DOM + """
+      const log = [];
+      function messageNode(m) {
+        const n = document.createElement("div");
+        const bubble = document.createElement("div");
+        bubble.className = "bubble";
+        const body = document.createElement("div");
+        let cls = "body folded";
+        Object.defineProperty(body, "className", {
+          get: () => cls, set: (v) => { if (v !== cls) log.push("w"); cls = v; }});
+        Object.defineProperty(body, "clientHeight", {get: () => { log.push("r"); return 87; }});
+        Object.defineProperty(body, "scrollHeight", {get: () => { log.push("r"); return 60; }});
+        bubble.append(body);
+        n.append(bubble);
+        return n;
+      }
+      const S = {newFrom: null, msgs: [1, 2, 3].map((id) => ({id, timestamp: id, sender_id: 2}))};
+    """)
+    assert re.fullmatch(r"r+w{3}", got["log"]), got["log"]
+
+
 # -- 2. no action waits for a hover; an archive by a stray tap is undone
 
 
@@ -292,6 +318,7 @@ def test_325_a_topic_with_7_unread_opens_with_the_new_line_at_the_top():
     assert open_.index("S.newFrom = firstNewId(got.messages, unreadN") < open_.index("addMessages(got.messages, true)")
     assert open_.index("addMessages(got.messages, true)") < open_.index("scrollToNew()")
     assert "S.newFrom = null" in _function("closeTopic")
+    assert "S.unfolded.clear()" in _function("closeTopic")  # no session-long growth
     assert "var(--accent)" in _rule(".new-line")
 
 
@@ -304,6 +331,12 @@ def test_325_under_700px_the_top_bar_is_one_row_with_room_for_the_name():
     switch = _rule("#view-switch", small)
     assert "position: absolute" in switch and "inset-inline-end" in switch
     assert "padding-inline-end" in _rule("#top", small)
+    # The bar height and the switch width are set once and drive every coupled rule.
+    assert "--top-h: 3.75rem" in _rule("#app", small) and "--switch-w: 7.5rem" in _rule("#app", small)
+    assert "var(--top-h)" in _rule("#top", small) and "var(--switch-w)" in _rule("#top", small)
+    assert "var(--top-h) / 2" in switch
+    assert "var(--switch-w)" in _rule(".dhead h2", small)
+    assert not re.search(r"1\.875rem|8rem|7\.5rem;", _rule("#top", small) + switch + _rule(".dhead h2", small))
     got = _js(("placeTools",), """
       for (const id of ["top", "side-tools", "members-btn", "notify-btn", "theme-btn"]) $(id).id = id;
       placeTools();
