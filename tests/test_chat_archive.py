@@ -187,6 +187,25 @@ def test_an_archived_topics_messages_never_count_toward_the_stream_bubble(arc):
     assert admin("GET", "unread")[1]["streams"][0]["unread"] == 3
 
 
+
+def test_322_an_archived_topics_messages_show_in_the_room_but_never_count_as_unread(arc):
+    """Rooms (ops#322) read a stream across its old topics: a topic archived
+    before rooms reappears in the room view, its rows unchanged, and its
+    messages still stay out of the unread count."""
+    admin, cto, sid, store = arc["admin"], arc["cto"], arc["sid"], arc["store"]
+    assert _send(cto, "old", "from an archived topic")[0] == 200
+    assert admin("POST", f"streams/{sid}/archived_topics", topic="old")[0] == 200
+    assert _send(cto, "chat", "in the room")[0] == 200
+    before = store.q("SELECT id, subject, content FROM messages ORDER BY id")
+    status, body = admin("GET", "messages", anchor="newest", num_before=10, num_after=0,
+                         narrow=json.dumps([{"operator": "channel", "operand": "feature"}]))
+    assert status == 200, body
+    assert [m["content"] for m in body["messages"]] == ["from an archived topic", "in the room"]
+    [feature] = admin("GET", "unread")[1]["streams"]
+    assert feature["unread"] == 1 and [t["name"] for t in feature["topics"]] == ["chat"]
+    assert [tuple(r) for r in store.q("SELECT id, subject, content FROM messages ORDER BY id")] \
+        == [tuple(r) for r in before]
+
 def test_mark_stream_as_read_clears_every_topics_bubble_at_once(arc):
     admin, cto, sid = arc["admin"], arc["cto"], arc["sid"]
     _send(cto, "t1", "one")

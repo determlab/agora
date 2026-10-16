@@ -1091,3 +1091,124 @@ def test_322_a_saved_session_with_an_unsafe_room_closes_without_a_hint(wake, tmp
     [d] = w.tick()  # idle: the close turn would need a hint; it is refused, not crashed
     assert d["action"] == "error" and "not safe text" in d["reason"]
     assert w.spawner.started == [] and w.role("CTO")["session"] is None
+
+
+# -- ops#322: everyone in a room reads everything ------------------------------
+
+def _room(rows):
+    """A room's history that grows as the test posts: the fetch reads it live."""
+    def fetch(role, room, n):
+        return [m for m in rows if m.get("display_recipient") == room][-n:]
+    return fetch
+
+
+def bot_msg(i, name, content, stream="All hands"):
+    m = msg(i, content, sender=200 + i, stream=stream)
+    m["sender_full_name"] = name
+    return m
+
+
+def test_322_a_resume_carries_another_bots_post_marked(wake, tmp_path):
+    rows = []
+    w = make(wake, tmp_path, members=crowd)
+    w.history = _room(rows)
+    first = msg(10, "@**COO** plan the week", stream="All hands")
+    rows.append(first)
+    assert w.on_message("COO", first, ["mentioned"])["action"] == "spawn"
+    w.spawner.finish_all()
+    rows.append(bot_msg(11, "COO", "COO: here is the plan"))  # its own post
+    cto = bot_msg(12, "CTO", "CTO: ship it; also, " + TRICKY)
+    rows.append(cto)
+    # the CTO bot's post wakes nobody and does not move the idle timer
+    before = w.role("COO")["session"]["last_founder_at"]
+    w.clock.t += 60
+    assert w.on_message("COO", cto, [])["action"] == "skip"
+    assert w.role("COO")["session"]["last_founder_at"] == before
+    nxt = msg(13, "@**COO** agreed?", stream="All hands")
+    rows.append(nxt)
+    assert w.on_message("COO", nxt, ["mentioned"])["action"] == "resume"
+    argv, prompt, _ = w.spawner.started[-1]
+    assert f"- CTO {wake.NOT_FOUNDER}: CTO: ship it" in prompt
+    assert "here is the plan" not in prompt  # its own post is not echoed back
+    assert prompt.index("ship it") < prompt.index("Message from Founder")
+    assert not any("ship" in a or "rm -rf" in a for a in argv)  # stdin only
+    assert w.role("COO")["session"]["seen_id"] == 13
+    # the next turn does not repeat it
+    w.spawner.finish_all()
+    last = msg(14, "@**COO** thanks", stream="All hands")
+    rows.append(last)
+    w.on_message("COO", last, ["mentioned"])
+    assert "ship it" not in w.spawner.started[-1][1]
+
+
+def test_322_the_founders_untagged_line_reaches_the_open_session_next_turn(wake, tmp_path):
+    rows = []
+    w = make(wake, tmp_path, members=crowd)
+    w.history = _room(rows)
+    first = msg(10, "@**CTO** look at the gate", stream="All hands")
+    rows.append(first)
+    w.on_message("CTO", first, ["mentioned"])
+    # while the turn runs: an untagged founder line, then a tagged one that queues
+    untagged = msg(11, "and keep it under 50 lines", stream="All hands")
+    rows.append(untagged)
+    assert w.on_message("CTO", untagged, [])["action"] == "skip"
+    tagged = msg(12, "@**CTO** done?", stream="All hands")
+    rows.append(tagged)
+    assert w.on_message("CTO", tagged, ["mentioned"])["action"] == "queue"
+    w.spawner.finish_all()
+    [r] = w.tick()
+    assert r["action"] == "resume"
+    prompt = w.spawner.started[-1][1]
+    assert "- Founder: and keep it under 50 lines" in prompt  # the founder's: unmarked
+    assert prompt.index("under 50 lines") < prompt.index("done?")
+    assert w.role("CTO")["session"]["seen_id"] == 12
+
+
+def test_322_the_catch_up_is_capped_and_names_the_read_since_command(wake, tmp_path):
+    rows = []
+    w = make(wake, tmp_path, members=crowd)
+    w.history = _room(rows)
+    first = msg(10, "@**PM** status", stream="All hands")
+    rows.append(first)
+    w.on_message("PM", first, ["mentioned"])
+    w.spawner.finish_all()
+    rows += [bot_msg(i, "CTO", f"chatter {i}") for i in range(11, 41)]
+    nxt = msg(41, "@**PM** and now?", stream="All hands")
+    rows.append(nxt)
+    w.on_message("PM", nxt, ["mentioned"])
+    prompt = w.spawner.started[-1][1]
+    assert prompt.count(wake.NOT_FOUNDER) == wake.HISTORY_MESSAGES
+    assert "chatter 40" in prompt and "chatter 21\n" in prompt and "chatter 20\n" not in prompt
+    assert ('--as PM read --room "All hands" --since 10 --json') in prompt
+
+
+def test_322_a_session_saved_before_seen_id_resumes_without_a_catch_up(wake, tmp_path):
+    rows = [msg(5, "@**CTO** old"), bot_msg(6, "COO", "noise", stream="cto")]
+    w = make(wake, tmp_path)
+    w.history = _room(rows)
+    w.on_message("CTO", rows[0], ["mentioned"])
+    w.spawner.finish_all()
+    del w.role("CTO")["session"]["seen_id"]
+    w.on_message("CTO", msg(7, "next"), [])
+    assert "noise" not in w.spawner.started[-1][1]
+    assert w.role("CTO")["session"]["seen_id"] == 7
+
+
+def test_322_the_spawn_handoff_marks_lines_not_from_the_founder(wake, tmp_path):
+    rows = [bot_msg(5, "CTO", "CTO: closing line", stream="cto"), msg(6, "hi")]
+    w = make(wake, tmp_path)
+    w.history = _room(rows)
+    w.on_message("CTO", rows[-1], [])
+    prompt = w.spawner.started[0][1]
+    assert f"- CTO {wake.NOT_FOUNDER}: CTO: closing line" in prompt
+
+
+def test_322_hand_opened_session_log_says_when_its_hook_will_not_deliver(wake, tmp_path,
+                                                                          monkeypatch):
+    monkeypatch.setattr(wake, "registry_live", lambda role, alive: 4242)
+    w = make(wake, tmp_path)  # a one-bot room that is not the role's own
+    d = w.on_message("CTO", msg(10, "untagged", stream="design"), [])
+    assert d["action"] == "skip" and "not delivered" in d["reason"]
+    d = w.on_message("CTO", msg(11, "@**CTO** tagged", stream="design"), ["mentioned"])
+    assert "its hook delivers the message" in d["reason"]
+    assert w.spawner.started == []

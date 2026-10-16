@@ -37,7 +37,12 @@ milestones in the history, not tagged releases.
   `invite`, refused until ops#321. `bot/wake.py`: an invite never wakes; a
   one-bot room wakes on any founder message, a room with several role bots
   only on `@**ROLE**`; a non-member never wakes; a removal closes the
-  session there; the hint is `send --room`.
+  session there; the hint is `send --room`. Everyone in a room reads
+  everything: a resumed session first gets the room's messages since its last
+  turn (other bots' and the founder's untagged ones, at most 20, then a
+  `read --since` command), each line not from the founder marked as data.
+  **Behavior change:** `#coo` (COO + PM) and `All hands` hold two or more
+  role bots, so an untagged line there no longer wakes the COO: write `@**COO**`.
 - `#feature`, a private Zulip stream for the big-feature path with exactly
   the founder, the `CTO` bot and the `COO` bot in it — the one exception to
   "each bot in its own stream only". `bot/setup_streams.py` creates it
