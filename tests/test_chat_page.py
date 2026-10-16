@@ -2585,19 +2585,24 @@ DICTATION_STUB = """
 const els = {};
 function mk(id, extra) { return els[id] = Object.assign({
   id, value: "", hidden: true, listeners: {}, attrs: {}, text: "",
-  classList: { toggle() {} },
+  classes: [],
+  classList: { toggle(c, on) { const me = this.owner; me.classes = me.classes.filter((x) => x !== c);
+    if (on) me.classes.push(c); } },
   setAttribute(k, v) { this.attrs[k] = v; },
   addEventListener(t, f) { this.listeners[t] = f; }}, extra); }
-mk("mic-btn"); mk("compose", {hidden: false}); mk("send-error");
+mk("mic-btn"); mk("compose", {hidden: false}); mk("send-error"); mk("mic-note");
+for (const e of Object.values(els)) e.classList.owner = e;
 const $ = (id) => els[id];
+// Every road out of the page: the page's own send() and the network itself.
 const sent = [];
-$("send-btn") || mk("send-btn");
-els["send-btn"].listeners.click = () => sent.push(els.compose.value);
+function send() { sent.push(["send", els.compose.value]); }
+global.fetch = (...a) => { sent.push(["fetch", a]); return new Promise(() => {}); };
 function fitCompose() {}
 function sendError(m) { els["send-error"].text = m; }
 let made = [];
+let START_FAILS = false;
 class FakeSR { constructor() { made.push(this); }
-  start() { this.started = true; } stop() { this.onend && this.onend(); } }
+  start() { if (START_FAILS) throw new Error("InvalidStateError"); this.started = true; } stop() { this.onend && this.onend(); } }
 const res = (t, isFinal) => ({isFinal, 0: {transcript: t}});
 """
 
@@ -2658,3 +2663,55 @@ def test_a_denied_microphone_says_so_and_a_second_press_stops():
       out.n = made.length;
     """, DICTATION_STUB)
     assert out["err"] and out["n"] == 2
+
+
+def test_the_mic_button_is_a_44px_tap_target():
+    # 2.6rem at a 14px root is 41.6px, under the 44px a finger needs.
+    rule = _rule("#mic-btn")
+    assert "min-width: 44px" in rule and "min-height: 44px" in rule, rule
+
+
+def test_listening_shows_on_the_button_and_clears_when_it_ends():
+    out = _js(("setupDictation",), """
+      global.window = {SpeechRecognition: FakeSR};
+      setupDictation();
+      out.before = [$("mic-btn").attrs["aria-pressed"] || "false", $("mic-btn").classes.slice()];
+      $("mic-btn").listeners.click();
+      out.during = [$("mic-btn").attrs["aria-pressed"], $("mic-btn").classes.slice()];
+      made[0].onend();
+      out.after = [$("mic-btn").attrs["aria-pressed"], $("mic-btn").classes.slice()];
+    """, DICTATION_STUB)
+    assert out["before"] == ["false", []]
+    assert out["during"] == ["true", ["on"]]
+    assert out["after"] == ["false", []]
+
+
+def test_a_recogniser_that_will_not_start_says_so():
+    out = _js(("setupDictation",), """
+      global.window = {SpeechRecognition: FakeSR};
+      START_FAILS = true;
+      setupDictation();
+      $("mic-btn").listeners.click();
+      out.err = $("send-error").text;
+      out.pressed = $("mic-btn").attrs["aria-pressed"];
+      START_FAILS = false;
+      $("mic-btn").listeners.click();   // the dead press left nothing behind
+      out.n = made.length;
+    """, DICTATION_STUB)
+    assert out == {"err": "ההקלטה לא התחילה.", "pressed": "false", "n": 2}
+
+
+def test_the_privacy_note_is_a_visible_line_when_the_mic_is_offered():
+    m = _markup()
+    [note] = [a for t, a in m.elements if a.get("id") == "mic-note"]
+    assert "hidden" in note, "no mic, no note"
+    assert "לספק הדפדפן" in PAGE.read_text(encoding="utf-8").split('id="mic-note"')[1].split("</p>")[0]
+    out = _js(("setupDictation",), """
+      global.window = {};
+      setupDictation();
+      out.without = $("mic-note").hidden;
+      global.window = {SpeechRecognition: FakeSR};
+      setupDictation();
+      out.with = $("mic-note").hidden;
+    """, DICTATION_STUB)
+    assert out == {"without": True, "with": False}
