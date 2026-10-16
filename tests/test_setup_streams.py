@@ -50,7 +50,7 @@ class FakeZulip:
     def create_bot(self, full_name, short_name):
         uid = self._id()
         self.users.append({"user_id": uid, "full_name": full_name, "email": f"{short_name}-bot@x", "is_bot": True})
-        return {"user_id": uid}
+        return {"user_id": uid, "api_key": f"key-for-{short_name}"}
 
     def subscribe(self, stream, principals):
         sid = self.streams[stream]["stream_id"]
@@ -410,3 +410,99 @@ def test_check_fails_when_the_pool_bot_is_elsewhere_or_the_founder_is_not_in_poo
     capsys.readouterr()
     assert not setup_streams.run_check(z)
     assert "#pool: FAIL — the founder is not subscribed" in capsys.readouterr().out
+
+
+# -- ops#295: the PA bot --------------------------------------------------
+
+
+def test_setup_creates_the_pa_bot_once_in_exactly_pa_and_all_hands(capsys):
+    z = FakeZulip()
+    setup_streams.run_setup(z)
+    first = capsys.readouterr().out
+    assert "bot PA: created" in first
+    setup_streams.run_setup(z)
+    second = capsys.readouterr().out
+    assert "bot PA: already exists" in second
+    assert sum(1 for u in z.users if u["full_name"] == "PA") == 1
+    assert _bot_streams(z, "PA") == {"pa", "All hands"}
+    assert z.streams["pa"]["invite_only"]
+    assert 1 in z.subs[z.streams["pa"]["stream_id"]]      # the founder
+
+
+def test_setup_prints_the_two_env_lines_but_the_key_only_when_created(capsys):
+    z = FakeZulip()
+    setup_streams.run_setup(z)
+    first = capsys.readouterr().out
+    assert "ZULIP_PA_EMAIL=pa-bot@x" in first
+    assert "ZULIP_PA_API_KEY=key-for-pa" in first
+    setup_streams.run_setup(z)
+    second = capsys.readouterr().out
+    assert "ZULIP_PA_EMAIL=pa-bot@x" in second
+    assert "key-for-pa" not in second
+    # the rerun's key line is a comment, so it cannot be pasted as a real key
+    assert not any(l.startswith("ZULIP_PA_API_KEY") for l in second.splitlines())
+    assert "# ZULIP_PA_API_KEY" in second
+
+
+def test_setup_prints_the_key_before_subscribing_so_a_failed_subscribe_keeps_it(capsys):
+    z = FakeZulip()
+    real = z.subscribe
+
+    def boom(stream, principals):
+        if "pa-bot@x" in principals:
+            raise RuntimeError("subscribe failed")
+        return real(stream, principals)
+
+    z.subscribe = boom
+    with pytest.raises(RuntimeError):
+        setup_streams.run_setup(z)
+    assert "ZULIP_PA_API_KEY=key-for-pa" in capsys.readouterr().out
+
+
+def test_setup_then_check_passes_with_the_pa_bot(capsys):
+    z = FakeZulip()
+    setup_streams.run_setup(z)
+    capsys.readouterr()
+    assert setup_streams.run_check(z)
+    assert "#pa: OK" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("stream", ["coo", "cto", "PM", "pool", "feature", "status"])
+def test_check_fails_if_the_pa_bot_is_in_any_other_stream(capsys, stream):
+    z = FakeZulip()
+    setup_streams.run_setup(z)
+    z.subs[z.streams[stream]["stream_id"]].add(_bot(z, "PA")["user_id"])
+    capsys.readouterr()
+    assert not setup_streams.run_check(z)
+    assert "bot PA" in capsys.readouterr().out
+
+
+def test_check_fails_when_the_pa_bot_is_missing_or_lacks_a_stream(capsys):
+    z = FakeZulip()
+    setup_streams.run_setup(z)
+    pa = _bot(z, "PA")
+    z.subs[z.streams["pa"]["stream_id"]].discard(pa["user_id"])
+    capsys.readouterr()
+    assert not setup_streams.run_check(z)
+    assert "subscriptions: WRONG" in capsys.readouterr().out
+    z.users.remove(pa)
+    assert not setup_streams.run_check(z)
+    assert "bot PA: MISSING" in capsys.readouterr().out
+
+
+def test_check_fails_on_another_bot_in_pa(capsys):
+    z = FakeZulip()
+    setup_streams.run_setup(z)
+    z.subs[z.streams["pa"]["stream_id"]].add(_bot(z, "CTO")["user_id"])
+    capsys.readouterr()
+    assert not setup_streams.run_check(z)
+    assert "#pa: FAIL — bots that must not be subscribed: ['CTO']" in capsys.readouterr().out
+
+
+def test_check_fails_when_the_founder_is_not_in_pa(capsys):
+    z = FakeZulip()
+    setup_streams.run_setup(z)
+    z.subs[z.streams["pa"]["stream_id"]].discard(1)
+    capsys.readouterr()
+    assert not setup_streams.run_check(z)
+    assert "#pa: FAIL — the founder is not subscribed" in capsys.readouterr().out

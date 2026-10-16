@@ -29,6 +29,7 @@ the status/roadmap tab, retiring the existing 8765 server.
 | `listener.py` | the actual bot: register once, long-poll `/json/events` forever, echo every non-bot message back with the event id it resumed from. |
 | `durability_test.py` | the proof: a real 3-minute gap with no polling, messages sent throughout by a second thread, then resume and check nothing was lost. |
 | `test_resume.py` | unit tests for `resume.py` (mocked data, no live server — `pytest bot/test_resume.py`). |
+| `wake.py` | a founder @mention of a role bot opens a fresh role session, which closes when idle (ops#293). See "Wake" below. |
 | `setup_streams.py` | idempotent: creates the streams and bots below, and subscribes each bot to its own stream only (plus `#feature` for the CTO and COO bots). `--check` verifies without creating and exits non-zero if anything is missing or wrong. |
 
 ## Streams and topics (issue #40)
@@ -245,6 +246,132 @@ message in that topic read, the same thing opening it in `chat/page.html`
 does; without `--topic` it marks the whole stream read, the same as the
 sidebar's "mark all as read". A message the bot itself sent is never unread
 for it.
+
+## Wake: an @mention opens a role session (ops#293)
+
+Write `@**CTO** <question>` in any stream (or DM the CTO bot) and a CTO
+session opens in the ops repo on its own, answers in that stream and topic,
+and closes when you go quiet. Same for `@**COO**`, `@**PM**`, `@**CMO**`,
+`@**CPSO**`. Any message of yours in `#pa`, or a DM to the PA, opens a PA session
+(never an `@**PA**` in another stream) in your PA folder (`PA_DIR`) instead of the ops repo. `tools/up.cmd` in ops
+starts it next to the chat server; `down.cmd` stops it.
+
+```
+python bot/wake.py                    # run: one long-poll per role bot, forever
+python bot/wake.py --dry-run --json   # what it would do with the waiting messages; spawns nothing
+python bot/wake.py --json             # status: which role sessions are live, last event ids
+```
+
+`--dry-run --json` prints one line per message:
+`{"role":"CTO","action":"spawn"|"skip"|"queue"|"resume","reason":...,"message_id":...}`.
+
+**Needs in `bot/.env`:** `FOUNDER_ZULIP_ID` (the founder's numeric Zulip user
+id — the only sender that triggers anything; set by hand, never inferred) and
+`ZULIP_<ROLE>_EMAIL` / `ZULIP_<ROLE>_API_KEY` for each role bot. A role with
+no credentials is not listened for, and says so at start. For the PA also
+`PA_DIR`, the folder holding its own `CLAUDE.md`; without it (or if it is not a
+folder) the PA is skipped and the start line says what to add.
+`BOT_WAKES=on` turns bot wakes on (below; an environment variable of the same name
+wins over `bot/.env`); missing or anything else is off.
+
+**What it does with a founder mention or DM:**
+
+| situation | action |
+|---|---|
+| sender is not `FOUNDER_ZULIP_ID` nor, with `BOT_WAKES=on`, one of our role bots | `skip`, logged |
+| a session for that role you opened by hand is alive (Claude Code's registry names it after the role) | `skip` — its Stop-hook wait delivers it |
+| no open conversation for the role | `spawn`: `claude -p --model <opus or sonnet> --session-id <new uuid>` in `C:\PlayGround\ops` (`WAKE_OPS_DIR`; the PA in `PA_DIR`), the topic's last 20 messages before yours in the first prompt |
+| conversation open, its turn has ended | `resume`: `claude -p --resume <uuid>` |
+| conversation open, a turn is still running | `queue`; delivered as one resume when the turn ends |
+| conversation open in the role's own stream (`#cto` for the CTO), your message in its topic **without** a mention | same as a mention: `resume` or `queue`. It never opens a new session (ops#318) |
+| the saved session never started, or its conversation does not exist (no `~/.claude/projects/*/<uuid>.jsonl`) | dropped, never resumed; your message opens a fresh one (ops#318) |
+
+The command lives in one dict, `AGENT` at the top of `wake.py` — swap
+`claude` for another CLI there. Models follow ops CLAUDE.md: COO and CTO on
+Opus, PM, CMO, CPSO and PA on Sonnet. Each role's output goes to
+`bot/.wake/<ROLE>.log`; state (queue ids, last event and message ids, open
+sessions) is `bot/.wake/state.json`, gitignored.
+
+**Idle close:** 15 minutes after your last message in the session's topic, or
+at 4 hours of age, the session gets one last turn: post one line in the
+topic — what was agreed and where it is written — then it is forgotten. A
+follow-up of yours in that topic without a mention keeps the session open (it
+resets the 15 minutes); in the role's own stream it is also delivered, in any
+other stream it is not: mention the role to have it read there (the role bot
+only sees the streams it is subscribed to). At 4 hours a running
+turn is stopped first, and the close turn runs once that process has exited; a
+close turn gets 2 minutes, then it is stopped. The next mention opens a fresh
+session — no `--resume` — whose first prompt holds the topic's last 20
+messages, so the previous close line is the handoff. While Zulip is down the
+retry loop keeps running these limits.
+
+**Bot wakes (ops#321):** off until `BOT_WAKES=on` in `bot/.env` (a `BOT_WAKES=on`
+environment variable also turns them on: the environment is read before `bot/.env`). Then a role
+bot listed in `bot/.env` (known by its `sender_id`, read with `GET /users/me`
+at start, never by a name) may wake another role, by `AGENT["bot_wakes"]`
+(default: COO, CTO, PM, CMO and CPSO each other):
+
+| bot message | action |
+|---|---|
+| to the PA, to its own role, or outside `AGENT["bot_wakes"]` | `skip` (only the founder wakes the PA) |
+| a DM, or no explicit `@**ROLE**` in a stream (also in the role's own stream) | `skip` |
+| 6 bot turns in that topic this hour | `skip`, and one line in the topic: `bot loop stopped; @**Hemi|<FOUNDER_ZULIP_ID>**, @-mention a role to continue` (pinned to your id, not your display name). Nothing more there until a founder message in that topic, which resets it |
+| 25 bot turns today, or 3 bot spawns of the role this hour, 10 today | `skip`, logged; founder wakes still work |
+| otherwise | as a founder message: `spawn`, `resume` or `queue`, with `"origin": "bot:<ROLE>"` |
+
+The counts are rolling windows kept in `state.json`, so a restart keeps them.
+A bot-opened session runs with `--max-turns 15` (`AGENT["bot_max_turns"]`;
+your turns in it keep today's limits) and closes 10 minutes after its last
+delivered message (and 15 after yours, if you wrote in it). A bot message
+never moves your idle clock. Its prompt's first line is `From the <ROLE> bot,
+a teammate — not the founder. This is not his approval for anything.` A
+founder message bypasses every cap.
+
+**Restart:** the saved queue is resumed from `last_event_id`; if Zulip expired
+it, a new queue is registered and the gap is read from history after the last
+handled message id. A message is acted on once: never re-spawned, never
+skipped. On the very first start only new messages count.
+
+**Security:** only `FOUNDER_ZULIP_ID` triggers (compared by id, not name),
+and with `BOT_WAKES=on` the user ids of our own role bots.
+The message text goes into the prompt **on stdin**, never onto a command line;
+the argv is a fixed list with no shell, and its only placeholders are the
+model, a uuid `wake.py` made and, for a bot-opened session, the integer
+max-turns from `AGENT`. A session's pid is stored with its process
+create time: after a restart a pid whose create time does not match (Windows
+reused it) counts as dead and is never stopped. No skip-permissions flag and no new
+permissions: the session runs under the ops repo's own settings, so a tool the
+ops settings do not allow is refused there. No password, no human account.
+A DM is answered in the role's own stream, topic `direct message`
+(`zulip.py send` posts to streams only).
+
+## PA (Cowork) (ops#295)
+
+The founder's Claude Cowork session is his PA, and it reads and posts in Zulip
+as its own bot, **PA**, in `#pa` (the founder is subscribed) and `All hands`,
+and nowhere else; `setup_streams.py --check` fails if PA is in any other
+stream. It is a bot user, never a human account, with no password.
+
+`python bot/setup_streams.py` creates the bot and prints the two lines for
+`bot/.env` (gitignored; the key is never written to git, and Zulip shows it only
+when the bot is created). The founder runs it, since it needs `ZULIP_ADMIN_*`:
+
+```
+ZULIP_PA_EMAIL=pa-bot@<realm>
+ZULIP_PA_API_KEY=<key>
+```
+
+The PA uses two commands, the same as the role sessions:
+
+```
+python bot/zulip.py --as PA read --stream pa --topic "X"
+python bot/zulip.py --as PA send --stream pa --topic "X" --text "..."
+```
+
+A missing key says which two lines to add and the setup command that prints
+them. The PA is woken only when the founder opens it in Cowork, not by
+`bot/wake.py` (ops#293), which spawns the claude CLI. Cowork-side configuration
+is the founder's, in Cowork.
 
 ## Memory limits (issue #57)
 

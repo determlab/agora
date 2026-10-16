@@ -416,7 +416,7 @@ def test_277_the_mention_button_row_is_gone():
 def test_each_picker_name_inserts_exactly_what_wakes_that_bot(world, monkeypatch):
     fixed = re.search(r"const names = \[([^\]]*)\];", _function("mentionNames")).group(1)
     names = json.loads("[" + fixed + "]")
-    assert names == ["COO", "CTO", "CMO", "CPSO", "Watchdog", "all"], names
+    assert names == ["COO", "CTO", "CMO", "CPSO", "PM", "PA", "Watchdog", "all"], names
     run, human, bots = world["run"], world["human"], world["bots"]
     # A stream that is nobody's own and not #feature: only a mention wakes here.
     sid = run.store.create_stream("mentions", invite_only=True)
@@ -444,6 +444,19 @@ def test_each_picker_name_inserts_exactly_what_wakes_that_bot(world, monkeypatch
         for other in BOTS:
             if other != name:
                 assert f"ping-{other}" not in text, (name, other)
+
+
+def test_320_the_picker_offers_every_role_bot_setup_streams_makes():
+    sys.path.insert(0, str(ROOT / "bot"))
+    try:
+        import setup_streams
+    finally:
+        sys.path.remove(str(ROOT / "bot"))
+    fixed = re.search(r"const names = \[([^\]]*)\];", _function("mentionNames")).group(1)
+    offered = set(json.loads("[" + fixed + "]"))
+    made = {full for full, _ in setup_streams.ROLE_BOTS}
+    made |= {setup_streams.PM_BOT[0], setup_streams.PA_BOT[0]}
+    assert made <= offered, f"the @ picker misses {sorted(made - offered)}"
 
 
 # -- the seam a browser fails silently on
@@ -1145,7 +1158,7 @@ def test_77_typing_at_opens_a_picker_that_inserts_the_mention():
     """, prelude=prelude)
     assert dom["items"] == ["Dana Levi", "Watchdog"] and dom["shown"] is True
     assert dom["opts"] == [["active", "true", "DDana Levi"], ["", "false", "WWatchdog"]]
-    assert dom["names"] == ["COO", "CTO", "CMO", "CPSO", "Watchdog", "all", "Dana Levi"]
+    assert dom["names"] == ["COO", "CTO", "CMO", "CPSO", "PM", "PA", "Watchdog", "all", "Dana Levi"]
     assert dom["value"] == "hi @**Dana Levi** " and dom["caret"] == len("hi @**Dana Levi** ")
     assert dom["closed"] is True and dom["none"] is None
     # The keys: arrows move, Enter/Tab pick (and do not send), Escape closes.

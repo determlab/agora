@@ -3085,7 +3085,7 @@ async function send() {
 // (ops#277 removed the row of mention buttons; the picker keeps their names.)
 
 function mentionNames() {
-  const names = ["COO", "CTO", "CMO", "CPSO", "Watchdog", "all"];
+  const names = ["COO", "CTO", "CMO", "CPSO", "PM", "PA", "Watchdog", "all"];
   for (const u of S.users.values()) {
     if (S.me && u.user_id === S.me.user_id) continue;
     if (!names.includes(u.full_name)) names.push(u.full_name);
