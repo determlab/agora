@@ -252,8 +252,9 @@ for it.
 Write `@**CTO** <question>` in any stream (or DM the CTO bot) and a CTO
 session opens in the ops repo on its own, answers in that stream and topic,
 and closes when you go quiet. Same for `@**COO**`, `@**PM**`, `@**CMO**`,
-`@**CPSO**`. Any message of yours in `#pa`, or a DM to the PA, opens a PA session
-(never an `@**PA**` in another stream) in your PA folder (`PA_DIR`) instead of the ops repo. `tools/up.cmd` in ops
+`@**CPSO**`. In a role's own stream (`#coo`, `#cto`, `#PM`, `#cmo`, `#cpso`, `#pa`)
+no tag is needed: any message of yours there wakes that role. The PA wakes only in `#pa` or a DM
+(never an `@**PA**` in another stream), and its session opens in your PA folder (`PA_DIR`) instead of the ops repo. `tools/up.cmd` in ops
 starts it next to the chat server; `down.cmd` stops it.
 
 ```
@@ -283,7 +284,7 @@ wins over `bot/.env`); missing or anything else is off.
 | no open conversation for the role | `spawn`: `claude -p --model <opus or sonnet> --session-id <new uuid>` in `C:\PlayGround\ops` (`WAKE_OPS_DIR`; the PA in `PA_DIR`), the topic's last 20 messages before yours in the first prompt |
 | conversation open, its turn has ended | `resume`: `claude -p --resume <uuid>` |
 | conversation open, a turn is still running | `queue`; delivered as one resume when the turn ends |
-| conversation open in the role's own stream (`#cto` for the CTO), your message in its topic **without** a mention | same as a mention: `resume` or `queue`. It never opens a new session (ops#318) |
+| your message in the role's own stream (`#cto` for the CTO, `#PM` for the PM) **without** a mention | same as a mention: `spawn`, `resume` or `queue` |
 | the saved session never started, or its conversation does not exist (no `~/.claude/projects/*/<uuid>.jsonl`) | dropped, never resumed; your message opens a fresh one (ops#318) |
 
 The command lives in one dict, `AGENT` at the top of `wake.py` — swap
