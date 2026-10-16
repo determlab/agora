@@ -1207,6 +1207,38 @@ def test_322_picking_someone_not_in_the_room_invites_them_with_the_panels_own_ca
     assert run.store.one("SELECT count(*) FROM messages")[0] == 0
 
 
+def test_322_picking_the_pa_in_a_company_room_does_not_invite_it(world):
+    # the founder rule (2026-10-17): the PA never joins a company room, so the
+    # picker neither tags it nor invites it outside #pa
+    prelude = FAKE_DOM + API_STUB + """
+      function fitCompose() {}
+      const S = {me: {user_id: 1}, pick: null, open: {stream_id: 7, stream: "design"},
+                 members: new Map([[7, new Set([1])], [9, new Set([1])]]), users: new Map([
+        [1, {user_id: 1, full_name: "Me", is_bot: false, email: "me@x"}],
+        [4, {user_id: 4, full_name: "PA", is_bot: true, email: "pa-bot@chat.localhost"}]])};
+      async function refreshCount(id) { calls.push(["refresh", id]); }
+      function subscribeReport(r, email) { return "הוזמן " + email; }
+    """
+    got = _js(("roleOf", "initial", "avatar", "el", "mentionQuery", "pickNames", "mentionNames",
+               "outsider", "closePick", "renderPick", "updatePick", "addMember", "inviteByName",
+               "choosePick"), """
+      const box = $("compose");
+      box.value = "@pa"; box.selectionStart = box.selectionEnd = 3;
+      updatePick();
+      out.tag = $("picker").children[S.pick.items.indexOf("PA")].querySelectorAll(".tag").length;
+      choosePick(S.pick.items.indexOf("PA"));
+      await new Promise((r) => setTimeout(r, 0));
+      out.calls = calls.slice(); out.value = box.value;
+      S.open = {stream_id: 9, stream: "pa"};    // in #pa the PA is still offered
+      box.value = "@pa"; box.selectionStart = box.selectionEnd = 3;
+      updatePick();
+      out.paTag = $("picker").children[S.pick.items.indexOf("PA")].querySelectorAll(".tag").length;
+    """, prelude=prelude)
+    assert got["tag"] == 0 and got["calls"] == []
+    assert got["value"].endswith("@**PA** ")
+    assert got["paTag"] == 1
+
+
 def test_77_compose_has_a_hint():
     m = _markup()
     ids = [a.get("id") for _, a in m.elements]

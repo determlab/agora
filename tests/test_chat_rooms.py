@@ -129,6 +129,24 @@ def test_a_role_bot_cannot_invite_anyone(run):
     assert run.bots["COO"]["id"] not in members["subscribers"]
 
 
+def test_a_role_bot_cannot_join_a_public_room_by_itself(run):
+    # CTO review @a7c77e5: a self-join would change the room's bot count
+    _create(run, "design")
+    sid = run.store.stream_by_ref("design")["stream_id"]
+    run.store.x("UPDATE streams SET invite_only=0 WHERE stream_id=?", (sid,))
+    status, body = run.api(run.bots["CTO"])("POST", "users/me/subscriptions",
+                                            subscriptions=[{"name": "design"}])
+    assert status == 400 and body["code"] == "INVITE_NOT_ALLOWED", body
+    assert "Invite button" in body["msg"]
+    members = run.api(run.founder)("GET", f"streams/{sid}/members")[1]
+    assert run.bots["CTO"]["id"] not in members["subscribers"]
+    # a bot already in the room may subscribe again: nothing changes
+    _create(run, "plan", run.bots["COO"]["email"])
+    status, body = run.api(run.bots["COO"])("POST", "users/me/subscriptions",
+                                            subscriptions=[{"name": "plan"}])
+    assert status == 200 and body["already_subscribed"] == {run.bots["COO"]["email"]: ["plan"]}
+
+
 def test_no_bot_invites_the_pa_not_even_the_admin_bot(run):
     _create(run, "design")
     status, body = run.api(run.admin_bot)("POST", "users/me/subscriptions",

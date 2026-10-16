@@ -712,6 +712,21 @@ def test_the_pa_never_wakes_in_a_company_room_and_others_in_pa_never_do(wake, tm
     assert w3.spawner.started == []
 
 
+def test_a_pa_in_a_company_room_does_not_turn_off_untagged_wakes(wake, tmp_path):
+    # CTO review @a7c77e5: the PA never wakes outside #pa, so it is not counted
+    # as a role bot there; {founder, COO, PA} is a one-bot room for the COO
+    def plan(role, room):
+        return [user(FOUNDER, "Founder", bot=False), user(101, "COO"), user(104, "PA")]
+    w = make(wake, tmp_path, members=plan)
+    d = w.on_message("COO", msg(10, "what next?", stream="plan"), [])
+    assert d["action"] == "spawn", d
+    assert w.on_message("PA", msg(10, "what next?", stream="plan"), [])["action"] == "skip"
+    # in #pa the PA still counts: {founder, COO, PA} there needs an @**COO**
+    w1 = make(wake, tmp_path / "a", members=plan)
+    d = w1.on_message("COO", msg(11, "what next?", stream="pa"), [])
+    assert d["action"] == "skip" and "2 role bots (COO, PA)" in d["reason"]
+
+
 @pytest.mark.parametrize("line,fix", [("", "PA_DIR missing in bot/.env"),
                                       ("PA_DIR=/no/such/folder\n", "not a folder")])
 def test_pa_without_pa_dir_is_skipped_with_the_fix(wake, tmp_path, monkeypatch, line, fix):

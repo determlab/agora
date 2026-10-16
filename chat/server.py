@@ -1429,6 +1429,12 @@ class Chat:
                 elif row["invite_only"] and me["role"] > ROLE_ADMIN \
                         and row["stream_id"] not in self.s.subscribed(me["id"]):
                     raise _no_stream(name)
+                elif me["is_bot"] and row["stream_id"] not in self.s.subscribed(me["id"]):
+                    # ops#322: a bot joining a public room by itself would change
+                    # that room's bot count; only the founder invites.
+                    raise ApiError(f"A bot cannot join #{row['name']} by itself: the founder "
+                                   "invites it with the page's Invite button",
+                                   "INVITE_NOT_ALLOWED")
                 for u in users:
                     new = self.s.subscribe(u["id"], row["stream_id"])
                     if new:
