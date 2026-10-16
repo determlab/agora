@@ -920,6 +920,23 @@ def test_founder_message_to_a_closing_session_with_nothing_running_starts_fresh(
     assert w.spawner.started[0][0][5] != sid
 
 
+def test_queued_and_new_message_to_a_dead_closing_session_open_one_session(wake, tmp_path):
+    clock = Clock()
+    w = make(wake, tmp_path, clock=clock)
+    w.on_message("CTO", msg(10), ["mentioned"])
+    w.spawner.finish_all()
+    clock.t += 15 * 60
+    w.tick()  # close turn starts
+    assert w.on_message("CTO", msg(11, "wait!"), ["mentioned"])["action"] == "queue"
+    w.spawner.finish_all()  # the close turn ends before the next tick
+    before = len(w.spawner.started)
+    d = w.on_message("CTO", msg(12, "and this"), ["mentioned"])
+    assert d["action"] == "spawn"
+    assert len(w.spawner.started) == before + 1  # one session, not two
+    prompt = w.spawner.started[-1][1]
+    assert "wait!" in prompt and "and this" in prompt
+
+
 def test_real_spawner_checks_the_conversation_file(wake, tmp_path, monkeypatch):
     sid = str(uuid.uuid4())
     monkeypatch.setitem(wake.AGENT, "conversations",

@@ -522,8 +522,9 @@ class Waker:
             if not self._alive(sess):
                 # Nothing is running for it: forget it and start fresh now,
                 # never a close turn on a session the founder is talking to.
-                self._finish(role, "the founder wrote to a closing session; closed")
-                return self._spawn(role, [msg])
+                # One fresh session for the queued messages and this one.
+                sess.setdefault("pending", []).append(msg)
+                return self._finish(role, "the founder wrote to a closing session; closed")[-1]
             sess.setdefault("pending", []).append(msg)
             return self._decide(role, "queue", "the session is closing; a fresh one "
                                 "opens with this message", msg)
