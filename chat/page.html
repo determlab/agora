@@ -192,12 +192,15 @@ button.archived-name:hover { color: var(--text); }
 #compose-row { display: flex; gap: .5rem; align-items: flex-end; }
 #compose-wrap { flex: 1; display: flex; position: relative; }
 #compose { flex: 1; min-height: 2.6rem; max-height: 40vh; resize: none; border-radius: 10px; }
+#mic-btn { min-width: 44px; min-height: 44px; font-size: 1.1rem; line-height: 1; }
+#mic-btn[hidden] { display: none; }
+#mic-btn.on { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
 #picker { position: absolute; bottom: calc(100% + 4px); inset-inline-start: 0; z-index: 6; min-width: 13rem;
   list-style: none; margin: 0; padding: .25rem; background: var(--panel); border: 1px solid var(--line);
   border-radius: 10px; box-shadow: 0 4px 14px rgba(0, 0, 0, .18); }
 #picker li { display: flex; align-items: center; gap: .45rem; padding: .25rem .45rem; border-radius: 6px; cursor: pointer; }
 #picker li.active { background: var(--accent-soft); }
-#hint { margin: .3rem 0 0; }
+#hint, #mic-note { margin: .3rem 0 0; }
 dialog { background: var(--panel); color: var(--text); border: 1px solid var(--line);
   border-radius: 10px; padding: 1rem 1.25rem; width: min(28rem, 92vw); }
 dialog::backdrop { background: rgba(0, 0, 0, .4); }
@@ -525,9 +528,13 @@ a.ref:hover { text-decoration: underline; }
           <textarea id="compose" dir="auto" rows="1" placeholder="כתבו הודעה…"
                     aria-autocomplete="list" aria-controls="picker"></textarea>
         </div>
+        <button type="button" id="mic-btn" class="btn" hidden aria-pressed="false"
+                aria-label="הקלטת הודעה"
+                title="הקלטה בעברית. הקול נשלח לספק הדפדפן (Google / Apple) לתמלול.">&#127908;</button>
         <button type="button" id="send-btn" class="btn primary">שלח</button>
       </div>
       <p id="hint" class="muted">@ פותח רשימת שמות · Enter שולח · Shift+Enter שורה חדשה</p>
+      <p id="mic-note" class="muted" hidden>&#127908; הקלטה: הקול נשלח לספק הדפדפן לתמלול.</p>
       <p id="send-error" class="error" hidden></p>
     </div>
   </main>
@@ -3065,6 +3072,58 @@ function onComposeInput() {
 $("compose").addEventListener("input", onComposeInput);
 $("compose").addEventListener("blur", closePick);
 $("send-btn").addEventListener("click", send);
+
+// -- dictation (ops#323): the browser's own speech recognition, Hebrew. The
+// transcript goes into the compose box and is never sent; the human edits it
+// and presses send. No Speech API in this browser: the button stays hidden.
+function setupDictation() {
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  const btn = $("mic-btn"), box = $("compose");
+  if (!SR) return;
+  btn.hidden = false;
+  // Phones never show a title tooltip, so the privacy note is a visible line too.
+  $("mic-note").hidden = false;
+  let rec = null, base = "", finals = "", written = "";
+  const setOn = (on) => { btn.classList.toggle("on", on); btn.setAttribute("aria-pressed", String(on)); };
+  function show(interim) {
+    // The box changed under us (sent and cleared, or typed in): rebase on it.
+    if (box.value !== written) { base = box.value; finals = ""; }
+    const said = (finals + interim).trim();
+    const gap = base && said && !/\s$/.test(base) ? " " : "";
+    written = box.value = base + gap + said;
+    fitCompose();
+  }
+  btn.addEventListener("click", () => {
+    if (rec) { rec.stop(); return; }
+    rec = new SR();
+    rec.lang = "he-IL";
+    rec.interimResults = true;
+    rec.continuous = false;
+    base = box.value; finals = ""; written = box.value;
+    sendError("");
+    rec.onresult = (e) => {
+      let interim = "";
+      for (let i = e.resultIndex; i < e.results.length; i++) {
+        const r = e.results[i];
+        if (r.isFinal) finals += r[0].transcript + " "; else interim += r[0].transcript;
+      }
+      show(interim);
+    };
+    rec.onerror = (e) => {
+      if (e.error === "not-allowed" || e.error === "service-not-allowed") {
+        sendError("אין הרשאת מיקרופון לדפדפן הזה.");
+      } else if (e.error !== "no-speech" && e.error !== "aborted") {
+        sendError("ההקלטה נכשלה: " + e.error);
+      }
+    };
+    rec.onend = () => { rec = null; setOn(false); };
+    try { rec.start(); setOn(true); } catch (err) {
+      rec = null; setOn(false);
+      sendError("ההקלטה לא התחילה.");
+    }
+  });
+}
+setupDictation();
 
 // -- streams: create, members, private
 
