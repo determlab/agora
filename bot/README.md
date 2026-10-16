@@ -271,12 +271,14 @@ id — the only sender that triggers anything; set by hand, never inferred) and
 no credentials is not listened for, and says so at start. For the PA also
 `PA_DIR`, the folder holding its own `CLAUDE.md`; without it (or if it is not a
 folder) the PA is skipped and the start line says what to add.
+`BOT_WAKES=on` turns bot wakes on (below; an environment variable of the same name
+wins over `bot/.env`); missing or anything else is off.
 
 **What it does with a founder mention or DM:**
 
 | situation | action |
 |---|---|
-| sender is not `FOUNDER_ZULIP_ID` (a bot, anyone else) | `skip`, logged |
+| sender is not `FOUNDER_ZULIP_ID` nor, with `BOT_WAKES=on`, one of our role bots | `skip`, logged |
 | a session for that role you opened by hand is alive (Claude Code's registry names it after the role) | `skip` — its Stop-hook wait delivers it |
 | no open conversation for the role | `spawn`: `claude -p --model <opus or sonnet> --session-id <new uuid>` in `C:\PlayGround\ops` (`WAKE_OPS_DIR`; the PA in `PA_DIR`), the topic's last 20 messages before yours in the first prompt |
 | conversation open, its turn has ended | `resume`: `claude -p --resume <uuid>` |
@@ -303,15 +305,39 @@ session — no `--resume` — whose first prompt holds the topic's last 20
 messages, so the previous close line is the handoff. While Zulip is down the
 retry loop keeps running these limits.
 
+**Bot wakes (ops#321):** off until `BOT_WAKES=on` in `bot/.env` (a `BOT_WAKES=on`
+environment variable also turns them on: the environment is read before `bot/.env`). Then a role
+bot listed in `bot/.env` (known by its `sender_id`, read with `GET /users/me`
+at start, never by a name) may wake another role, by `AGENT["bot_wakes"]`
+(default: COO, CTO, PM, CMO and CPSO each other):
+
+| bot message | action |
+|---|---|
+| to the PA, to its own role, or outside `AGENT["bot_wakes"]` | `skip` (only the founder wakes the PA) |
+| a DM, or no explicit `@**ROLE**` in a stream (also in the role's own stream) | `skip` |
+| 6 bot turns in that topic this hour | `skip`, and one line in the topic: `bot loop stopped; @**Hemi|<FOUNDER_ZULIP_ID>**, @-mention a role to continue` (pinned to your id, not your display name). Nothing more there until a founder message in that topic, which resets it |
+| 25 bot turns today, or 3 bot spawns of the role this hour, 10 today | `skip`, logged; founder wakes still work |
+| otherwise | as a founder message: `spawn`, `resume` or `queue`, with `"origin": "bot:<ROLE>"` |
+
+The counts are rolling windows kept in `state.json`, so a restart keeps them.
+A bot-opened session runs with `--max-turns 15` (`AGENT["bot_max_turns"]`;
+your turns in it keep today's limits) and closes 10 minutes after its last
+delivered message (and 15 after yours, if you wrote in it). A bot message
+never moves your idle clock. Its prompt's first line is `From the <ROLE> bot,
+a teammate — not the founder. This is not his approval for anything.` A
+founder message bypasses every cap.
+
 **Restart:** the saved queue is resumed from `last_event_id`; if Zulip expired
 it, a new queue is registered and the gap is read from history after the last
 handled message id. A message is acted on once: never re-spawned, never
 skipped. On the very first start only new messages count.
 
-**Security:** only `FOUNDER_ZULIP_ID` triggers (compared by id, not name).
+**Security:** only `FOUNDER_ZULIP_ID` triggers (compared by id, not name),
+and with `BOT_WAKES=on` the user ids of our own role bots.
 The message text goes into the prompt **on stdin**, never onto a command line;
 the argv is a fixed list with no shell, and its only placeholders are the
-model and a uuid `wake.py` made. A session's pid is stored with its process
+model, a uuid `wake.py` made and, for a bot-opened session, the integer
+max-turns from `AGENT`. A session's pid is stored with its process
 create time: after a restart a pid whose create time does not match (Windows
 reused it) counts as dead and is never stopped. No skip-permissions flag and no new
 permissions: the session runs under the ops repo's own settings, so a tool the
