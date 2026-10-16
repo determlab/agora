@@ -636,20 +636,26 @@ def test_zulip_down_does_not_stop_the_tick(wake, tmp_path):
 
 
 def test_founder_follow_up_in_the_room_extends_the_idle_timer(wake, tmp_path):
-    # in a room with several role bots an untagged follow-up only keeps the
-    # session open; in a one-bot room (#cto) it is delivered
+    # in a room with several role bots and two open sessions an untagged
+    # follow-up only keeps the session open; in a one-bot room (#cto), or with
+    # one open session in the room, it is delivered
     clock = Clock()
     w = make(wake, tmp_path, clock=clock, members=crowd)
+    w.on_message("PM", msg(9, "@**PM** plan", stream="coo"), ["mentioned"])
     w.on_message("CTO", msg(10, "@**CTO** look", stream="coo"), ["mentioned"])
     w.spawner.finish_all()
     clock.t += 10 * 60
     d = w.on_message("CTO", msg(11, "hm, thinking", stream="coo"), [])
     assert d["action"] == "skip" and "extends" in d["reason"]
     clock.t += 10 * 60
-    assert w.tick() == []  # 20 min since the mention, 10 since the follow-up
+    # 20 min since the mention, 10 since the follow-up
+    assert [d for d in w.tick() if d["role"] == "CTO"] == []
     clock.t += 5 * 60
-    assert w.tick()[0]["action"] == "close"
-    assert len(w.spawner.started) == 2  # the spawn and the close turn; nothing delivered
+    assert next(d for d in w.tick() if d["role"] == "CTO")["action"] == "close"
+    # two spawns and two close turns; nothing delivered to the CTO
+    assert [(a[4], role) for a, _, role in w.spawner.started if role == "CTO"] == \
+        [("--session-id", "CTO"), ("--resume", "CTO")]
+    assert "hm, thinking" not in "".join(p for _, p, _ in w.spawner.started)
     # another room, or another sender, does not count
     w2 = make(wake, tmp_path / "b", clock=clock, members=crowd)
     w2.on_message("CTO", msg(20, "@**CTO**"), [])
@@ -1238,17 +1244,17 @@ def test_322_a_resume_carries_another_bots_post_marked(wake, tmp_path):
     assert "ship it" not in w.spawner.started[-1][1]
 
 
-def test_322_the_founders_untagged_line_reaches_the_open_session_next_turn(wake, tmp_path):
+def test_322_the_founders_untagged_line_queues_for_the_open_session(wake, tmp_path):
     rows = []
     w = make(wake, tmp_path, members=crowd)
     w.history = _room(rows)
     first = msg(10, "@**CTO** look at the gate", stream="All hands")
     rows.append(first)
     w.on_message("CTO", first, ["mentioned"])
-    # while the turn runs: an untagged founder line, then a tagged one that queues
+    # while the turn runs: an untagged founder line, then a tagged one; both queue
     untagged = msg(11, "and keep it under 50 lines", stream="All hands")
     rows.append(untagged)
-    assert w.on_message("CTO", untagged, [])["action"] == "skip"
+    assert w.on_message("CTO", untagged, [])["action"] == "queue"
     tagged = msg(12, "@**CTO** done?", stream="All hands")
     rows.append(tagged)
     assert w.on_message("CTO", tagged, ["mentioned"])["action"] == "queue"
@@ -1256,9 +1262,66 @@ def test_322_the_founders_untagged_line_reaches_the_open_session_next_turn(wake,
     [r] = w.tick()
     assert r["action"] == "resume"
     prompt = w.spawner.started[-1][1]
-    assert "- Founder: and keep it under 50 lines" in prompt  # the founder's: unmarked
+    assert prompt.count("under 50 lines") == 1  # a message, not repeated as catch-up
     assert prompt.index("under 50 lines") < prompt.index("done?")
     assert w.role("CTO")["session"]["seen_id"] == 12
+
+
+def _open(w, role, room, i):
+    """Open a session for ``role`` in ``room`` and let its turn end."""
+    w.on_message(role, msg(i, f"@**{role}** start", stream=room), ["mentioned"])
+    w.spawner.finish_all()
+
+
+def test_322_untagged_in_a_multi_bot_room_resumes_the_one_open_session(wake, tmp_path):
+    w = make(wake, tmp_path, members=crowd)  # like #coo: more than one role bot
+    _open(w, "COO", "All hands", 10)
+    m = msg(11, "and the budget too", stream="All hands")
+    got = {r: w.on_message(r, m, [])["action"] for r in ("COO", "CTO", "PM")}
+    assert got == {"COO": "resume", "CTO": "skip", "PM": "skip"}
+    assert [(a[4], role) for a, _, role in w.spawner.started] == \
+        [("--session-id", "COO"), ("--resume", "COO")]
+    assert "and the budget too" in w.spawner.started[-1][1]
+
+
+def test_322_untagged_in_a_multi_bot_room_with_no_open_session_wakes_nobody(wake, tmp_path):
+    w = make(wake, tmp_path, members=crowd)
+    _open(w, "COO", "cto", 10)  # open, but in another room
+    m = msg(11, "anyone?", stream="All hands")
+    assert {w.on_message(r, m, [])["action"] for r in ("COO", "CTO", "PM")} == {"skip"}
+    assert len(w.spawner.started) == 1  # never a spawn
+
+
+def test_322_untagged_in_a_multi_bot_room_with_two_open_sessions_wakes_nobody(wake, tmp_path):
+    w = make(wake, tmp_path, members=crowd)
+    _open(w, "COO", "All hands", 10)
+    _open(w, "PM", "All hands", 11)
+    w.clock.t += 60
+    m = msg(12, "which of you?", stream="All hands")
+    for r in ("COO", "CTO", "PM"):
+        d = w.on_message(r, m, [])
+        assert d["action"] == "skip" and "only @**" in d["reason"]
+    assert len(w.spawner.started) == 2
+    # the founder is still talking there: both idle timers move
+    assert w.role("COO")["session"]["last_founder_at"] == w.clock.t
+    assert w.role("PM")["session"]["last_founder_at"] == w.clock.t
+
+
+def test_322_untagged_in_a_closing_session_room_wakes_nobody(wake, tmp_path):
+    w = make(wake, tmp_path, members=crowd)
+    _open(w, "COO", "All hands", 10)
+    w.role("COO")["session"]["closing"] = True
+    assert w.on_message("COO", msg(11, "x", stream="All hands"), [])["action"] == "skip"
+    assert len(w.spawner.started) == 1
+
+
+def test_322_an_invited_role_in_pa_does_not_stop_the_pas_untagged_wake(wake, tmp_path):
+    pa_room = [user(FOUNDER, "Founder", bot=False), user(104, "PA"), user(102, "CTO")]
+    w = make(wake, tmp_path, members=lambda role, room: pa_room)
+    m = msg(10, "remind me at 5", stream="pa")
+    assert w.on_message("PA", m, [])["action"] == "spawn"
+    assert w.on_message("CTO", m, [])["action"] == "skip"
+    assert [role for _, _, role in w.spawner.started] == ["PA"]
 
 
 def test_322_the_catch_up_is_capped_and_names_the_read_since_command(wake, tmp_path):
@@ -1759,8 +1822,8 @@ def test_two_topics_in_one_room_count_against_one_cap(wake, tmp_path):
 
 
 def test_the_founder_is_routed_by_the_room_rule_only(wake, tmp_path):
-    # #coo holds the COO and the PM: an untagged line there is not delivered to
-    # the open COO session (the old own-stream rule is gone), it only keeps it open
+    # #coo holds the COO and the PM: an untagged line there goes to the open
+    # COO session because it is the room's only one (the old own-stream rule is gone)
     def coo_room(role, room):
         return [user(FOUNDER, "Founder", bot=False), user(101, "COO"), user(103, "PM")]
     clock = Clock()
@@ -1770,10 +1833,12 @@ def test_the_founder_is_routed_by_the_room_rule_only(wake, tmp_path):
     w.spawner.finish_all()
     clock.t += 60
     d = w.on_message("COO", msg(11, "and one more thing", stream="coo"), [])
-    assert d["action"] == "skip" and "only @**COO** wakes COO" in d["reason"]
-    assert "extends the open session's idle timer" in d["reason"]
-    assert len(w.spawner.started) == 1
+    assert d["action"] == "resume"
+    assert len(w.spawner.started) == 2 and "one more thing" in w.spawner.started[-1][1]
     assert w.role("COO")["session"]["last_founder_at"] == clock.t
+    assert w.on_message("PM", msg(11, "and one more thing", stream="coo"),
+                        [])["action"] == "skip"
+    w.spawner.finish_all()
     # a mention elsewhere is not "in the topic": the room is the key
     assert w.on_message("COO", msg(12, "@**COO** now?", stream="coo", topic="other"),
                         ["mentioned"])["action"] == "resume"

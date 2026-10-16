@@ -42,7 +42,9 @@ milestones in the history, not tagged releases.
   turn (other bots' and the founder's untagged ones, at most 20, then a
   `read --since` command), each line not from the founder marked as data.
   **Behavior change:** `#coo` (COO + PM) and `All hands` hold two or more
-  role bots, so an untagged line there no longer wakes the COO: write `@**COO**`.
+  role bots, so an untagged line there no longer opens a COO session: write
+  `@**COO**`. Once one is open, and it is the room's only open session, your
+  untagged lines there go to it.
   The PA wakes only in `#pa` or a DM, never in a company room. With ops#321's
   bot wakes, a bot's `@**ROLE**` wakes only a member of the room, a bot-opened
   session gets the same catch-up, and the bot-turn cap is per room, not per topic.

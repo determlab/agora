@@ -16,8 +16,9 @@ How it works:
     on (below). Every other sender is skipped and logged.
   - Rooms (ops#322): a room is a stream with one fixed topic, and the session
     key is the room. In a room with one role bot, any founder message wakes
-    it; in a room with two or more, only ``@**ROLE**`` wakes that role. A
-    role that is not a member of the room never wakes there, by the founder
+    it; in a room with two or more, only ``@**ROLE**`` wakes that role, and
+    an untagged line goes only to the room's one open session, if exactly one
+    role has one there (never a spawn). A role that is not a member of the room never wakes there, by the founder
     or by a bot. The PA wakes only in #pa or a founder DM, never in a company
     room. An invite only subscribes and wakes nothing; a removal closes the
     role's session in that room. A room name that is not safe text is never
@@ -573,6 +574,7 @@ class Waker:
         self.cwd = cwd or {}
         self.members = members
         self.others: dict[tuple[str, str], list[str]] = {}  # (role, room) -> other members
+        self.room_bots: dict[tuple[str, str], set[str]] = {}  # (role, room) -> role bots
 
     def role(self, role: str) -> dict[str, Any]:
         return self.state["roles"].setdefault(role, {})
@@ -659,10 +661,12 @@ class Waker:
         return members
 
     def _wakes(self, role: str, msg: dict[str, Any]) -> tuple[str, str]:
-        """Whether a message calls this role (ops#322): ``"yes"``, ``"no"`` or
-        ``"not_member"``, and why not. A DM always does. The PA wakes only in
-        its own room #pa (or a DM): it is the founder's personal assistant and
-        never joins a company room."""
+        """Whether a message calls this role (ops#322): ``"yes"``, ``"no"``,
+        ``"not_member"`` or ``"untagged"`` (no tag in a multi-bot room), and
+        why not. A DM always does. The PA wakes only in its own room #pa (or
+        a DM): it is the founder's personal assistant and never joins a
+        company room. In #pa an untagged founder message wakes the PA, even
+        if he invited another role there."""
         if msg.get("type") != "stream":
             return "yes", ""
         room = _where(msg, role)
@@ -682,9 +686,10 @@ class Waker:
             bots.discard("PA")
         if role not in bots:
             return "not_member", f"{role} is not a member of #{room}"
-        if len(bots) == 1 or mentioned:
+        if len(bots) == 1 or mentioned or role == "PA":
             return "yes", ""
-        return "no", (f"#{room} has {len(bots)} role bots ({', '.join(sorted(bots))}); "
+        self.room_bots[(role, room)] = bots
+        return "untagged", (f"#{room} has {len(bots)} role bots ({', '.join(sorted(bots))}); "
                       f"only @**{role}** wakes {role}")
 
     def _bot_of(self, msg: dict[str, Any]) -> str | None:
@@ -817,6 +822,8 @@ class Waker:
         sess = rs.get("session")
         now = self.clock()
         wakes, why = self._wakes(role, msg)
+        if wakes == "untagged" and self._sole_open(role, msg):
+            wakes = "yes"
         if wakes != "yes":
             room = _where(msg, role)
             in_room = bool(sess) and not sess.get("closing") and sess.get("stream") == room
@@ -837,6 +844,17 @@ class Waker:
                        "untagged message is not delivered")
             return self._decide(role, "skip", f"live {role} session (pid {hand}); {why}", msg)
         return self._deliver(role, msg, founder=True)
+
+    def _sole_open(self, role: str, msg: dict[str, Any]) -> bool:
+        """An untagged founder message in a multi-bot room goes on the open
+        conversation: it resumes (or queues for) this role's session when, of
+        the room's role bots, only this role has an open, non-closing session
+        there. It never spawns one; with none or two open, nobody gets it."""
+        room = _where(msg, role)
+        open_here = [r for r in sorted(self.room_bots.get((role, room), ()))
+                     if (s := self.state["roles"].get(r, {}).get("session"))
+                     and not s.get("closing") and s.get("stream") == room]
+        return open_here == [role]
 
     def _deliver(self, role: str, msg: dict[str, Any], founder: bool) -> dict[str, Any]:
         """Spawn, resume or queue: the founder's message, or a bot's that
@@ -1129,8 +1147,9 @@ def backfill(client: ZulipClient, after: int | None, newest: int = 20
     else:
         window = {"anchor": after, "include_anchor": "false",
                   "num_before": 0, "num_after": BACKFILL_LIMIT}
-    narrows = [([{"operator": "is", "operand": "mentioned"}], "mentioned"),
-               ([{"operator": "is", "operand": "dm"}], None), ([], None)]
+    # ``[]`` already holds every room and DM; the ``mentioned`` narrow is
+    # read only for its flag, which ``_route_bot`` needs.
+    narrows = [([{"operator": "is", "operand": "mentioned"}], "mentioned"), ([], None)]
     for narrow, flag in narrows:
         payload = client._request("GET", "messages", {
             "narrow": narrow, "apply_markdown": "false", **window})

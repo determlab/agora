@@ -270,7 +270,12 @@ instead of the ops repo.
 Who wakes, by membership (ops#322): in a room with **one** role bot (`#cto`,
 `#pa`) any message of yours wakes it, no tag needed. In a room with **two or
 more** (`#coo` with the PM, `All hands`) only `@**ROLE**` wakes, and only that
-role (`@**all**` and a quote's silent `@_**ROLE**` wake nobody). A role that
+role (`@**all**` and a quote's silent `@_**ROLE**` wake nobody). There, an
+untagged line goes to the open conversation: when exactly one of the room's
+roles has an open session in that room, it gets the line (resumed, or queued
+behind its running turn); it never opens a new session, and with none or two
+open nobody gets it. In `#pa` the PA wakes untagged even if you invited
+another role there. A role that
 is not in the room never wakes there. An invite only adds the bot; it wakes
 nothing. Removing a bot from a room closes its open session there. A room
 name that is not letters, digits, space or `-_.` is never put in a hint (the
@@ -319,8 +324,9 @@ sessions) is `bot/.wake/state.json`, gitignored.
 at 4 hours of age, the session gets one last turn: post one line in the
 room — what was agreed and where it is written — then it is forgotten. A
 follow-up of yours in that room keeps the session open (it resets the 15
-minutes); in a one-bot room it is also delivered, in a room with several role
-bots it is not: tag the role to have it read there. At 4 hours a running
+minutes); in a one-bot room it is also delivered, and in a room with several
+role bots it is delivered when that session is the room's only open one;
+otherwise tag the role to have it read there. At 4 hours a running
 turn is stopped first, and the close turn runs once that process has exited; a
 close turn gets 2 minutes, then it is stopped. The next mention opens a fresh
 session — no `--resume` — whose first prompt holds the room's last 20
