@@ -2836,15 +2836,14 @@ function mentionNames() {
     if (S.me && u.user_id === S.me.user_id) continue;
     if (!names.includes(u.full_name)) names.push(u.full_name);
   }
-  return names;
+  // The PA wakes only in #pa (ops#327): elsewhere an @**PA** would call nobody.
+  return S.open && S.open.stream === "pa" ? names : names.filter((n) => n !== "PA");
 }
 
 // The user a picker name stands for, if they are someone the open room does
 // not have (by the server's last member list; unknown counts as a member).
 function outsider(name) {
   if (!S.open) return null;
-  // The PA never joins a company room: it is offered as an invitee in #pa only.
-  if (name === "PA" && S.open.stream !== "pa") return null;
   const ids = S.members.get(S.open.stream_id);
   if (!ids) return null;
   const u = [...S.users.values()].find((x) => x.full_name === name);

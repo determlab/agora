@@ -1141,7 +1141,8 @@ def test_77_typing_at_opens_a_picker_that_inserts_the_mention():
     """, prelude=prelude)
     assert dom["items"] == ["Dana Levi", "Watchdog"] and dom["shown"] is True
     assert dom["opts"] == [["active", "true", "DDana Levi"], ["", "false", "WWatchdog"]]
-    assert dom["names"] == ["COO", "CTO", "CMO", "CPSO", "PM", "PA", "Watchdog", "all", "Dana Levi"]
+    # no room open, so not #pa: the PA is not offered
+    assert dom["names"] == ["COO", "CTO", "CMO", "CPSO", "PM", "Watchdog", "all", "Dana Levi"]
     assert dom["value"] == "hi @**Dana Levi** " and dom["caret"] == len("hi @**Dana Levi** ")
     assert dom["closed"] is True and dom["none"] is None
     # The keys: arrows move, Enter/Tab pick (and do not send), Escape closes.
@@ -1207,9 +1208,9 @@ def test_322_picking_someone_not_in_the_room_invites_them_with_the_panels_own_ca
     assert run.store.one("SELECT count(*) FROM messages")[0] == 0
 
 
-def test_322_picking_the_pa_in_a_company_room_does_not_invite_it(world):
-    # the founder rule (2026-10-17): the PA never joins a company room, so the
-    # picker neither tags it nor invites it outside #pa
+def test_322_the_picker_offers_the_pa_in_pa_only(world):
+    # the founder rule (2026-10-17): the PA never joins a company room and an
+    # @**PA** there wakes nothing, so the picker leaves it out outside #pa
     prelude = FAKE_DOM + API_STUB + """
       function fitCompose() {}
       const S = {me: {user_id: 1}, pick: null, open: {stream_id: 7, stream: "design"},
@@ -1223,19 +1224,17 @@ def test_322_picking_the_pa_in_a_company_room_does_not_invite_it(world):
                "outsider", "closePick", "renderPick", "updatePick", "addMember", "inviteByName",
                "choosePick"), """
       const box = $("compose");
+      out.names = mentionNames();
       box.value = "@pa"; box.selectionStart = box.selectionEnd = 3;
       updatePick();
-      out.tag = $("picker").children[S.pick.items.indexOf("PA")].querySelectorAll(".tag").length;
-      choosePick(S.pick.items.indexOf("PA"));
-      await new Promise((r) => setTimeout(r, 0));
-      out.calls = calls.slice(); out.value = box.value;
+      out.items = S.pick ? S.pick.items : [];
+      out.calls = calls.slice();
       S.open = {stream_id: 9, stream: "pa"};    // in #pa the PA is still offered
       box.value = "@pa"; box.selectionStart = box.selectionEnd = 3;
       updatePick();
       out.paTag = $("picker").children[S.pick.items.indexOf("PA")].querySelectorAll(".tag").length;
     """, prelude=prelude)
-    assert got["tag"] == 0 and got["calls"] == []
-    assert got["value"].endswith("@**PA** ")
+    assert "PA" not in got["names"] and "PA" not in got["items"] and got["calls"] == []
     assert got["paTag"] == 1
 
 

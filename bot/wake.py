@@ -33,7 +33,9 @@ How it works:
   - Room names stay plain UTF-8 everywhere: state.json, prompts, the send hint.
   - A fresh conversation's first prompt carries the room's last 20 messages
     before the new one, so the previous session's close line is the handoff
-    (no ``--resume`` across sessions, ops#293 4b).
+    (no ``--resume`` across sessions, ops#293 4b). Every role but the PA also
+    gets one line there telling it to use the matching skill from its charter
+    before substantive work; resume prompts do not repeat it (ops#331).
   - Everyone in a room reads everything (ops#322): a session stores the
     highest message id it was given (``seen_id``), and every resume carries
     the room's messages since then — other bots' posts and the founder's
@@ -486,6 +488,14 @@ def catch_up_block(role: str, room: str, rows: list[dict[str, Any]], founder_id:
     return out + "\n"
 
 
+SKILL_LINE = ("Before substantive work (a draft, a review, a design, a plan), invoke the "
+              "matching skill from your charter's skill list with the Skill tool, and "
+              "name the skill in your answer.")
+
+# The one reason the PA is skipped outside #pa (ops#327, ops#322).
+PA_ONLY_HOME = "PA wakes only in #pa or a founder DM (ops#327)"
+
+
 def message_prompt(role: str, msg: dict[str, Any], first: bool,
                    history: str = "", others: list[str] | None = None,
                    bot: str | None = None) -> str:
@@ -501,7 +511,8 @@ def message_prompt(role: str, msg: dict[str, Any], first: bool,
               f"in for a founder decision" if bot else
               "The founder called you from the chat; this session was opened for "
               "that and closes when he goes quiet")
-    head = f"{who}. {caller}.\n\n{history}" if first else ""
+    skill = "" if role == "PA" else SKILL_LINE + "\n\n"
+    head = f"{who}. {caller}.\n\n{skill}{history}" if first else ""
     if role == "PA" and others and msg.get("type") == "stream":
         # ops#322: the PA in a shared room says nothing private by default.
         head += (f"Also in #{room}: {', '.join(others)}. Others read this room; share "
@@ -656,8 +667,7 @@ class Waker:
             return "yes", ""
         room = _where(msg, role)
         if role == "PA" and room != own_stream(role):
-            return "no", (f"the PA wakes only in #{own_stream(role)} or a founder DM, "
-                          f"never in #{room}")
+            return "no", PA_ONLY_HOME
         if not safe_room(room):
             return "no", (f"room name {room!r} is not safe text (letters, digits, space, "
                           "-_. only); no hint is built for it")

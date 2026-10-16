@@ -324,7 +324,9 @@ bots it is not: tag the role to have it read there. At 4 hours a running
 turn is stopped first, and the close turn runs once that process has exited; a
 close turn gets 2 minutes, then it is stopped. The next mention opens a fresh
 session — no `--resume` — whose first prompt holds the room's last 20
-messages, so the previous close line is the handoff. When the PA is in a room
+messages, so the previous close line is the handoff. Every role but the PA
+also gets one line there telling it to use the matching skill from its
+charter before substantive work; resume prompts do not repeat it (ops#331). When the PA is in a room
 with others, its prompt names them and says others read the room. While Zulip is down the
 retry loop keeps running these limits.
 
