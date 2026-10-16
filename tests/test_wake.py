@@ -658,13 +658,43 @@ def test_pa_runs_in_pa_dir_on_sonnet(wake, tmp_path, monkeypatch):
 
 def test_pa_mention_elsewhere_spawns_and_others_in_pa_never_do(wake, tmp_path):
     w = make(wake, tmp_path)
-    assert w.on_message("PA", msg(10, stream="coo"), ["mentioned"])["action"] == "spawn"
+    assert w.on_message("PA", msg(10, "@**PA** hi", stream="coo"), ["mentioned"])["action"] == "spawn"
     w2 = make(wake, tmp_path / "b")
     assert w2.on_message("PA", msg(11, stream="pa", sender=99), [])["action"] == "skip"
     assert w2.on_message("PA", msg(12, stream="coo"), [])["action"] == "skip"
     assert w2.spawner.started == []
     # the home-stream rule is the PA's only: a CTO bot in #pa still needs a mention
     assert w2.on_message("CTO", msg(13, stream="pa"), [])["action"] == "skip"
+
+
+def test_pa_stays_out_of_company_streams_without_a_mention(wake, tmp_path):
+    w = make(wake, tmp_path)
+    # founder in All hands, tagging another role, nobody, or a wildcard: no PA
+    for i, (text, flags) in enumerate([("@**COO** which project?", ["mentioned"]),
+                                       ("@**CTO** thoughts", ["mentioned"]),
+                                       ("status please", []),
+                                       ("@**all** heads up", ["mentioned"])], start=20):
+        d = w.on_message("PA", msg(i, text, stream="All hands", topic="כולם"), flags)
+        assert d["action"] == "skip", text
+    assert w.spawner.started == [] and w.role("PA").get("session") is None
+    # an explicit @**PA** there, and anything in #pa, still wake it
+    d = w.on_message("PA", msg(30, "@**PA** book it", stream="All hands"), ["mentioned"])
+    assert d["action"] == "spawn"
+    w2 = make(wake, tmp_path / "b")
+    assert w2.on_message("PA", msg(31, "hi", stream="pa"), [])["action"] == "spawn"
+    # other roles' routing is unchanged
+    w3 = make(wake, tmp_path / "c")
+    assert w3.on_message("COO", msg(32, "@**COO** x", stream="All hands"),
+                         ["mentioned"])["action"] == "spawn"
+
+
+def test_pa_unwoken_room_never_becomes_the_close_room(wake, tmp_path):
+    w = make(wake, tmp_path)
+    w.on_message("PA", msg(40, "hi", stream="pa", topic="errands"), [])
+    d = w.on_message("PA", msg(41, "company talk", stream="All hands", topic="כולם"), [])
+    assert d["action"] == "skip"
+    sess = w.role("PA")["session"]
+    assert (sess["stream"], sess["topic"]) == ("pa", "errands") and not sess.get("pending")
 
 
 @pytest.mark.parametrize("line,fix", [("", "PA_DIR missing in bot/.env"),

@@ -4,7 +4,8 @@ The founder writes ``@**CTO** <question>`` in Zulip (or DMs the CTO bot) and a
 CTO session opens on its own, answers in that stream and topic, and closes
 when idle. Same for COO, PM, CMO and CPSO. No session sits waiting for him.
 The PA works the same way from the founder's PA folder (``PA_DIR``), and any
-founder message in ``#pa`` calls it, mention or not (ops#293 item 7).
+founder message in ``#pa`` calls it, mention or not (ops#293 item 7); elsewhere only
+an explicit ``@**PA**`` in the text does (ops#327).
 
 How it works:
   - One long-poll per role bot (``ZULIP_<ROLE>_EMAIL`` / ``_API_KEY``), each
@@ -682,6 +683,11 @@ class Waker:
         home = AGENT["home_streams"].get(role)
         in_home = bool(home) and msg.get("type") == "stream" and \
             msg.get("display_recipient") == home
+        if role == "PA" and msg.get("type") != "private" and not in_home and \
+                not mentions(role, str(msg.get("content") or "")):
+            # Zulip's "mentioned" flag also fires for wildcards and other
+            # mentions; the PA wakes only for #pa, a DM or its own @**PA** (ops#327).
+            return self._decide(role, "skip", "not in #pa and no @**PA** in the text", msg)
         if "mentioned" not in flags and msg.get("type") != "private" and not in_home:
             in_topic = bool(sess) and not sess.get("closing") and \
                 _where(msg, role) == (sess.get("stream"), sess.get("topic"))
