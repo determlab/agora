@@ -688,3 +688,101 @@ def test_pa_backfill_reads_its_home_stream(wake):
     pairs = wake.backfill(client, 1, home="pa")
     assert {"operator": "stream", "operand": "pa"} in narrows
     assert [m["id"] for m, _ in pairs] == [5]
+
+
+# -- Windows: claude is an npm .cmd shim; a failed spawn skips one message ----
+
+class _Sink:
+    def __init__(self):
+        self.data = b""
+
+    def write(self, b):
+        self.data += b
+
+    def close(self):
+        pass
+
+
+class _FakeProc:
+    pid = 4242
+
+    def __init__(self):
+        self.stdin = _Sink()
+
+    def poll(self):
+        return None
+
+
+def test_spawner_resolves_argv0_and_keeps_the_message_on_stdin(wake, tmp_path, monkeypatch):
+    shim = r"C:\Users\x\AppData\Roaming\npm\claude.cmd"
+    seen = {}
+    monkeypatch.setattr(wake.shutil, "which", lambda name: shim if name == "claude" else None)
+
+    def popen(argv, **kw):
+        seen["argv"], seen["kw"], seen["proc"] = argv, kw, _FakeProc()
+        return seen["proc"]
+
+    monkeypatch.setattr(wake.subprocess, "Popen", popen)
+    monkeypatch.setitem(wake.AGENT, "cwd", str(tmp_path))
+    nasty = 'run & del * | type "x" %PATH% %%'
+    argv = wake.build_command("spawn", "CTO", str(uuid.uuid4()))
+    wake.Spawner(log_dir=tmp_path).start(argv, nasty, "CTO")
+    assert seen["argv"][0] == shim and seen["argv"][1:] == argv[1:]
+    assert not seen["kw"].get("shell")
+    for ch in ("&", "|", '"', "%"):
+        assert not any(ch in a for a in seen["argv"])
+    assert seen["proc"].stdin.data.decode("utf-8") == nasty
+
+
+def test_spawner_names_the_fix_when_claude_is_not_on_path(wake, tmp_path, monkeypatch):
+    monkeypatch.setattr(wake.shutil, "which", lambda name: None)
+    monkeypatch.setattr(wake.subprocess, "Popen", lambda *a, **k: pytest.fail("spawned"))
+    with pytest.raises(wake.SpawnError, match="not on PATH.*Install"):
+        wake.Spawner(log_dir=tmp_path).start(["claude", "-p"], "hi", "CTO")
+
+
+def test_spawner_wraps_popen_oserror(wake, tmp_path, monkeypatch):
+    monkeypatch.setattr(wake.shutil, "which", lambda name: r"C:\x\claude.cmd")
+
+    def boom(*a, **k):
+        raise FileNotFoundError(2, "The system cannot find the file specified")
+
+    monkeypatch.setattr(wake.subprocess, "Popen", boom)
+    with pytest.raises(wake.SpawnError, match="cannot start"):
+        wake.Spawner(log_dir=tmp_path).start(["claude", "-p"], "hi", "CTO")
+
+
+class _FailingSpawner(FakeSpawner):
+    def __init__(self, error, fail_times=1):
+        super().__init__()
+        self.error, self.fail_times = error, fail_times
+
+    def start(self, argv, prompt, role, cwd=None):
+        if self.fail_times:
+            self.fail_times -= 1
+            raise self.error("cannot start 'claude': it is not on PATH")
+        return super().start(argv, prompt, role, cwd)
+
+
+def test_failed_spawn_skips_the_message_and_the_next_one_works(wake, tmp_path, capsys):
+    w = make(wake, tmp_path, spawner=_FailingSpawner(wake.SpawnError, fail_times=1))
+    d = w.on_message("CTO", msg(10), ["mentioned"])
+    assert d["action"] == "error" and "not on PATH" in d["reason"]
+    assert w.role("CTO")["session"] is None
+    assert w.role("CTO")["last_message_id"] == 10
+    assert "message 10 skipped" in capsys.readouterr().err
+    assert w.tick() == []
+    d = w.on_message("CTO", msg(11), ["mentioned"])
+    assert d["action"] == "spawn" and len(w.spawner.started) == 1
+
+
+def test_failed_resume_in_tick_does_not_crash_the_loop(wake, tmp_path):
+    sp = _FailingSpawner(wake.SpawnError, fail_times=0)
+    w = make(wake, tmp_path, spawner=sp)
+    w.on_message("CTO", msg(10), ["mentioned"])
+    w.on_message("CTO", msg(11, "and also"), ["mentioned"])  # queued: turn running
+    sp.finish_all()
+    sp.fail_times = 1
+    out = w.tick()
+    assert out[-1]["action"] == "error"
+    assert w.role("CTO")["session"] is None

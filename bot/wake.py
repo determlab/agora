@@ -51,6 +51,7 @@ import importlib.util
 import json
 import os
 import queue
+import shutil
 import subprocess
 import sys
 import threading
@@ -224,6 +225,24 @@ def _proc_start_time(pid: int) -> int | None:
         return None
 
 
+class SpawnError(RuntimeError):
+    """The agent process could not be started. The message says what failed
+    and how to fix it; the wake loop logs it and goes on."""
+
+
+def resolve_program(argv: list[str]) -> list[str]:
+    """``argv`` with ``argv[0]`` as a full path. On Windows ``claude`` is an
+    npm ``claude.cmd`` shim, and CreateProcess finds a .cmd only by its full
+    path. Only argv[0] changes: the message text is never in argv (a .cmd runs
+    through cmd.exe, which parses its arguments), and there is no shell=True."""
+    found = shutil.which(argv[0])
+    if found is None:
+        raise SpawnError(f"cannot start {argv[0]!r}: it is not on PATH. Install it "
+                         f"(npm install -g @anthropic-ai/claude-code) or add its "
+                         f"folder to PATH, then restart wake.py.")
+    return [found, *argv[1:]]
+
+
 class Spawner:
     """Starts the agent with the prompt on stdin. ``alive`` and ``stop`` take
     a pid and its create time so they still work after a restart, when no
@@ -236,9 +255,14 @@ class Spawner:
 
     def start(self, argv: list[str], prompt: str, role: str, cwd: str | None = None) -> int:
         self.log_dir.mkdir(parents=True, exist_ok=True)
+        argv = resolve_program(argv)
         with open(self.log_dir / f"{role}.log", "ab") as log:
-            proc = subprocess.Popen(argv, cwd=cwd or AGENT["cwd"], stdin=subprocess.PIPE,
-                                    stdout=log, stderr=subprocess.STDOUT)
+            try:
+                proc = subprocess.Popen(argv, cwd=cwd or AGENT["cwd"], stdin=subprocess.PIPE,
+                                        stdout=log, stderr=subprocess.STDOUT)
+            except OSError as exc:
+                raise SpawnError(f"cannot start {argv[0]!r} for {role}: {exc}. Check that "
+                                 f"it runs by hand and that the cwd exists.") from exc
         try:
             proc.stdin.write(prompt.encode("utf-8"))
             proc.stdin.close()
@@ -399,7 +423,14 @@ class Waker:
             return self._decide(role, "skip", "already handled (resume)", msg)
         if mid:
             rs["last_message_id"] = mid
-        d = self._route(role, msg, flags)
+        try:
+            d = self._route(role, msg, flags)
+        except SpawnError as exc:
+            sess = rs.get("session")
+            if sess and not sess.get("pid"):
+                rs["session"] = None  # a fresh session that never started
+            print(f"wake: {role}: {exc}; message {mid} skipped", file=sys.stderr)
+            d = self._decide(role, "error", f"spawn failed: {exc}", msg)
         self.save()
         return d
 
@@ -482,7 +513,11 @@ class Waker:
             sess["dry"] = True  # as if its turn were running: later messages queue
             return
         self.save()  # the session is on disk before its process exists: no double spawn
-        sess["pid"] = self.spawner.start(argv, prompt, role, self.cwd.get(role))
+        try:
+            sess["pid"] = self.spawner.start(argv, prompt, role, self.cwd.get(role))
+        except SpawnError:
+            sess["pid"] = sess["pid_created"] = None
+            raise
         sess["pid_created"] = self.spawner.created(sess["pid"])
 
     def _close_turn(self, role: str, sess: dict[str, Any], now: float) -> None:
@@ -525,35 +560,46 @@ class Waker:
         out = []
         now = self.clock()
         for role, rs in list(self.state["roles"].items()):
-            sess = rs.get("session")
-            if not sess or sess.get("dry"):
-                continue
-            running = self._alive(sess)
-            if sess.get("closing"):
-                out += self._tick_closing(role, sess, running, now)
-                continue
-            age, idle = now - sess["started_at"], now - sess["last_founder_at"]
-            if age >= MAX_AGE_SECONDS or (idle >= IDLE_SECONDS and not running):
-                sess.update(closing=True, pending=sess.get("pending") or [])
-                if running:  # 4 h: stop the turn; the close turn runs once it has exited
-                    self.spawner.stop(sess["pid"], sess.get("pid_created"))
-                    sess["stopped_at"] = now
-                else:
-                    self._close_turn(role, sess, now)
-                why = "4 h of age" if age >= MAX_AGE_SECONDS else "15 min without the founder"
-                out.append(self._decide(role, "close", why, None, session_id=sess["id"]))
+            try:
+                out += self._tick_role(role, rs, now)
+            except SpawnError as exc:
+                print(f"wake: {role}: {exc}; session dropped", file=sys.stderr)
+                rs["session"] = None
+                out.append(self._decide(role, "error", f"spawn failed: {exc}", None))
                 self.save()
-                continue
-            pending = sess.get("pending") or []
-            if pending and not running:
-                sess["pending"] = []
-                prompt = "\n---\n".join(message_prompt(role, m, first=False) for m in pending)
-                stream, topic = _where(pending[-1], role)
-                sess["stream"], sess["topic"] = stream, topic
-                self._run(role, "resume", prompt)
-                out.append(self._decide(role, "resume", "queued messages after the turn",
-                                        pending[-1], session_id=sess["id"]))
-                self.save()
+        return out
+
+    def _tick_role(self, role: str, rs: dict[str, Any], now: float) -> list[dict[str, Any]]:
+        out: list[dict[str, Any]] = []
+        sess = rs.get("session")
+        if not sess or sess.get("dry"):
+            return out
+        running = self._alive(sess)
+        if sess.get("closing"):
+            out += self._tick_closing(role, sess, running, now)
+            return out
+        age, idle = now - sess["started_at"], now - sess["last_founder_at"]
+        if age >= MAX_AGE_SECONDS or (idle >= IDLE_SECONDS and not running):
+            sess.update(closing=True, pending=sess.get("pending") or [])
+            if running:  # 4 h: stop the turn; the close turn runs once it has exited
+                self.spawner.stop(sess["pid"], sess.get("pid_created"))
+                sess["stopped_at"] = now
+            else:
+                self._close_turn(role, sess, now)
+            why = "4 h of age" if age >= MAX_AGE_SECONDS else "15 min without the founder"
+            out.append(self._decide(role, "close", why, None, session_id=sess["id"]))
+            self.save()
+            return out
+        pending = sess.get("pending") or []
+        if pending and not running:
+            sess["pending"] = []
+            prompt = "\n---\n".join(message_prompt(role, m, first=False) for m in pending)
+            stream, topic = _where(pending[-1], role)
+            sess["stream"], sess["topic"] = stream, topic
+            self._run(role, "resume", prompt)
+            out.append(self._decide(role, "resume", "queued messages after the turn",
+                                    pending[-1], session_id=sess["id"]))
+            self.save()
         return out
 
     def status(self) -> dict[str, Any]:
