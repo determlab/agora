@@ -1337,3 +1337,14 @@ def test_run_knows_every_bot_before_the_first_backfill(wake, tmp_path, monkeypat
     d = next(e for e in w.emitted if e.get("role") == "COO")
     assert d["action"] == "spawn" and d["origin"] == "bot:CPSO"
     assert w.bot_ids == {101: "COO", 105: "CPSO", 102: "CTO"}
+
+
+def test_first_prompt_tells_a_role_to_use_its_skills_but_not_the_pa(wake):
+    for role in ("CMO", "PM", "CTO", "CPSO", "COO"):
+        p = wake.message_prompt(role, msg(10, stream=role.lower(), topic="t"), first=True)
+        assert wake.SKILL_LINE in p and "invoke the matching skill" in p
+        assert p.index(f"You are the {role}") < p.index(wake.SKILL_LINE)
+    pa = wake.message_prompt("PA", msg(10, stream="pa", topic="t"), first=True)
+    assert "matching skill" not in pa
+    resume = wake.message_prompt("CTO", msg(10, stream="cto", topic="t"), first=False)
+    assert "matching skill" not in resume

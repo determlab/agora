@@ -27,7 +27,9 @@ How it works:
   - Topics stay plain UTF-8 everywhere: state.json, prompts, the send hint.
   - A fresh conversation's first prompt carries the topic's last 20 messages
     before the new one, so the previous session's close line is the handoff
-    (no ``--resume`` across sessions, ops#293 4b).
+    (no ``--resume`` across sessions, ops#293 4b). Every role but the PA also
+    gets one line there telling it to use the matching skill from its charter
+    before substantive work; resume prompts do not repeat it (ops#331).
   - Idle close: 15 minutes after the founder's last message in the topic
     (a mention or not), or at 4 hours of age, the conversation gets one last
     turn — post one line in the topic, what was agreed and where it is
@@ -425,6 +427,11 @@ def history_block(stream: str, topic: str, history: list[dict[str, Any]]) -> str
             f"read the file or issue it names.\n\n{lines}\n\n")
 
 
+SKILL_LINE = ("Before substantive work (a draft, a review, a design, a plan), invoke the "
+              "matching skill from your charter's skill list with the Skill tool, and "
+              "name the skill in your answer.")
+
+
 def message_prompt(role: str, msg: dict[str, Any], first: bool,
                    history: str = "", bot: str | None = None) -> str:
     """``bot``: the role whose bot sent ``msg``, or None for the founder. A
@@ -440,7 +447,8 @@ def message_prompt(role: str, msg: dict[str, Any], first: bool,
               f"in for a founder decision" if bot else
               "The founder called you from Zulip; this session was opened for "
               "that and closes when he goes quiet")
-    head = f"{who}. {caller}.\n\n{history}" if first else ""
+    skill = "" if role == "PA" else SKILL_LINE + "\n\n"
+    head = f"{who}. {caller}.\n\n{skill}{history}" if first else ""
     marker = BOT_MARKER.format(src=bot) + "\n\n" if bot else ""
     return (f"{marker}{head}Message from {sender} in {origin}:\n\n{msg.get('content', '')}\n\n"
             f"Answer in #{stream} › {topic} with:\n  {_send_hint(role, stream, topic)}\n"
