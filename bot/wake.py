@@ -398,7 +398,7 @@ def _where(msg: dict[str, Any], role: str) -> tuple[str, str]:
     if msg.get("type") == "stream":
         return str(msg.get("display_recipient") or ""), str(msg.get("subject") or "")
     # zulip.py sends to streams only: a DM is answered in the role's own stream.
-    return role.lower(), "direct message"
+    return own_stream(role), "direct message"
 
 
 def own_stream(role: str) -> str:

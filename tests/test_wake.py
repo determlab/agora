@@ -157,9 +157,9 @@ def test_sender_id_is_compared_not_the_name(wake, tmp_path):
 
 
 def test_founder_without_mention_in_a_stream_is_skipped(wake, tmp_path):
-    # outside the role's own stream: #coo is not the CTO's
+    # outside the role's own stream: the PM reads #coo, but #coo is not the PM's
     w = make(wake, tmp_path)
-    assert w.on_message("CTO", msg(10, stream="coo"), [])["action"] == "skip"
+    assert w.on_message("PM", msg(10, stream="coo"), [])["action"] == "skip"
     assert w.spawner.started == []
 
 
@@ -168,7 +168,7 @@ def test_founder_dm_spawns_and_is_answered_in_the_role_stream(wake, tmp_path):
     d = w.on_message("PM", msg(10, stream=None), [])
     assert d["action"] == "spawn" and d["model"] == "sonnet"
     prompt = w.spawner.started[0][1]
-    assert "#pm › direct message" in prompt
+    assert "#PM › direct message" in prompt
 
 
 def test_a_session_opened_by_hand_is_left_to_its_hook(wake, tmp_path, monkeypatch):
@@ -883,6 +883,28 @@ def test_founder_untagged_in_the_role_own_stream_wakes_it(wake, tmp_path, role, 
     w = make(wake, tmp_path)
     assert wake.own_stream(role) == stream
     assert w.on_message(role, msg(10, "hi", stream=stream), [])["action"] == "spawn"
+
+
+def test_founder_untagged_in_a_shared_room_wakes_only_its_owner(wake, tmp_path):
+    # the real shared rooms (setup_streams.py): PM reads #coo; COO and CTO read #PM.
+    # One untagged founder line wakes the room's owner and no other bot.
+    w = make(wake, tmp_path)
+    assert w.on_message("PM", msg(10, "hi", stream="coo"), [])["action"] == "skip"
+    assert w.on_message("COO", msg(11, "hi", stream="PM"), [])["action"] == "skip"
+    assert w.on_message("CTO", msg(12, "hi", stream="PM"), [])["action"] == "skip"
+    assert w.spawner.started == []
+    assert w.on_message("COO", msg(13, "hi", stream="coo"), [])["action"] == "spawn"
+    assert len(w.spawner.started) == 1
+
+
+def test_every_home_stream_is_a_stream_setup_streams_makes(wake):
+    sys.path.insert(0, str(BOT_DIR))
+    try:
+        import setup_streams
+    finally:
+        sys.path.remove(str(BOT_DIR))
+    homes = set(wake.AGENT["home_streams"].values())
+    assert homes <= set(setup_streams.STREAMS), sorted(homes - set(setup_streams.STREAMS))
 
 
 def test_backfill_reads_the_role_own_stream(wake, tmp_path, monkeypatch):

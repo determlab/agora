@@ -284,7 +284,7 @@ wins over `bot/.env`); missing or anything else is off.
 | no open conversation for the role | `spawn`: `claude -p --model <opus or sonnet> --session-id <new uuid>` in `C:\PlayGround\ops` (`WAKE_OPS_DIR`; the PA in `PA_DIR`), the topic's last 20 messages before yours in the first prompt |
 | conversation open, its turn has ended | `resume`: `claude -p --resume <uuid>` |
 | conversation open, a turn is still running | `queue`; delivered as one resume when the turn ends |
-| your message in the role's own stream (`#cto` for the CTO, `#PM` for the PM) **without** a mention | same as a mention: `spawn`, `resume` or `queue` |
+| your message in the role's own stream (`#cto` for the CTO, `#PM` for the PM) **without** a mention | same as a mention: `spawn`, `resume` or `queue`. This reverses the ops#318 rule "it never opens a new session": founder 2026-10-17 in #coo, an untagged founder line in a role's own room must wake it (the PM missed his messages in #PM). Do not restore it. |
 | the saved session never started, or its conversation does not exist (no `~/.claude/projects/*/<uuid>.jsonl`) | dropped, never resumed; your message opens a fresh one (ops#318) |
 
 The command lives in one dict, `AGENT` at the top of `wake.py` — swap
