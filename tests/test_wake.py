@@ -685,6 +685,9 @@ def test_pa_stays_out_of_company_streams_without_a_mention(wake, tmp_path):
     assert w.spawner.started == []
     w2 = make(wake, tmp_path / "b")
     assert w2.on_message("PA", msg(31, "hi", stream="pa"), [])["action"] == "spawn"
+    # a founder DM still wakes the PA (CTO on PR 133)
+    w3 = make(wake, tmp_path / "d")
+    assert w3.on_message("PA", msg(33, "hi", stream=None), [])["action"] == "spawn"
     # other roles' routing is unchanged
     w3 = make(wake, tmp_path / "c")
     assert w3.on_message("COO", msg(32, "@**COO** x", stream="All hands"),
@@ -1048,11 +1051,14 @@ def test_unknown_bot_or_impostor_name_is_not_the_founder(wake, tmp_path):
     assert w.spawner.started == []
 
 
+@pytest.mark.parametrize("stream", ["pa", "All hands", "coo", None])
 @pytest.mark.parametrize("src", ["COO", "CTO", "PM", "CMO", "CPSO"])
-def test_no_bot_wakes_the_pa(wake, tmp_path, src):
+def test_no_bot_wakes_the_pa(wake, tmp_path, src, stream):
     w = make_bots(wake, tmp_path)
-    d = w.on_message("PA", bmsg(10, src, "PA", stream="pa", topic="errands"), ["mentioned"])
-    assert d["action"] == "skip" and "only the founder wakes the PA" in d["reason"]
+    d = w.on_message("PA", bmsg(10, src, "PA", stream=stream, topic="errands"), ["mentioned"])
+    assert d["action"] == "skip"
+    if stream is not None:
+        assert "only the founder wakes the PA" in d["reason"]
     assert w.spawner.started == []
 
 
