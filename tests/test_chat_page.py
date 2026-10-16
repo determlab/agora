@@ -2409,32 +2409,87 @@ def test_326_the_undo_bar_counts_down_from_ten():
     assert got["ticks"] == 4   # the 10 s send timer + 3 ticks run here: none after 0
 
 
+_FLUSH_PRELUDE = """
+  const S = {creds: {email: "f@x", key: "k"}};
+  function basic(e, k) { return "Basic " + e + ":" + k; }
+  class ApiFailure extends Error {
+    constructor(status, body) { super((body && body.msg) || ("HTTP " + status)); this.status = status; }
+  }
+  function showKeys() {}
+  const cleared = [];
+  function clearTimeout(t) { cleared.push(t); }
+  const sent = [];
+  let REPLY = {status: 200, ok: true, body: {result: "success"}};
+  function fetch(url, o) {
+    sent.push([url, o]);
+    if (REPLY === "down") return Promise.reject(new Error("offline"));
+    const r = REPLY;
+    return Promise.resolve({status: r.status, ok: r.ok, json: async () => r.body});
+  }
+  let loads = 0;
+  async function loadDashboard() { loads++; }
+"""
+_FLUSH_FUNCS = ("flushApprovals", "clearApprovalsPending", "commitApproval", "api")
+
+
 def test_326_leaving_the_page_inside_the_undo_window_sends_the_answer_at_once():
-    got = _js(("flushApprovals", "clearApprovalsPending"), """
+    got = _js(_FLUSH_FUNCS, """
       approvalsPending = {id: "a", answer: "no", note: "later", until: 0, timer: 1, tick: 2};
       approvalsNotes.a = "later";
-      flushApprovals();
+      await flushApprovals();
       out.pending = approvalsPending;
       out.cleared = cleared;
       out.notes = approvalsNotes;
       out.sent = sent.map(([url, o]) => [url, o.method, o.keepalive, o.headers.Authorization, String(o.body)]);
-      flushApprovals();                       // nothing pending: nothing more is sent
+      out.toasts = toasts;
+      out.loads = loads;
+      await flushApprovals();                 // nothing pending: nothing more is sent
       out.count = sent.length;
-    """, prelude=FAKE_DOM + _consts("approvalsNotes", "approvalsPending") + """
-      const S = {creds: {email: "f@x", key: "k"}};
-      function basic(e, k) { return "Basic " + e + ":" + k; }
-      const cleared = [];
-      function clearTimeout(t) { cleared.push(t); }
-      const sent = [];
-      function fetch(url, o) { sent.push([url, o]); return Promise.resolve({}); }
-      async function loadDashboard() {}
-    """)
+    """, prelude=FAKE_DOM + _consts("approvalsNotes", "approvalsPending", "ANSWER_HE") + _FLUSH_PRELUDE)
     assert got["pending"] is None and sorted(got["cleared"]) == [1, 2] and got["notes"] == {}
     assert got["sent"] == [["/api/v1/dashboard/approve", "POST", True, "Basic f@x:k", "id=a&answer=no&note=later"]]
+    assert got["toasts"] == [["נדחה: נשמר", False]] and got["loads"] == 1
     assert got["count"] == 1
     script = _markup().script
     assert 'addEventListener("pagehide", flushApprovals);' in script
     assert 'if (document.visibilityState === "hidden") flushApprovals();' in script
+    # flushApprovals has no fetch of its own: one code path to the server (CTO on PR 137)
+    assert "fetch(" not in _function("flushApprovals")
+
+
+@pytest.mark.parametrize("reply", ["500", "401", "down"])
+def test_326_a_refused_flush_says_not_sent_and_re_renders_the_card(reply):
+    got = _js(_FLUSH_FUNCS, f"""
+      REPLY = {{"500": {{status: 500, ok: false, body: {{result: "error", msg: "boom"}}}},
+               "401": {{status: 401, ok: false, body: {{result: "error", msg: "bad key"}}}},
+               "down": "down"}}["{reply}"];
+      approvalsPending = {{id: "a", answer: "yes", note: "", until: 0, timer: 1, tick: 2}};
+      await flushApprovals();
+      out.pending = approvalsPending;
+      out.toasts = toasts;
+      out.loads = loads;
+      out.keepalive = sent.map(([, o]) => o.keepalive);
+    """, prelude=FAKE_DOM + _consts("approvalsNotes", "approvalsPending", "ANSWER_HE") + _FLUSH_PRELUDE)
+    assert got["pending"] is None and got["keepalive"] == [True]
+    assert len(got["toasts"]) == 1
+    text, bad = got["toasts"][0]
+    assert bad and text.startswith("לא נשלח: ")
+    assert got["loads"] == 1                  # the frozen countdown is replaced by a fresh board
+
+
+def test_326_an_ordinary_call_is_not_keepalive():
+    got = _js(("api",), """
+      await api("GET", "dashboard");
+      await api("POST", "dashboard/approve", {id: "a", answer: "yes", note: ""});
+      out.keepalive = sent.map(([, o]) => o.keepalive);
+    """, prelude=FAKE_DOM + _FLUSH_PRELUDE)
+    assert got["keepalive"] == [False, False]
+
+
+def test_326_the_prs_card_speaks_hebrew_too():
+    script = _markup().script
+    assert '"dash-prs": "בקשות מיזוג פתוחות"' in script
+    assert "PRs פתוחים" not in script
 
 
 def _visible_text(node) -> list[str]:

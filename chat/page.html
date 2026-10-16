@@ -1023,7 +1023,8 @@ function basic(email, key) {
   return "Basic " + btoa(bin);
 }
 
-async function api(method, path, params) {
+// opts.keepalive lets a send outlive the page (flushApprovals, ops#326).
+async function api(method, path, params, opts) {
   const enc = new URLSearchParams();
   for (const [k, v] of Object.entries(params || {})) {
     enc.set(k, typeof v === "string" ? v : JSON.stringify(v));
@@ -1035,7 +1036,7 @@ async function api(method, path, params) {
     // credentials "omit": no cookies and no browser-cached Basic auth, and no
     // native login prompt on a 401: the key screen is the only way in.
     resp = await fetch(url, {method, body, credentials: "omit", cache: "no-store",
-                             headers: {Authorization: basic(S.creds.email, S.creds.key)}});
+                             keepalive: !!(opts && opts.keepalive), headers: {Authorization: basic(S.creds.email, S.creds.key)}});
   } catch (e) {
     throw new ApiFailure(0, {msg: "אין חיבור לשרת הצ'אט: " + e.message});
   }
@@ -1880,7 +1881,7 @@ function renderPrs(list, total) {
     chip: p.type ? p.type.toLowerCase() : "none", chipText: p.type ? PR_TYPE_HE[p.type] || p.type : "לא נבדק",
     label: p.ref, url: p.url, detail: (p.draft ? "טיוטה · " : "") + (p.title || ""),
     meta: p.verdict === "CHANGES" ? "שינויים" : null, metaCls: "warn",
-  })), "dash-prs", "אין PRs פתוחים"));
+  })), "dash-prs", "אין בקשות מיזוג פתוחות"));
   if (typeof total === "number" && total > list.length)
     wrap.append(el("div", "muted", "מוצגים " + list.length + " מתוך " + total + " (" + list.length + "+)"));
   return wrap;
@@ -2185,22 +2186,22 @@ function tickApprovals() {
 }
 
 // Closing the tab (or leaving the app) inside the Undo window: the answer
-// goes now instead of being lost with the page's timer. A keepalive fetch,
-// not navigator.sendBeacon: the API takes its key in the Authorization
-// header, which sendBeacon cannot send.
+// goes now instead of being lost with the page's timer. A keepalive fetch
+// through api(), not navigator.sendBeacon: the API takes its key in the
+// Authorization header, which sendBeacon cannot send. If the page is still
+// alive (another app, a locked phone), a refused send gets the usual toast
+// and the card re-renders.
 function flushApprovals() {
   const p = approvalsPending;
   if (!p || !S.creds) return;
   clearApprovalsPending();
   delete approvalsNotes[p.id];
-  fetch("/api/v1/dashboard/approve", {method: "POST", keepalive: true, credentials: "omit", cache: "no-store",
-    body: new URLSearchParams({id: p.id, answer: p.answer, note: p.note || ""}),
-    headers: {Authorization: basic(S.creds.email, S.creds.key)}}).then(loadDashboard, () => {});
+  return commitApproval(p.id, p.answer, p.note, true);
 }
 
-async function commitApproval(id, answer, note) {
+async function commitApproval(id, answer, note, keepalive) {
   try {
-    await api("POST", "dashboard/approve", {id, answer, note: note || ""});
+    await api("POST", "dashboard/approve", {id, answer, note: note || ""}, {keepalive: !!keepalive});
     toast((ANSWER_HE[answer] || answer) + ": נשמר");
   } catch (e) { toast("לא נשלח: " + e.message, true); }
   finally { await loadDashboard(); }
@@ -3428,7 +3429,7 @@ const DASH_TITLES = {
   // (DASH.approvals); this app's `stuck`-derived NEEDSHUMAN card is a
   // different thing (not in the mockup), so it keeps a title of its own.
   "dash-live": "הרובוטים עכשיו", "dash-approvals": "מחכה לאישור שלך", "dash-waiting": "ריצות שממתינות לך",
-  "dash-roles": "מי עובד על מה", "dash-queue": "התור לפי עדיפות", "dash-prs": "PRs פתוחים",
+  "dash-roles": "מי עובד על מה", "dash-queue": "התור לפי עדיפות", "dash-prs": "בקשות מיזוג פתוחות",
   "dash-week": "השבוע", "dash-products": "מוצרים", "dash-stuck": "תקוע",
   "dash-progress": "התמונה הגדולה", "dash-tokens": "טוקנים", "dash-timeline": "ציר הזמן של היום",
   "dash-gantt": "התקדמות לפי יעדים",
