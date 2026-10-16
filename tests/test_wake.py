@@ -656,15 +656,62 @@ def test_pa_runs_in_pa_dir_on_sonnet(wake, tmp_path, monkeypatch):
     assert "founder's PA" in prompt and "--as PA send" in prompt and "agents/pa.md" not in prompt
 
 
-def test_pa_mention_elsewhere_spawns_and_others_in_pa_never_do(wake, tmp_path):
+def test_pa_mention_elsewhere_skips_and_others_in_pa_never_do(wake, tmp_path):
     w = make(wake, tmp_path)
-    assert w.on_message("PA", msg(10, stream="coo"), ["mentioned"])["action"] == "spawn"
+    d = w.on_message("PA", msg(10, "@**PA** hi", stream="coo"), ["mentioned"])
+    assert d["action"] == "skip" and d["reason"] == "PA wakes only in #pa or a founder DM (ops#327)"
+    assert w.spawner.started == []
     w2 = make(wake, tmp_path / "b")
     assert w2.on_message("PA", msg(11, stream="pa", sender=99), [])["action"] == "skip"
     assert w2.on_message("PA", msg(12, stream="coo"), [])["action"] == "skip"
     assert w2.spawner.started == []
     # the home-stream rule is the PA's only: a CTO bot in #pa still needs a mention
     assert w2.on_message("CTO", msg(13, stream="pa"), [])["action"] == "skip"
+
+
+def test_pa_stays_out_of_company_streams_without_a_mention(wake, tmp_path):
+    w = make(wake, tmp_path)
+    # founder in All hands, tagging another role, nobody, or a wildcard: no PA
+    for i, (text, flags) in enumerate([("@**COO** which project?", ["mentioned"]),
+                                       ("@**CTO** thoughts", ["mentioned"]),
+                                       ("status please", []),
+                                       ("@**all** heads up", ["mentioned"])], start=20):
+        d = w.on_message("PA", msg(i, text, stream="All hands", topic="כולם"), flags)
+        assert d["action"] == "skip", text
+    assert w.spawner.started == [] and w.role("PA").get("session") is None
+    # even an explicit @**PA** there never wakes it; anything in #pa still does
+    d = w.on_message("PA", msg(30, "@**PA** book it", stream="All hands"), ["mentioned"])
+    assert d["action"] == "skip" and d["reason"] == "PA wakes only in #pa or a founder DM (ops#327)"
+    assert w.spawner.started == []
+    w2 = make(wake, tmp_path / "b")
+    assert w2.on_message("PA", msg(31, "hi", stream="pa"), [])["action"] == "spawn"
+    # a founder DM still wakes the PA (CTO on PR 133)
+    w3 = make(wake, tmp_path / "d")
+    assert w3.on_message("PA", msg(33, "hi", stream=None), [])["action"] == "spawn"
+    # other roles' routing is unchanged
+    w3 = make(wake, tmp_path / "c")
+    assert w3.on_message("COO", msg(32, "@**COO** x", stream="All hands"),
+                         ["mentioned"])["action"] == "spawn"
+
+
+def test_pa_mention_elsewhere_never_touches_an_open_pa_session(wake, tmp_path):
+    w = make(wake, tmp_path)
+    w.on_message("PA", msg(50, "hi", stream="pa", topic="errands"), [])
+    before = dict(w.role("PA")["session"])
+    n = len(w.spawner.started)
+    d = w.on_message("PA", msg(51, "@**PA** leave", stream="All hands", topic="כולם"), ["mentioned"])
+    assert d["action"] == "skip"
+    sess = w.role("PA")["session"]
+    assert sess == before and not sess.get("pending") and len(w.spawner.started) == n
+
+
+def test_pa_unwoken_room_never_becomes_the_close_room(wake, tmp_path):
+    w = make(wake, tmp_path)
+    w.on_message("PA", msg(40, "hi", stream="pa", topic="errands"), [])
+    d = w.on_message("PA", msg(41, "company talk", stream="All hands", topic="כולם"), [])
+    assert d["action"] == "skip"
+    sess = w.role("PA")["session"]
+    assert (sess["stream"], sess["topic"]) == ("pa", "errands") and not sess.get("pending")
 
 
 @pytest.mark.parametrize("line,fix", [("", "PA_DIR missing in bot/.env"),
@@ -1004,11 +1051,14 @@ def test_unknown_bot_or_impostor_name_is_not_the_founder(wake, tmp_path):
     assert w.spawner.started == []
 
 
+@pytest.mark.parametrize("stream", ["pa", "All hands", "coo", None])
 @pytest.mark.parametrize("src", ["COO", "CTO", "PM", "CMO", "CPSO"])
-def test_no_bot_wakes_the_pa(wake, tmp_path, src):
+def test_no_bot_wakes_the_pa(wake, tmp_path, src, stream):
     w = make_bots(wake, tmp_path)
-    d = w.on_message("PA", bmsg(10, src, "PA", stream="pa", topic="errands"), ["mentioned"])
-    assert d["action"] == "skip" and "only the founder wakes the PA" in d["reason"]
+    d = w.on_message("PA", bmsg(10, src, "PA", stream=stream, topic="errands"), ["mentioned"])
+    assert d["action"] == "skip"
+    if stream is not None:
+        assert "only the founder wakes the PA" in d["reason"]
     assert w.spawner.started == []
 
 
