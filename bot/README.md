@@ -316,6 +316,34 @@ ops settings do not allow is refused there. No password, no human account.
 A DM is answered in the role's own stream, topic `direct message`
 (`zulip.py send` posts to streams only).
 
+## PA (Cowork) (ops#295)
+
+The founder's Claude Cowork session is his PA, and it reads and posts in Zulip
+as its own bot, **PA**, in `#pa` (the founder is subscribed) and `All hands`,
+and nowhere else; `setup_streams.py --check` fails if PA is in any other
+stream. It is a bot user, never a human account, with no password.
+
+`python bot/setup_streams.py` creates the bot and prints the two lines for
+`bot/.env` (gitignored; the key is never written to git, and Zulip shows it only
+when the bot is created). The founder runs it, since it needs `ZULIP_ADMIN_*`:
+
+```
+ZULIP_PA_EMAIL=pa-bot@<realm>
+ZULIP_PA_API_KEY=<key>
+```
+
+The PA uses two commands, the same as the role sessions:
+
+```
+python bot/zulip.py --as PA read --stream pa --topic "X"
+python bot/zulip.py --as PA send --stream pa --topic "X" --text "..."
+```
+
+A missing key says which two lines to add and the setup command that prints
+them. The PA is woken only when the founder opens it in Cowork, not by
+`bot/wake.py` (ops#293), which spawns the claude CLI. Cowork-side configuration
+is the founder's, in Cowork.
+
 ## Memory limits (issue #57)
 
 Each container has a `mem_limit` in `docker-compose.yml`, about 2 GB in

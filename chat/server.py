@@ -1822,11 +1822,11 @@ def bots_from_env(store: Store, path: str) -> list[dict]:
     exists already gets the file's key; a human is never touched."""
     plan = stream_plan()
     # The real full names setup_streams.py finds bots by — CTO, CMO, COO, CPSO,
-    # Watchdog, Pool, PM — read from its own ROLE_BOTS/WATCHDOG_BOT/POOL_BOT/
-    # PM_BOT rather than guessed: a 4-letter acronym like CPSO would otherwise
+    # Watchdog, Pool, PM, PA — read from its own ROLE_BOTS/WATCHDOG_BOT/POOL_BOT/
+    # PM_BOT/PA_BOT rather than guessed: a 4-letter acronym like CPSO would otherwise
     # title-case to "Cpso" under the short-role heuristic below.
     full_names = {short.upper(): full for full, short in
-                 (*plan.ROLE_BOTS, plan.WATCHDOG_BOT, plan.POOL_BOT, plan.PM_BOT)}
+                 (*plan.ROLE_BOTS, plan.WATCHDOG_BOT, plan.POOL_BOT, plan.PM_BOT, plan.PA_BOT)}
     env, out = _read_env(path), []
     for key in sorted(env):
         m = re.fullmatch(r"ZULIP_([A-Z0-9_]+)_EMAIL", key)
@@ -1912,6 +1912,7 @@ def ensure_streams(store: Store) -> tuple[list[str], list[str]]:
     wanted.append((plan.WATCHDOG_BOT[0], plan.WATCHDOG_STREAMS))
     wanted.append((plan.POOL_BOT[0], {plan.POOL_STREAM}))
     wanted.append((plan.PM_BOT[0], plan.PM_STREAMS))
+    wanted.append((plan.PA_BOT[0], plan.PA_STREAMS))  # ops#295
     missing = []
     with store.tx():
         # ops#274: the PM bot reads "All hands"; it is not in plan.STREAMS (its members are not
