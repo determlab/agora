@@ -34,7 +34,7 @@ milestones in the history, not tagged releases.
   invites (a bot gets `INVITE_NOT_ALLOWED`). Room names are letters, digits,
   space and `-_.` (`BAD_ROOM_NAME` otherwise), because a name reaches a shell
   hint. `bot/zulip.py` gains `--room` on `send`/`read`/`wait`/`typing`, and
-  `invite`, refused until ops#321. `bot/wake.py`: an invite never wakes; a
+  `invite`, refused: the founder invites from the page. `bot/wake.py`: an invite never wakes; a
   one-bot room wakes on any founder message, a room with several role bots
   only on `@**ROLE**`; a non-member never wakes; a removal closes the
   session there; the hint is `send --room`. Everyone in a room reads
@@ -43,6 +43,9 @@ milestones in the history, not tagged releases.
   `read --since` command), each line not from the founder marked as data.
   **Behavior change:** `#coo` (COO + PM) and `All hands` hold two or more
   role bots, so an untagged line there no longer wakes the COO: write `@**COO**`.
+  The PA wakes only in `#pa` or a DM, never in a company room. With ops#321's
+  bot wakes, a bot's `@**ROLE**` wakes only a member of the room, a bot-opened
+  session gets the same catch-up, and the bot-turn cap is per room, not per topic.
 - `#feature`, a private Zulip stream for the big-feature path with exactly
   the founder, the `CTO` bot and the `COO` bot in it — the one exception to
   "each bot in its own stream only". `bot/setup_streams.py` creates it

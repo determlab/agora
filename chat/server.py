@@ -1369,13 +1369,11 @@ class Chat:
             return [me]
         users = [self.s.user_by_ref(r) for r in _json_list(p["principals"])]
         if any(u["id"] != me["id"] for u in users):
-            # ops#322: only a person invites into or removes from a room. A bot
-            # invite (a role session's CLI) waits for ops#321's matrix; no bot
-            # ever invites the PA.
+            # ops#322: only a person invites into or removes from a room; a
+            # role session's CLI invite stays refused. No bot ever invites the PA.
             if me["is_bot"]:
                 raise ApiError("A bot cannot add or remove others in a room: the founder "
-                               "does it with the page's Invite button (an agent invite "
-                               "waits for ops#321)", "INVITE_NOT_ALLOWED")
+                               "does it with the page's Invite button", "INVITE_NOT_ALLOWED")
             self._admin(me, "subscribe or unsubscribe other users")
         return users
 

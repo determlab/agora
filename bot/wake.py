@@ -12,13 +12,16 @@ How it works:
     the saved queue, or re-registers and backfills by message id, so nothing
     is acted on twice and nothing is skipped (``resume.py``).
   - Only a message whose ``sender_id`` is ``FOUNDER_ZULIP_ID`` (bot/.env, never
-    inferred) does anything. Every other sender is skipped and logged.
+    inferred) does anything, besides a role bot's @mention when bot wakes are
+    on (below). Every other sender is skipped and logged.
   - Rooms (ops#322): a room is a stream with one fixed topic, and the session
     key is the room. In a room with one role bot, any founder message wakes
     it; in a room with two or more, only ``@**ROLE**`` wakes that role. A
-    role that is not a member of the room never wakes there. An invite only
-    subscribes and wakes nothing; a removal closes the role's session in
-    that room. A room name that is not safe text is never put in a hint.
+    role that is not a member of the room never wakes there, by the founder
+    or by a bot. The PA wakes only in #pa or a founder DM, never in a company
+    room. An invite only subscribes and wakes nothing; a removal closes the
+    role's session in that room. A room name that is not safe text is never
+    put in a hint.
   - A role session the founder opened by hand (Claude Code's registry names it
     after the role, its pid is alive) is left alone: its Stop-hook wait
     delivers the message (hooks/agora_hook.py). Otherwise the role gets a
@@ -44,11 +47,26 @@ How it works:
     written — and is forgotten. At 4 h a running turn is stopped first and the
     close turn runs once it has exited; a close turn gets 2 minutes. The next
     mention opens a fresh one.
+  - Bot wakes (ops#321), off unless ``BOT_WAKES=on`` in bot/.env: a role bot
+    listed in bot/.env may wake another role with an explicit ``@**ROLE**`` in
+    a room that role is a member of (never a DM, never untagged), per
+    ``AGENT["bot_wakes"]``. The
+    sender is known by its ``sender_id`` (``GET /users/me`` per bot at start),
+    never by a name. Nobody but the founder wakes the PA; no bot wakes its own
+    role. Caps, kept in state.json so a restart keeps them: 6 bot turns per
+    room per hour, whatever the topic (then one stop line in the room, and nothing more there
+    until a founder message in it), 3 bot spawns per role per hour and 10 per
+    day, 25 bot turns a day in all. A bot-opened session runs with
+    ``--max-turns`` and closes 10 minutes after its last delivered message;
+    a bot message never moves ``last_founder_at``. The prompt's first line
+    says it came from a bot, not the founder. A founder message bypasses
+    every cap.
 
 Security (type B — this starts processes from chat input): only the founder's
-user id triggers; the message text goes into the prompt on **stdin**, never
-onto a command line; the command is a fixed list (no shell) whose only
-placeholders are the role's model and a uuid this script made; no new
+user id triggers, and with BOT_WAKES=on the user ids of our own role bots;
+the message text goes into the prompt on **stdin**, never onto a command line; the command is a fixed list (no shell) whose only
+placeholders are the role's model, a uuid this script made and, for a
+bot-opened session, the integer max-turns from ``AGENT``; no new
 permissions and no skip-permissions flag — the session runs under the ops
 repo's own settings.
 
@@ -103,6 +121,13 @@ AGENT: dict[str, Any] = {
     # exists from an id that never got one (ops#318). None: do not check.
     "conversations": str(Path(os.environ.get("CLAUDE_CONFIG_DIR")
                               or Path.home() / ".claude") / "projects" / "*" / "{session_id}.jsonl"),
+    # Bot wakes (ops#321): which role bot may wake which roles. Never the PA
+    # (personal data: only the founder wakes it), never the sender's own role.
+    "bot_wakes": {src: tuple(r for r in ("COO", "CTO", "PM", "CMO", "CPSO") if r != src)
+                  for src in ("COO", "CTO", "PM", "CMO", "CPSO")},
+    # Added to every turn of a bot-opened session that carries no founder message.
+    "bot_args": ["--max-turns", "{max_turns}"],
+    "bot_max_turns": 15,
 }
 ROLES = tuple(AGENT["models"])
 
@@ -113,6 +138,7 @@ HISTORY_MESSAGES = 20
 TICK_SECONDS = 30.0
 BACKFILL_LIMIT = 1000
 ROOM_NAME_MAX = 60
+ROOM_TOPIC = "chat"  # a room's one fixed topic, as in bot/zulip.py (ops#322)
 
 
 def safe_room(name: Any) -> bool:
@@ -125,18 +151,24 @@ def safe_room(name: Any) -> bool:
             and all(c.isalnum() or c in " -_." for c in name))
 
 
-def _mentions_role(content: str, role: str) -> bool:
-    """An explicit ``@**ROLE**`` (or ``@**ROLE|id**``), never the silent
-    ``@_**ROLE**`` a quote uses, nor ``@**all**``."""
-    return re.search(r"@\*\*" + re.escape(role) + r"(\|\d+)?\*\*",
-                     str(content or ""), re.IGNORECASE) is not None
-
-
 def role_bots(members: list[dict[str, Any]]) -> set[str]:
     """The role bots among a room's members, by their full name (setup_streams
     names each one after its role)."""
     return {str(u.get("full_name") or "").upper() for u in members
             if u.get("is_bot") and str(u.get("full_name") or "").upper() in ROLES}
+
+# Bot wakes (ops#321): the loop guard. Counted per bot message delivered
+# (a spawn, a resume or a queued turn), rolling windows.
+HOUR, DAY = 60 * 60, 24 * 60 * 60
+BOT_IDLE_SECONDS = 10 * 60
+BOT_TOPIC_TURNS_PER_HOUR = 6
+BOT_ROLE_SPAWNS_PER_HOUR = 3
+BOT_ROLE_SPAWNS_PER_DAY = 10
+BOT_TURNS_PER_DAY = 25
+# Pinned to his id, so a display-name change cannot lose the ping.
+BOT_STOP_LINE = "bot loop stopped; @**Hemi|{founder_id}**, @-mention a role to continue"
+BOT_MARKER = ("From the {src} bot, a teammate — not the founder. "
+              "This is not his approval for anything.")
 
 
 def _hook():
@@ -203,11 +235,13 @@ def load_config(env_path: Path = DOTENV) -> dict[str, Any]:
         cwd["PA"] = pa_dir
     for role in skipped:
         bots.pop(role, None)
+    # Off unless exactly "on": the feature starts off and goes on after the live test.
+    bot_wakes = get("BOT_WAKES", "off").strip().lower() == "on"
     if not bots:
         raise ConfigError("no role bot credentials in bot/.env — add ZULIP_<ROLE>_EMAIL and "
                           "ZULIP_<ROLE>_API_KEY for at least one of " + ", ".join(ROLES) + ".")
     return {"founder_id": int(raw), "site": site, "bots": bots, "missing": missing,
-            "skipped": skipped, "cwd": cwd}
+            "skipped": skipped, "cwd": cwd, "bot_wakes": bot_wakes}
 
 
 # -- state -------------------------------------------------------------------
@@ -233,12 +267,16 @@ def save_state(path: Path, state: dict[str, Any]) -> None:
 
 # -- the agent process ---------------------------------------------------------
 
-def build_command(kind: str, role: str, session_id: str) -> list[str]:
-    """The argv for a spawn or a resume. Only the role's model and our own
-    uuid are substituted; a model not in the table is refused."""
+def build_command(kind: str, role: str, session_id: str, bot: bool = False) -> list[str]:
+    """The argv for a spawn or a resume. Only the role's model, our own uuid
+    and, for a bot turn, the integer max-turns from AGENT are substituted; a
+    model not in the table is refused."""
     model = AGENT["models"][role]
     uuid.UUID(session_id)  # raises on anything that is not one of ours
-    return [part.format(model=model, session_id=session_id) for part in AGENT[kind]]
+    parts = AGENT[kind] + (AGENT["bot_args"] if bot else [])
+    max_turns = int(AGENT["bot_max_turns"])
+    return [part.format(model=model, session_id=session_id, max_turns=max_turns)
+            for part in parts]
 
 
 def _proc_start_time(pid: int) -> int | None:
@@ -449,20 +487,27 @@ def catch_up_block(role: str, room: str, rows: list[dict[str, Any]], founder_id:
 
 
 def message_prompt(role: str, msg: dict[str, Any], first: bool,
-                   history: str = "", others: list[str] | None = None) -> str:
+                   history: str = "", others: list[str] | None = None,
+                   bot: str | None = None) -> str:
+    """``bot``: the role whose bot sent ``msg``, or None for the founder. A
+    bot's message starts with the marker line (ops#321)."""
     room = _where(msg, role)
     sender = msg.get("sender_full_name") or msg.get("sender_email") or "the founder"
     origin = "a direct message" if msg.get("type") != "stream" else f"the room #{room}"
     who = ("You are the founder's PA (the CLAUDE.md in this folder says how you work)"
            if role == "PA" else f"You are the {role} (read agents/{role.lower()}.md)")
-    head = (f"{who}. The founder called you from the chat; this session was opened for "
-            f"that and closes when he goes quiet.\n\n{history}"
-            if first else "")
+    caller = (f"The {bot} bot called you from the chat; this session was opened for that "
+              f"and closes 10 minutes after its last message. A bot wake never stands "
+              f"in for a founder decision" if bot else
+              "The founder called you from the chat; this session was opened for "
+              "that and closes when he goes quiet")
+    head = f"{who}. {caller}.\n\n{history}" if first else ""
     if role == "PA" and others and msg.get("type") == "stream":
         # ops#322: the PA in a shared room says nothing private by default.
         head += (f"Also in #{room}: {', '.join(others)}. Others read this room; share "
                  f"personal data only if he asks here.\n\n")
-    return (f"{head}Message from {sender} in {origin}:\n\n{msg.get('content', '')}\n\n"
+    marker = BOT_MARKER.format(src=bot) + "\n\n" if bot else ""
+    return (f"{marker}{head}Message from {sender} in {origin}:\n\n{msg.get('content', '')}\n\n"
             f"Answer in the room #{room} with:\n  {_send_hint(role, room)}\n"
             f"Copy the room name exactly as written here.\n")
 
@@ -471,6 +516,13 @@ def close_prompt(role: str, room: str) -> str:
     return (f"Idle close: this {role} session ends now. Post exactly one line in the "
             f"room #{room} — what was agreed, and where it is written (file, issue "
             f"or commit) — with:\n  {_send_hint(role, room)}\nThen stop.")
+
+
+def mentions(role: str, content: str) -> bool:
+    """An explicit ``@**ROLE**`` (or ``@**ROLE|id**``) in the text. A silent
+    ``@_**ROLE**`` or a wildcard does not count."""
+    return re.search(rf"(?<!_)@\*\*{re.escape(role)}(\|\d+)?\*\*", content,
+                     re.IGNORECASE) is not None
 
 
 # -- the decisions -----------------------------------------------------------
@@ -491,8 +543,15 @@ class Waker:
                  clock: Callable[[], float] = time.time, dry_run: bool = False,
                  emit: Callable[[dict[str, Any]], None] = lambda d: None,
                  history: History | None = None, cwd: dict[str, str] | None = None,
-                 members: Members | None = None):
+                 members: Members | None = None,
+                 bot_wakes: bool = False, bot_ids: dict[int, str] | None = None,
+                 post: Callable[[str, str, str], None] | None = None):
         self.founder_id = founder_id
+        self.bot_wakes = bot_wakes
+        # {sender_id: role} of our own role bots, read from Zulip (ops#321).
+        self.bot_ids: dict[int, str] = dict(bot_ids or {})
+        # post(role, room, text) as that role's bot: the stop line.
+        self.post = post
         self.state_path = state_path
         self.state = load_state(state_path)
         self.spawner = spawner
@@ -518,6 +577,9 @@ class Waker:
                 **extra: Any) -> dict[str, Any]:
         d = {"role": role, "action": action, "reason": reason, **extra}
         if msg is not None:
+            src = self._bot_of(msg)
+            if src:
+                d.setdefault("origin", f"bot:{src}")
             d["message_id"] = msg.get("id")
             if msg.get("type") == "stream":
                 d["room"] = msg.get("display_recipient")
@@ -565,6 +627,11 @@ class Waker:
         return self._finish(role, f"session {sess['id']} never started or has no "
                             "conversation; dropped, not resumed")
 
+    def _own_id(self, role: str) -> int | None:
+        """The user id of this role's own bot (read from Zulip at start), or
+        None if it is not known."""
+        return next((uid for uid, r in self.bot_ids.items() if r == role), None)
+
     def _room_members(self, role: str, room: str) -> list[dict[str, Any]] | None:
         if self.members is None:
             return None
@@ -574,22 +641,27 @@ class Waker:
             print(f"wake: {role}: cannot read the members of #{room} ({exc}); "
                   "only an @mention wakes", file=sys.stderr)
             return None
+        own = self._own_id(role)
         self.others[(role, room)] = [
             str(u.get("full_name") or u.get("email")) for u in members
-            if u.get("user_id") != self.founder_id
-            and str(u.get("full_name") or "").upper() != role]
+            if u.get("user_id") not in (self.founder_id, own)]
         return members
 
     def _wakes(self, role: str, msg: dict[str, Any]) -> tuple[str, str]:
-        """Whether a founder message calls this role (ops#322): ``"yes"``,
-        ``"no"`` or ``"not_member"``, and why not. A DM always does."""
+        """Whether a message calls this role (ops#322): ``"yes"``, ``"no"`` or
+        ``"not_member"``, and why not. A DM always does. The PA wakes only in
+        its own room #pa (or a DM): it is the founder's personal assistant and
+        never joins a company room."""
         if msg.get("type") != "stream":
             return "yes", ""
         room = _where(msg, role)
+        if role == "PA" and room != own_stream(role):
+            return "no", (f"the PA wakes only in #{own_stream(role)} or a founder DM, "
+                          f"never in #{room}")
         if not safe_room(room):
             return "no", (f"room name {room!r} is not safe text (letters, digits, space, "
                           "-_. only); no hint is built for it")
-        mentioned = _mentions_role(msg.get("content", ""), role)
+        mentioned = mentions(role, str(msg.get("content") or ""))
         members = self._room_members(role, room)
         if members is None:
             return ("yes" if mentioned else "no"), \
@@ -602,10 +674,131 @@ class Waker:
         return "no", (f"#{room} has {len(bots)} role bots ({', '.join(sorted(bots))}); "
                       f"only @**{role}** wakes {role}")
 
+    def _bot_of(self, msg: dict[str, Any]) -> str | None:
+        """The role whose bot sent ``msg``, by ``sender_id`` only; None for the
+        founder or anyone else."""
+        sender = msg.get("sender_id")
+        if not self.bot_wakes or sender == self.founder_id or not isinstance(sender, int):
+            return None
+        return self.bot_ids.get(sender)
+
     def _route(self, role: str, msg: dict[str, Any], flags: list[str]) -> dict[str, Any]:
-        if msg.get("sender_id") != self.founder_id:
-            who = msg.get("sender_email") or msg.get("sender_id")
-            return self._decide(role, "skip", f"sender {who} is not the founder", msg)
+        if msg.get("sender_id") == self.founder_id:
+            return self._route_founder(role, msg, flags)
+        src = self._bot_of(msg)
+        if src is not None:
+            return self._route_bot(role, src, msg, flags)
+        who = msg.get("sender_email") or msg.get("sender_id")
+        off = "" if self.bot_wakes else \
+            "; bot wakes are off (BOT_WAKES=on in bot/.env turns them on)"
+        return self._decide(role, "skip", f"sender {who} is not the founder{off}", msg)
+
+    # -- bot wakes (ops#321) --
+
+    def _bots(self) -> dict[str, Any]:
+        b = self.state.setdefault("bots", {})
+        b.setdefault("log", [])
+        b.setdefault("topic_reset", {})
+        b.setdefault("topic_stopped", {})
+        return b
+
+    @staticmethod
+    def _room_key(msg: dict[str, Any]) -> str:
+        """The bot-turn cap is per room (ops#322), never per topic: a bot that
+        varies ``--topic`` inside one room still counts against one cap.
+        Zulip stream names are case-insensitive."""
+        return str(msg.get("display_recipient")).casefold()
+
+    def _founder_resets(self, msg: dict[str, Any]) -> None:
+        """A founder message in a room resets its bot-turn count and lifts
+        its stop."""
+        if msg.get("type") != "stream" or "bots" not in self.state:
+            return
+        b, key = self._bots(), self._room_key(msg)
+        b["topic_reset"][key] = self.clock()
+        b["topic_stopped"].pop(key, None)
+
+    def _bot_cap(self, role: str, src: str, msg: dict[str, Any],
+                 spawn: bool) -> dict[str, Any] | None:
+        """The skip decision if a cap holds, else None and the turn is counted."""
+        now, b, key = self.clock(), self._bots(), self._room_key(msg)
+        b["log"] = log = [e for e in b["log"] if now - e["at"] < DAY]
+        # A reset older than the hour window changes no count.
+        b["topic_reset"] = {k: t for k, t in b["topic_reset"].items() if now - t < HOUR}
+        since = max(now - HOUR, b["topic_reset"].get(key, 0.0))
+        in_room = sum(1 for e in log if e["topic"] == key and e["at"] >= since)
+        if key in b["topic_stopped"] or in_room >= BOT_TOPIC_TURNS_PER_HOUR:
+            posted = False
+            if key not in b["topic_stopped"]:
+                b["topic_stopped"][key] = now
+                posted = self._post_stop(role, msg)
+            return self._decide(role, "skip", f"bot loop stopped in this room "
+                                f"({BOT_TOPIC_TURNS_PER_HOUR} bot turns in an hour); a "
+                                f"founder message here resets it", msg, stop_line=posted)
+        if len(log) >= BOT_TURNS_PER_DAY:
+            return self._decide(role, "skip", f"{BOT_TURNS_PER_DAY} bot turns today, "
+                                "the daily cap; founder wakes still work", msg)
+        if spawn:
+            spawns = [e["at"] for e in log if e["role"] == role and e["spawn"]]
+            if sum(1 for t in spawns if now - t < HOUR) >= BOT_ROLE_SPAWNS_PER_HOUR:
+                return self._decide(role, "skip", f"{BOT_ROLE_SPAWNS_PER_HOUR} bot spawns of "
+                                    f"{role} in the last hour, the cap", msg)
+            if len(spawns) >= BOT_ROLE_SPAWNS_PER_DAY:
+                return self._decide(role, "skip", f"{BOT_ROLE_SPAWNS_PER_DAY} bot spawns of "
+                                    f"{role} today, the cap", msg)
+        log.append({"at": now, "role": role, "from": src, "topic": key, "spawn": spawn})
+        return None
+
+    def _post_stop(self, role: str, msg: dict[str, Any]) -> bool:
+        if self.post is None or self.dry_run:
+            return False
+        try:
+            self.post(role, _where(msg, role), BOT_STOP_LINE.format(founder_id=self.founder_id))
+            return True
+        except (ZulipError, OSError, ValueError) as exc:
+            print(f"wake: {role}: cannot post the stop line ({exc})", file=sys.stderr)
+            return False
+
+    def _route_bot(self, role: str, src: str, msg: dict[str, Any],
+                   flags: list[str]) -> dict[str, Any]:
+        """A role bot's message: only an explicit @**ROLE** in a stream, by
+        the matrix, under the caps. It never moves ``last_founder_at``."""
+        if role == "PA":
+            return self._decide(role, "skip", "only the founder wakes the PA", msg)
+        if src == role:
+            return self._decide(role, "skip", f"the {role} bot never wakes its own role", msg)
+        if role not in AGENT["bot_wakes"].get(src, ()):
+            return self._decide(role, "skip", f"the {src} bot may not wake {role} "
+                                "(AGENT['bot_wakes'])", msg)
+        if msg.get("type") != "stream":
+            return self._decide(role, "skip", "a bot wakes a role only by @-mention in a "
+                                "stream, never by DM", msg)
+        if "mentioned" not in flags or not mentions(role, str(msg.get("content") or "")):
+            return self._decide(role, "skip", f"no @**{role}** in a bot's message", msg)
+        # ops#322: the room rule before any cap, so a bot's @**ROLE** for a
+        # role that is not in the room wakes nothing.
+        wakes, why = self._wakes(role, msg)
+        if wakes != "yes":
+            return self._decide(role, "skip", why, msg)
+        self._drop_stale(role)
+        hand = registry_live(role, _any_pid_alive)
+        if hand:
+            return self._decide(role, "skip", f"live {role} session (pid {hand}); "
+                                "its hook delivers the message", msg)
+        sess = self.role(role).get("session")
+        # Queued behind a running turn counts as no spawn; if that session then
+        # closes, _finish spawns it outside the per-role spawn cap. The topic
+        # and daily caps still bound it.
+        capped = self._bot_cap(role, src, msg, spawn=not sess or bool(sess.get("closing")))
+        if capped:
+            return capped
+        return self._deliver(role, msg, founder=False)
+
+    # -- the founder --
+
+    def _route_founder(self, role: str, msg: dict[str, Any],
+                       flags: list[str]) -> dict[str, Any]:
+        self._founder_resets(msg)
         self._drop_stale(role)
         rs = self.role(role)
         sess = rs.get("session")
@@ -624,29 +817,37 @@ class Waker:
         hand = registry_live(role, _any_pid_alive)
         if hand:
             if (msg.get("type") != "stream" or _where(msg, role) == own_stream(role)
-                    or _mentions_role(msg.get("content", ""), role)):
+                    or mentions(role, str(msg.get("content") or ""))):
                 why = "its hook delivers the message"
             else:  # hooks/agora_hook.py reads mentions, DMs and the own room only
                 why = ("its hook delivers only mentions, DMs and its own room, so this "
                        "untagged message is not delivered")
             return self._decide(role, "skip", f"live {role} session (pid {hand}); {why}", msg)
+        return self._deliver(role, msg, founder=True)
+
+    def _deliver(self, role: str, msg: dict[str, Any], founder: bool) -> dict[str, Any]:
+        """Spawn, resume or queue: the founder's message, or a bot's that
+        passed the gate. Only the founder's moves ``last_founder_at``."""
+        sess = self.role(role).get("session")
         if sess and sess.get("closing"):
             if not self._alive(sess):
                 # Nothing is running for it: forget it and start fresh now,
-                # never a close turn on a session the founder is talking to.
-                self._finish(role, "the founder wrote to a closing session; closed")
+                # never a close turn on a session someone is talking to.
+                self._finish(role, "a message came to a closing session; closed")
                 return self._spawn(role, [msg])
             sess.setdefault("pending", []).append(msg)
             return self._decide(role, "queue", "the session is closing; a fresh one "
                                 "opens with this message", msg)
         if sess:
-            sess["last_founder_at"] = now
+            if founder:
+                sess["last_founder_at"] = self.clock()
             if self._alive(sess) or sess.get("dry"):
                 sess.setdefault("pending", []).append(msg)
                 return self._decide(role, "queue", f"{role} session is answering "
                                     f"(pid {sess.get('pid') or 'dry run'}); delivered when the turn ends", msg)
             block = self._catch_up(role, sess, [msg])
-            self._run(role, "resume", block + self._prompt(role, msg, first=False))
+            self._run(role, "resume", block + self._prompt(role, msg, first=False),
+                      bot=self._bot_turn(sess, [msg]))
             sess["stream"] = _where(msg, role)
             return self._decide(role, "resume", f"open {role} session, turn ended",
                                 msg, session_id=sess["id"])
@@ -654,7 +855,7 @@ class Waker:
 
     def _prompt(self, role: str, msg: dict[str, Any], first: bool, history: str = "") -> str:
         others = self.others.get((role, _where(msg, role)))
-        return message_prompt(role, msg, first, history, others)
+        return message_prompt(role, msg, first, history, others, bot=self._bot_of(msg))
 
     def _handoff(self, role: str, msgs: list[dict[str, Any]]) -> tuple[str, int | str]:
         """The room's last HISTORY_MESSAGES messages before ``msgs``, as a
@@ -694,9 +895,10 @@ class Waker:
         except (ZulipError, OSError, ValueError) as exc:
             return (f"(What the room #{room} said since your last turn could not be read: "
                     f"{exc}.)\n\n")
+        own = self._own_id(role)
         rows = [m for m in fetched if int(seen) < int(m.get("id") or 0) < newest
                 and m.get("id") not in new
-                and str(m.get("sender_full_name") or "").upper() != role]  # its own posts
+                and (own is None or m.get("sender_id") != own)]  # its own posts
         # Cut: more than the cap, or a full window that may not reach back to seen_id.
         cut = len(rows) > HISTORY_MESSAGES or (
             len(fetched) >= n and min(int(m.get("id") or 0) for m in fetched) > int(seen) + 1)
@@ -704,25 +906,39 @@ class Waker:
         return catch_up_block(role, room, rows, self.founder_id,
                               int(seen) if cut else None)
 
+    def _bot_turn(self, sess: dict[str, Any], msgs: list[dict[str, Any]]) -> bool:
+        """A bot-opened session's turn that carries no founder message runs
+        with max-turns; the founder's turns keep today's limits."""
+        return bool(sess.get("origin")) and all(self._bot_of(m) for m in msgs)
+
     def _spawn(self, role: str, msgs: list[dict[str, Any]]) -> dict[str, Any]:
         now = self.clock()
         sid = str(uuid.uuid4())
-        self.role(role)["session"] = {"id": sid, "stream": _where(msgs[-1], role),
-                                      "started_at": now, "last_founder_at": now, "pid": None,
-                                      "seen_id": max(int(m.get("id") or 0) for m in msgs)}
+        bots = [self._bot_of(m) for m in msgs]
+        sess = {"id": sid, "stream": _where(msgs[-1], role), "started_at": now,
+                "last_founder_at": now, "pid": None,
+                "seen_id": max(int(m.get("id") or 0) for m in msgs)}
+        if all(bots):  # opened by a bot: no founder time, its own idle rule
+            sess.update(origin=f"bot:{bots[0]}", last_founder_at=None)
+        self.role(role)["session"] = sess
         block, count = self._handoff(role, msgs)
         prompt = "\n---\n".join(self._prompt(role, m, first=(i == 0),
                                              history=block if i == 0 else "")
                                 for i, m in enumerate(msgs))
-        self._run(role, "spawn", prompt)
-        return self._decide(role, "spawn", f"founder called {role}; no live session",
+        bot = self._bot_turn(sess, msgs)
+        self._run(role, "spawn", prompt, bot=bot)
+        why = f"the {bots[0]} bot called {role}" if bot else f"founder called {role}"
+        return self._decide(role, "spawn", f"{why}; no live session",
                             msgs[-1], session_id=sid, model=AGENT["models"][role],
                             cwd=self.cwd.get(role, AGENT["cwd"]), history=count,
-                            command=build_command("spawn", role, sid))
+                            command=build_command("spawn", role, sid, bot=bot))
 
-    def _run(self, role: str, kind: str, prompt: str) -> None:
+    def _run(self, role: str, kind: str, prompt: str, bot: bool = False,
+             delivers: bool = True) -> None:
         sess = self.role(role)["session"]
-        argv = build_command(kind, role, sess["id"])
+        argv = build_command(kind, role, sess["id"], bot=bot)
+        if delivers:
+            sess["last_delivered_at"] = self.clock()
         if self.dry_run:
             sess["dry"] = True  # as if its turn were running: later messages queue
             return
@@ -739,7 +955,8 @@ class Waker:
             raise SpawnError(f"room name {sess.get('stream')!r} is not safe text; "
                              "closed without a close line")
         sess["close_turn_at"] = now
-        self._run(role, "resume", close_prompt(role, sess["stream"]))
+        self._run(role, "resume", close_prompt(role, sess["stream"]),
+                  bot=bool(sess.get("origin")), delivers=False)
 
     def on_removed(self, role: str, room: str) -> list[dict[str, Any]]:
         """The role left ``room`` (removed from it, ops#322): its open session
@@ -812,6 +1029,21 @@ class Waker:
                 self.save()
         return out
 
+    @staticmethod
+    def _idle(sess: dict[str, Any], now: float) -> str | None:
+        """Why the session is idle, or None. The founder's session: 15 min
+        after his last message. A bot-opened one (ops#321): 10 min after its
+        last delivered message, and 15 after his if he wrote in it."""
+        founder_at = sess.get("last_founder_at")
+        if founder_at is not None and now - founder_at < IDLE_SECONDS:
+            return None
+        if sess.get("origin"):
+            last = sess.get("last_delivered_at") or sess["started_at"]
+            if now - last >= BOT_IDLE_SECONDS:
+                return "10 min since the last message of a bot-opened session"
+            return None
+        return "15 min without the founder"
+
     def _tick_role(self, role: str, rs: dict[str, Any], now: float) -> list[dict[str, Any]]:
         out: list[dict[str, Any]] = []
         sess = rs.get("session")
@@ -823,15 +1055,16 @@ class Waker:
         if sess.get("closing"):
             out += self._tick_closing(role, sess, running, now)
             return out
-        age, idle = now - sess["started_at"], now - sess["last_founder_at"]
-        if age >= MAX_AGE_SECONDS or (idle >= IDLE_SECONDS and not running):
+        age = now - sess["started_at"]
+        idle = None if running else self._idle(sess, now)
+        if age >= MAX_AGE_SECONDS or idle:
             sess.update(closing=True, pending=sess.get("pending") or [])
             if running:  # 4 h: stop the turn; the close turn runs once it has exited
                 self.spawner.stop(sess["pid"], sess.get("pid_created"))
                 sess["stopped_at"] = now
             else:
                 self._close_turn(role, sess, now)
-            why = "4 h of age" if age >= MAX_AGE_SECONDS else "15 min without the founder"
+            why = "4 h of age" if age >= MAX_AGE_SECONDS else idle
             out.append(self._decide(role, "close", why, None, session_id=sess["id"]))
             self.save()
             return out
@@ -841,7 +1074,7 @@ class Waker:
             prompt = self._catch_up(role, sess, pending) + "\n---\n".join(
                 self._prompt(role, m, first=False) for m in pending)
             sess["stream"] = _where(pending[-1], role)
-            self._run(role, "resume", prompt)
+            self._run(role, "resume", prompt, bot=self._bot_turn(sess, pending))
             out.append(self._decide(role, "resume", "queued messages after the turn",
                                     pending[-1], session_id=sess["id"]))
             self.save()
@@ -855,7 +1088,7 @@ class Waker:
             hand = registry_live(role, _any_pid_alive)
             roles[role] = {
                 "live": bool(hand) or bool(sess and self._alive(sess)),
-                "opened_by": "hand" if hand else ("wake" if sess else None),
+                "opened_by": "hand" if hand else ((sess.get("origin") or "wake") if sess else None),
                 "session_id": sess.get("id") if sess else None,
                 "room": f"#{sess['stream']}" if sess else None,
                 "last_event_id": rs.get("last_event_id"),
@@ -982,6 +1215,20 @@ def open_until_up(start: Callable[[str], None], role: str, wait: Callable[[], No
             sleep(30)
 
 
+def resolve_bot_ids(clients: dict[str, Any], waker: Waker, wait: Callable[[], None],
+                    sleep: Callable[[float], None] = time.sleep) -> None:
+    """Every role bot's user id, before any queue opens: a backfill read
+    before the sender's id is known would route a bot's message as "not the
+    founder" and move past it. Who is a bot is read from Zulip, never from
+    text (ops#321). Read with bot wakes off too: a session's own posts are
+    known by this id (ops#322). Retries like the queue open while Zulip is down."""
+    def resolve(role: str) -> None:
+        waker.bot_ids[int(clients[role].own_user()["user_id"])] = role
+
+    for role in clients:
+        open_until_up(resolve, role, wait, sleep)
+
+
 def announce_skipped(cfg: dict[str, Any], waker: Waker) -> None:
     for role, reason in cfg.get("skipped", {}).items():
         waker._decide(role, "skip", reason, None)
@@ -1018,8 +1265,10 @@ def run(cfg: dict[str, Any], waker: Waker) -> int:
 
     waker.history = lambda role, room, n: room_history(clients[role], room, n)
     waker.members = lambda role, room: room_members(clients[role], room)
+    waker.post = lambda role, room, text: clients[role].send_message(room, text, ROOM_TOPIC)
     announce_skipped(cfg, waker)
     try:
+        resolve_bot_ids(clients, waker, wait)  # every id before the first backfill
         for role in clients:
             start_until_up(role)
         for role in cfg["missing"]:
@@ -1049,9 +1298,11 @@ def dry_run(cfg: dict[str, Any], waker: Waker) -> int:
     ``last_message_id`` (the last 20 mentions and DMs on a first run).
     Registers nothing, saves nothing, spawns nothing."""
     announce_skipped(cfg, waker)
-    for role, (email, key) in cfg["bots"].items():
-        client = ZulipClient(cfg["site"], email, key, timeout=30.0)
-        waker.members = lambda r, room, c=client: room_members(c, room)
+    clients = {r: ZulipClient(cfg["site"], e, k, timeout=30.0) for r, (e, k) in cfg["bots"].items()}
+    if waker.bot_wakes:
+        waker.bot_ids.update({int(c.own_user()["user_id"]): r for r, c in clients.items()})
+    waker.members = lambda r, room: room_members(clients[r], room)
+    for role, client in clients.items():
         rs = waker.role(role)
         after = rs.get("last_message_id")
         pairs = backfill(client, None if after is None else int(after))
@@ -1086,7 +1337,8 @@ def main(argv: list[str] | None = None) -> int:
             print(f"error: {exc}", file=sys.stderr)
         return 2
     waker = Waker(cfg["founder_id"], STATE_DIR / "state.json", Spawner(),
-                  dry_run=args.dry_run, emit=emit, cwd=cfg["cwd"])
+                  dry_run=args.dry_run, emit=emit, cwd=cfg["cwd"],
+                  bot_wakes=cfg["bot_wakes"])
     try:
         if args.dry_run:
             return dry_run(cfg, waker)

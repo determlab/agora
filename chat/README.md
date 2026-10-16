@@ -95,7 +95,7 @@ topic UI anywhere.
   `bot/wake.py`, which checks it again.
 - **Invite** is a subscription: the page's Invite button, or picking someone
   not in the room in the `@` picker. Only a person invites or removes others;
-  a bot gets `INVITE_NOT_ALLOWED` (an agent invite waits for ops#321). Only
+  a bot gets `INVITE_NOT_ALLOWED` (the founder invites from the Invite button). Only
   an existing account can be invited.
 - A queue that registers for `subscription` gets Zulip's events: `add` /
   `remove` for the user whose membership changed, `peer_add` /

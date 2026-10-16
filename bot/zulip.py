@@ -11,7 +11,7 @@ Usage:
   python bot/zulip.py send --room coo --text "..."
   python bot/zulip.py read --room coo [--since ID] [--json]     # the whole room, every old topic too
   python bot/zulip.py wait --room coo [--seconds N] [--json]    # exit 2 with the next message there
-  python bot/zulip.py invite --room coo --who CTO --json        # refused until ops#321: the founder invites
+  python bot/zulip.py invite --room coo --who CTO --json        # refused: the founder invites from the page
   python bot/zulip.py send --stream coo --topic "#141 record shape" --text "..."
   python bot/zulip.py send --stream coo --topic "#141 record shape" --text "..." --reply-to ID
   python bot/zulip.py read --stream coo --topic "#141 record shape" [--since ID]
@@ -57,9 +57,8 @@ READ_LIMIT = 100  # newest N when there is no --since
 ROOM_TOPIC = "chat"  # ops#322: every message in a room goes to this one topic
 # The role bots `invite` would take (setup_streams.py makes them). Never a person.
 INVITE_ROLES = ("COO", "CTO", "PM", "CMO", "CPSO", "PA")
-INVITE_OFF = ("a role session cannot invite yet: an agent invite waits for ops#321's "
-              "matrix. Ask the founder to invite {who} with the Invite button in the room "
-              "#{room} on the chat page.")
+INVITE_OFF = ("a role session cannot invite: the founder invites {who} with the Invite "
+              "button in the room #{room} on the chat page. Ask him to.")
 
 
 def _dotenv(path: str) -> dict[str, str]:
@@ -167,8 +166,8 @@ def cmd_send(client: ZulipClient, stream: str, topic: str, text: str,
 
 def cmd_invite(room: str, who: str, as_json: bool = False) -> int:
     """``invite --room X --who ROLE`` (ops#322). Role bots only, never a
-    person, and refused outright until ops#321 sets who may invite whom: an
-    invite is the founder's, from the page. Exit 2, nothing changed."""
+    person, and refused outright: an invite is the founder's, from the page's
+    Invite button. Exit 2, nothing changed."""
     room = room.lstrip("#")
     if who.upper() not in INVITE_ROLES:
         error = (f"{who!r} is not a role bot: invite takes one of "
@@ -422,8 +421,8 @@ def main(argv: list[str] | None = None) -> int:
     wait.add_argument("--session", help="lock and queue key (default: cli-<bot>)")
     wait.add_argument("--seconds", type=float, help="give up after this long")
     wait.add_argument("--json", action="store_true", help="the message as one JSON line")
-    invite = sub.add_parser("invite", help="invite a role bot into a room (refused until "
-                                           "ops#321; the founder invites from the page)")
+    invite = sub.add_parser("invite", help="invite a role bot into a room (refused: the "
+                                           "founder invites from the page's Invite button)")
     invite.add_argument("--room", required=True)
     invite.add_argument("--who", required=True, metavar="ROLE",
                         help="one of " + ", ".join(INVITE_ROLES))

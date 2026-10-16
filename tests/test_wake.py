@@ -12,6 +12,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import sys
+import threading
 import uuid
 from pathlib import Path
 
@@ -417,7 +418,7 @@ def test_dry_run_json_prints_one_line_per_message_and_spawns_nothing(wake, tmp_p
 def test_real_spawner_puts_the_prompt_on_stdin(wake, tmp_path, monkeypatch):
     got, args = tmp_path / "stdin.txt", tmp_path / "argv.json"
     script = ("import sys,json,pathlib;"
-              "pathlib.Path(sys.argv[1]).write_text(sys.stdin.read(),encoding='utf-8');"
+              "pathlib.Path(sys.argv[1]).write_bytes(sys.stdin.buffer.read());"
               "pathlib.Path(sys.argv[2]).write_text(json.dumps(sys.argv),encoding='utf-8')")
     monkeypatch.setitem(wake.AGENT, "cwd", str(tmp_path))
     sp = wake.Spawner(log_dir=tmp_path / "logs")
@@ -689,9 +690,17 @@ def test_pa_runs_in_pa_dir_on_sonnet(wake, tmp_path, monkeypatch):
     assert "founder's PA" in prompt and "--as PA send" in prompt and "agents/pa.md" not in prompt
 
 
-def test_pa_mention_in_a_shared_room_spawns_and_others_in_pa_never_do(wake, tmp_path):
+def test_the_pa_never_wakes_in_a_company_room_and_others_in_pa_never_do(wake, tmp_path):
+    # the founder rule (2026-10-17): the PA is his personal assistant, it wakes
+    # only in #pa or a DM, never in a company room, tagged or not
     w = make(wake, tmp_path, members=crowd)
-    assert w.on_message("PA", msg(10, "@**PA** hi", stream="All hands"), [])["action"] == "spawn"
+    d = w.on_message("PA", msg(10, "@**PA** hi", stream="All hands"), ["mentioned"])
+    assert d["action"] == "skip" and "the PA wakes only in #pa or a founder DM" in d["reason"]
+    w1 = make(wake, tmp_path / "a")  # a room with the founder and the PA only
+    assert w1.on_message("PA", msg(10, "hi", stream="errands"), [])["action"] == "skip"
+    assert w.spawner.started == [] and w1.spawner.started == []
+    assert w1.on_message("PA", msg(11, "hi", stream="pa"), [])["action"] == "spawn"
+    assert w1.on_message("PA", msg(12, "hi", stream=None), [])["action"] == "queue"
     w2 = make(wake, tmp_path / "b", members=crowd)
     assert w2.on_message("PA", msg(11, stream="pa", sender=99), [])["action"] == "skip"
     assert w2.on_message("PA", msg(12, stream="All hands"), [])["action"] == "skip"
@@ -1070,13 +1079,18 @@ def test_322_a_safe_room_name_is_accepted(wake, name):
 
 
 def test_322_the_pa_in_a_shared_room_is_told_who_else_reads_it(wake, tmp_path):
-    w = make(wake, tmp_path, members=crowd)
-    w.on_message("PA", msg(10, "@**PA** my schedule?", stream="All hands"), [])
+    def guest(role, room):  # #pa with a human guest in it
+        return [user(FOUNDER, "Founder", bot=False), user(106, "PA"),
+                user(300, "Guest", bot=False)]
+    w = make(wake, tmp_path, members=guest)
+    w.bot_ids = {106: "PA"}
+    w.on_message("PA", msg(10, "my schedule?", stream="pa"), [])
     prompt = w.spawner.started[0][1]
-    assert "Also in #All hands: COO, CTO, PM, Watchdog." in prompt
+    assert "Also in #pa: Guest." in prompt
     assert "others read this room; share personal data only if he asks here." in prompt.lower()
     # alone with the founder in #pa: no such line
     w2 = make(wake, tmp_path / "b")
+    w2.bot_ids = {100: "PA"}
     w2.on_message("PA", msg(11, "my schedule?", stream="pa"), [])
     assert "Also in" not in w2.spawner.started[0][1]
 
@@ -1103,14 +1117,37 @@ def _room(rows):
 
 
 def bot_msg(i, name, content, stream="All hands"):
-    m = msg(i, content, sender=200 + i, stream=stream)
+    # the bot ids of crowd(); anyone else gets an id of their own
+    m = msg(i, content, sender={"COO": 101, "CTO": 102, "PM": 103}.get(name, 200 + i),
+            stream=stream)
     m["sender_full_name"] = name
     return m
+
+
+def test_322_own_posts_are_known_by_the_bot_id_never_by_a_name(wake, tmp_path):
+    rows = []
+    w = make(wake, tmp_path, members=crowd)
+    w.bot_ids = {101: "COO"}
+    w.history = _room(rows)
+    first = msg(10, "@**COO** plan the week", stream="All hands")
+    rows.append(first)
+    w.on_message("COO", first, ["mentioned"])
+    w.spawner.finish_all()
+    namesake = msg(12, "a human called COO", sender=300, stream="All hands")
+    namesake["sender_full_name"] = "COO"
+    rows += [bot_msg(11, "COO", "its own post"), namesake]
+    nxt = msg(13, "@**COO** agreed?", stream="All hands")
+    rows.append(nxt)
+    assert w.on_message("COO", nxt, ["mentioned"])["action"] == "resume"
+    prompt = w.spawner.started[-1][1]
+    assert "its own post" not in prompt
+    assert f"- COO {wake.NOT_FOUNDER}: a human called COO" in prompt
 
 
 def test_322_a_resume_carries_another_bots_post_marked(wake, tmp_path):
     rows = []
     w = make(wake, tmp_path, members=crowd)
+    w.bot_ids = {101: "COO"}  # read from Zulip at start, with bot wakes off too
     w.history = _room(rows)
     first = msg(10, "@**COO** plan the week", stream="All hands")
     rows.append(first)
@@ -1211,4 +1248,516 @@ def test_322_hand_opened_session_log_says_when_its_hook_will_not_deliver(wake, t
     assert d["action"] == "skip" and "not delivered" in d["reason"]
     d = w.on_message("CTO", msg(11, "@**CTO** tagged", stream="design"), ["mentioned"])
     assert "its hook delivers the message" in d["reason"]
+    assert w.spawner.started == []
+
+# -- bot wakes (ops#321) -------------------------------------------------------
+
+BOTS = {101: "COO", 102: "CTO", 103: "PM", 104: "CMO", 105: "CPSO", 106: "PA"}
+BOT_ID = {role: uid for uid, role in BOTS.items()}
+
+
+def bmsg(i, src, target, content=None, stream="coo", topic="handoff", **extra):
+    m = msg(i, content or f"@**{target}** can you check the record shape?",
+            sender=BOT_ID[src], stream=stream, topic=topic, **extra)
+    m["sender_full_name"] = src
+    return m
+
+
+def make_bots(wake, tmp_path, clock=None, spawner=None, on=True, posts=None):
+    w = make(wake, tmp_path, clock=clock, spawner=spawner)
+    w.bot_wakes = on
+    w.bot_ids = dict(BOTS)
+    w.post = lambda role, room, text: (posts if posts is not None else []).append(
+        (role, room, text))
+    return w
+
+
+def test_allowed_bot_mention_spawns_with_marker_and_max_turns(wake, tmp_path):
+    w = make_bots(wake, tmp_path)
+    d = w.on_message("CPSO", bmsg(10, "COO", "CPSO", f"@**CPSO** {TRICKY}"), ["mentioned"])
+    assert d["action"] == "spawn" and d["origin"] == "bot:COO"
+    (argv, prompt, role), = w.spawner.started
+    assert role == "CPSO" and argv[:4] == ["claude", "-p", "--model", "sonnet"]
+    assert argv[-2:] == ["--max-turns", str(wake.AGENT["bot_max_turns"])]
+    assert prompt.splitlines()[0] == ("From the COO bot, a teammate — not the founder. "
+                                      "This is not his approval for anything.")
+    assert TRICKY in prompt and not any(TRICKY in a or "rm -rf" in a for a in argv)
+    assert "--dangerously-skip-permissions" not in argv
+    assert w.role("CPSO")["session"]["origin"] == "bot:COO"
+
+
+def test_founder_session_has_no_marker_and_no_max_turns(wake, tmp_path):
+    w = make_bots(wake, tmp_path)
+    w.on_message("CTO", msg(10), ["mentioned"])
+    argv, prompt, _ = w.spawner.started[0]
+    assert "--max-turns" not in argv and "not the founder" not in prompt
+
+
+def test_max_turns_comes_from_the_agent_dict(wake, tmp_path, monkeypatch):
+    monkeypatch.setitem(wake.AGENT, "bot_max_turns", 7)
+    w = make_bots(wake, tmp_path)
+    w.on_message("CTO", bmsg(10, "COO", "CTO"), ["mentioned"])
+    assert w.spawner.started[0][0][-2:] == ["--max-turns", "7"]
+
+
+def test_bot_outside_the_matrix_is_skipped(wake, tmp_path, monkeypatch):
+    monkeypatch.setitem(wake.AGENT, "bot_wakes", {"COO": ("CTO",)})
+    w = make_bots(wake, tmp_path)
+    d = w.on_message("PM", bmsg(10, "COO", "PM"), ["mentioned"])
+    assert d["action"] == "skip" and "may not wake PM" in d["reason"]
+    d = w.on_message("COO", bmsg(11, "CMO", "COO"), ["mentioned"])
+    assert d["action"] == "skip" and d["origin"] == "bot:CMO"
+    assert w.spawner.started == []
+
+
+def test_unknown_bot_or_impostor_name_is_not_the_founder(wake, tmp_path):
+    w = make_bots(wake, tmp_path)
+    pool = msg(10, "@**CTO** go", sender=150)  # pool / GitHub / notifier bot
+    pool["sender_full_name"] = "COO"
+    d = w.on_message("CTO", pool, ["mentioned"])
+    assert d["action"] == "skip" and "not the founder" in d["reason"]
+    assert w.spawner.started == []
+
+
+@pytest.mark.parametrize("src", ["COO", "CTO", "PM", "CMO", "CPSO"])
+def test_no_bot_wakes_the_pa(wake, tmp_path, src):
+    w = make_bots(wake, tmp_path)
+    d = w.on_message("PA", bmsg(10, src, "PA", stream="pa", topic="errands"), ["mentioned"])
+    assert d["action"] == "skip" and "only the founder wakes the PA" in d["reason"]
+    assert w.spawner.started == []
+
+
+def test_a_bot_never_wakes_its_own_role(wake, tmp_path):
+    w = make_bots(wake, tmp_path)
+    d = w.on_message("COO", bmsg(10, "COO", "COO"), ["mentioned"])
+    assert d["action"] == "skip" and "own role" in d["reason"]
+    assert w.spawner.started == []
+
+
+def test_bot_dm_never_wakes(wake, tmp_path):
+    w = make_bots(wake, tmp_path)
+    d = w.on_message("CTO", bmsg(10, "COO", "CTO", stream=None), [])
+    assert d["action"] == "skip" and "never by DM" in d["reason"]
+    assert w.spawner.started == []
+
+
+def test_untagged_bot_message_in_the_role_own_stream_is_skipped(wake, tmp_path):
+    w = make_bots(wake, tmp_path)
+    # even with the CTO's session open in that topic (ops#318's untagged path)
+    w.on_message("CTO", msg(10, stream="cto", topic="t"), ["mentioned"])
+    w.spawner.finish_all()
+    d = w.on_message("CTO", bmsg(11, "COO", "CTO", "and the index?", stream="cto",
+                                 topic="t"), [])
+    assert d["action"] == "skip" and "no @**CTO**" in d["reason"]
+    # a "mentioned" flag without an explicit @**CTO** in the text (a group, silent)
+    d = w.on_message("CTO", bmsg(12, "COO", "CTO", "@_**CTO** fyi", stream="cto",
+                                 topic="t"), ["mentioned"])
+    assert d["action"] == "skip"
+    # the PA's home stream rule is the founder's only
+    d = w.on_message("CTO", bmsg(13, "COO", "CTO", "hi", stream="pa"), [])
+    assert d["action"] == "skip"
+    assert len(w.spawner.started) == 1
+
+
+def test_mentions_matches_only_an_explicit_role_mention(wake):
+    assert wake.mentions("CTO", "hey @**CTO** look")
+    assert wake.mentions("CTO", "hey @**cto|102** look")
+    assert not wake.mentions("CTO", "hey @_**CTO** look")
+    assert not wake.mentions("CTO", "hey @**CTOs** look")
+    assert not wake.mentions("CTO", "hey @**all** look")
+
+
+def test_bot_wakes_off_skips_everything(wake, tmp_path):
+    w = make_bots(wake, tmp_path, on=False)
+    d = w.on_message("CPSO", bmsg(10, "COO", "CPSO"), ["mentioned"])
+    assert d["action"] == "skip" and "bot wakes are off" in d["reason"]
+    assert w.spawner.started == []
+    assert w.on_message("CTO", msg(11), ["mentioned"])["action"] == "spawn"
+
+
+@pytest.mark.parametrize("line,on", [("", False), ("BOT_WAKES=off\n", False),
+                                     ("BOT_WAKES=yes\n", False), ("BOT_WAKES=on\n", True),
+                                     ("BOT_WAKES=ON\n", True)])
+def test_bot_wakes_starts_off_and_only_on_turns_it_on(wake, tmp_path, monkeypatch, line, on):
+    monkeypatch.delenv("BOT_WAKES", raising=False)
+    env = _env(tmp_path, monkeypatch, "FOUNDER_ZULIP_ID=8\nZULIP_CTO_EMAIL=c@x\n"
+                                      "ZULIP_CTO_API_KEY=k\n" + line)
+    assert wake.load_config(env)["bot_wakes"] is on
+
+
+def _ping_pong(w, clock, n, start=10, topic="handoff"):
+    """n bot turns in one topic, COO and CPSO tagging each other."""
+    out = []
+    for i in range(n):
+        src, dst = ("COO", "CPSO") if i % 2 == 0 else ("CPSO", "COO")
+        w.spawner.finish_all()
+        out.append(w.on_message(dst, bmsg(start + i, src, dst, topic=topic), ["mentioned"]))
+        clock.t += 60
+    return out
+
+
+def test_topic_cap_posts_the_stop_line_once(wake, tmp_path):
+    clock, posts = Clock(), []
+    w = make_bots(wake, tmp_path, clock=clock, posts=posts)
+    ds = _ping_pong(w, clock, 9)
+    assert [d["action"] for d in ds[:6]] == ["spawn", "spawn", "resume", "resume",
+                                             "resume", "resume"]
+    assert all(d["action"] == "skip" and "bot loop stopped" in d["reason"] for d in ds[6:])
+    # posted once, by the bot of the role the stopped message was for
+    line = "bot loop stopped; @**Hemi|8**, @-mention a role to continue"
+    assert posts == [("CPSO", "coo", line)]
+    assert [d.get("stop_line") for d in ds[6:]] == [True, False, False]
+    assert len(w.spawner.started) == 6
+    # ops#322: the cap is the room's, so another topic in it is stopped too
+    d = w.on_message("CTO", bmsg(50, "COO", "CTO", topic="other"), ["mentioned"])
+    assert d["action"] == "skip" and "bot loop stopped in this room" in d["reason"]
+    # another room is not
+    d = w.on_message("CTO", bmsg(51, "COO", "CTO", stream="eng"), ["mentioned"])
+    assert d["action"] == "spawn"
+
+
+def test_founder_message_resets_the_topic_and_bypasses_every_cap(wake, tmp_path):
+    clock, posts = Clock(), []
+    w = make_bots(wake, tmp_path, clock=clock, posts=posts)
+    _ping_pong(w, clock, 7)
+    assert len(posts) == 1
+    # the founder bypasses the cap in the stopped topic
+    w.spawner.finish_all()
+    d = w.on_message("CPSO", msg(30, "@**CPSO** go on", stream="coo", topic="handoff"),
+                     ["mentioned"])
+    assert d["action"] == "resume" and "origin" not in d
+    # and his message reset it: six more bot turns, then one more stop line
+    ds = _ping_pong(w, clock, 7, start=40)
+    assert [d["action"] for d in ds].count("skip") == 1
+    assert len(posts) == 2
+
+
+def test_founder_bypasses_the_daily_and_role_caps(wake, tmp_path):
+    clock = Clock()
+    w = make_bots(wake, tmp_path, clock=clock)
+    w._bots()["log"] = [{"at": clock.t, "role": "CTO", "from": "COO", "topic": f"x\n{i}",
+                         "spawn": True} for i in range(30)]
+    assert w.on_message("CTO", bmsg(10, "COO", "CTO"), ["mentioned"])["action"] == "skip"
+    assert w.on_message("CTO", msg(11), ["mentioned"])["action"] == "spawn"
+
+
+def test_role_spawn_cap_per_hour_and_per_day(wake, tmp_path):
+    clock = Clock()
+    w = make_bots(wake, tmp_path, clock=clock)
+
+    def spawn_and_close(i):
+        d = w.on_message("CTO", bmsg(i, "COO", "CTO", topic=f"t{i}"), ["mentioned"])
+        if d["action"] == "spawn":
+            w.role("CTO")["session"] = None  # closed; the next one spawns
+        return d
+
+    assert [spawn_and_close(i)["action"] for i in range(10, 14)] == ["spawn"] * 3 + ["skip"]
+    assert "in the last hour" in w.emitted[-1]["reason"]
+    actions = []
+    for i in range(14, 34):  # 20 h more: all inside one rolling day
+        clock.t += 61 * 60
+        actions.append(spawn_and_close(i)["action"])
+    assert actions.count("spawn") == 7  # 10 in the rolling day, then none
+    assert "today" in w.emitted[-1]["reason"]
+
+
+def test_global_daily_cap(wake, tmp_path):
+    clock = Clock()
+    w = make_bots(wake, tmp_path, clock=clock)
+    actions = []
+    for i in range(30):  # 3 turns an hour, so neither the room nor the role cap
+        src, dst = [("COO", "CTO"), ("CTO", "PM"), ("PM", "CMO"), ("CMO", "CPSO"),
+                    ("CPSO", "COO")][i % 5]
+        w.spawner.finish_all()
+        actions.append(w.on_message(dst, bmsg(10 + i, src, dst, topic=f"t{i}"),
+                                    ["mentioned"])["action"])
+        clock.t += 20 * 60  # each role spawns once, then resumes: no role cap
+    assert "skip" not in actions[:25] and actions[25:] == ["skip"] * 5
+    skipped = [d for d in w.emitted if d["action"] == "skip"]
+    assert len(skipped) == 5 and all("25 bot turns today" in d["reason"] for d in skipped)
+
+
+def test_counters_survive_a_reload_of_state_json(wake, tmp_path):
+    clock, posts = Clock(), []
+    spawner = FakeSpawner()
+    w = make_bots(wake, tmp_path, clock=clock, spawner=spawner, posts=posts)
+    _ping_pong(w, clock, 7)
+    assert len(posts) == 1
+    saved = json.loads((tmp_path / "state.json").read_text(encoding="utf-8"))
+    assert len(saved["bots"]["log"]) == 6 and saved["bots"]["topic_stopped"]
+    w2 = make_bots(wake, tmp_path, clock=clock, spawner=spawner, posts=posts)  # restart
+    d = w2.on_message("CPSO", bmsg(30, "COO", "CPSO"), ["mentioned"])
+    assert d["action"] == "skip" and "bot loop stopped" in d["reason"]
+    assert len(posts) == 1  # still once
+    w3 = make_bots(wake, tmp_path / "fresh", clock=clock, spawner=spawner)
+    assert w3.on_message("CPSO", bmsg(31, "COO", "CPSO"), ["mentioned"])["action"] != "skip"
+
+
+def test_bot_message_does_not_move_last_founder_at(wake, tmp_path):
+    clock = Clock()
+    w = make_bots(wake, tmp_path, clock=clock)
+    # a founder session: a bot's message is delivered but keeps his idle clock
+    w.on_message("CTO", msg(10, stream="coo", topic="handoff"), ["mentioned"])
+    t0 = w.role("CTO")["session"]["last_founder_at"]
+    w.spawner.finish_all()
+    clock.t += 10 * 60
+    d = w.on_message("CTO", bmsg(11, "COO", "CTO"), ["mentioned"])
+    assert d["action"] == "resume"
+    assert "--max-turns" not in w.spawner.started[-1][0]  # his session keeps its limits
+    assert w.role("CTO")["session"]["last_founder_at"] == t0
+    w.spawner.finish_all()
+    clock.t += 5 * 60
+    [d] = w.tick()
+    assert d["action"] == "close" and "15 min without the founder" in d["reason"]
+    # a bot-opened session has no founder time at all
+    w2 = make_bots(wake, tmp_path / "b", clock=clock)
+    w2.on_message("CPSO", bmsg(20, "COO", "CPSO"), ["mentioned"])
+    assert w2.role("CPSO")["session"]["last_founder_at"] is None
+
+
+def test_bot_opened_session_closes_10_min_after_its_last_message(wake, tmp_path):
+    clock = Clock()
+    w = make_bots(wake, tmp_path, clock=clock)
+    w.on_message("CPSO", bmsg(10, "COO", "CPSO"), ["mentioned"])
+    w.spawner.finish_all()
+    clock.t += 6 * 60
+    assert w.on_message("CPSO", bmsg(11, "COO", "CPSO"), ["mentioned"])["action"] == "resume"
+    w.spawner.finish_all()
+    clock.t += 9 * 60 + 59
+    assert w.tick() == []
+    clock.t += 1
+    [d] = w.tick()
+    assert d["action"] == "close" and "10 min" in d["reason"]
+    argv, prompt, _ = w.spawner.started[-1]
+    assert "Idle close" in prompt and argv[-2:] == ["--max-turns", "15"]
+
+
+def test_founder_joining_a_bot_session_keeps_it_15_min_without_max_turns(wake, tmp_path):
+    clock = Clock()
+    w = make_bots(wake, tmp_path, clock=clock)
+    w.on_message("CPSO", bmsg(10, "COO", "CPSO"), ["mentioned"])
+    w.spawner.finish_all()
+    d = w.on_message("CPSO", msg(11, "@**CPSO** my view", stream="coo", topic="handoff"),
+                     ["mentioned"])
+    assert d["action"] == "resume" and "--max-turns" not in w.spawner.started[-1][0]
+    assert "not the founder" not in w.spawner.started[-1][1]
+    w.spawner.finish_all()
+    clock.t += 12 * 60
+    assert w.tick() == []  # 12 min: past the bot 10, inside his 15
+    clock.t += 3 * 60
+    assert w.tick()[0]["action"] == "close"
+
+
+def test_ping_pong_resumes_the_open_session_never_stacks_a_spawn(wake, tmp_path):
+    clock = Clock()
+    w = make_bots(wake, tmp_path, clock=clock)
+    w.on_message("COO", msg(10, "@**COO** ask the CPSO", stream="coo", topic="handoff"),
+                 ["mentioned"])
+    d = w.on_message("CPSO", bmsg(11, "COO", "CPSO"), ["mentioned"])
+    assert d["action"] == "spawn"
+    # CPSO tags the COO back while the COO's turn still runs: queued, no second COO
+    d = w.on_message("COO", bmsg(12, "CPSO", "COO", "@**COO** done"), ["mentioned"])
+    assert d["action"] == "queue"
+    assert [r for _, _, r in w.spawner.started] == ["COO", "CPSO"]
+    w.spawner.finish_all()
+    [d] = w.tick()  # the COO's queued turn
+    assert d["action"] == "resume" and d["role"] == "COO" and d["origin"] == "bot:CPSO"
+    argv, prompt, _ = w.spawner.started[-1]
+    assert argv[4] == "--resume" and prompt.startswith("From the CPSO bot")
+
+
+def test_live_hand_session_gets_bot_message_through_its_hook(wake, tmp_path, monkeypatch):
+    monkeypatch.setattr(wake, "registry_live", lambda role, alive: 4242)
+    w = make_bots(wake, tmp_path)
+    d = w.on_message("CTO", bmsg(10, "COO", "CTO"), ["mentioned"])
+    assert d["action"] == "skip" and "4242" in d["reason"]
+    assert w.spawner.started == [] and not w._bots()["log"]
+
+
+def test_bot_prompt_reaches_a_real_child_on_stdin_only(wake, tmp_path, monkeypatch):
+    got, args = tmp_path / "stdin.txt", tmp_path / "argv.json"
+    script = ("import sys,json,pathlib;"
+              "pathlib.Path(sys.argv[1]).write_bytes(sys.stdin.buffer.read());"
+              "pathlib.Path(sys.argv[2]).write_text(json.dumps(sys.argv),encoding='utf-8')")
+    monkeypatch.setitem(wake.AGENT, "spawn", [sys.executable, "-c", script, str(got),
+                                              str(args), "{model}", "{session_id}"])
+    monkeypatch.setitem(wake.AGENT, "cwd", str(tmp_path))
+    sp = wake.Spawner(log_dir=tmp_path / "logs")
+    w = make_bots(wake, tmp_path, spawner=sp)
+    w.on_message("CTO", bmsg(10, "COO", "CTO", f"@**CTO** {TRICKY}"), ["mentioned"])
+    pid = w.role("CTO")["session"]["pid"]
+    sp.procs[pid].wait(timeout=30)
+    text = got.read_text(encoding="utf-8")
+    assert text.startswith("From the COO bot, a teammate — not the founder.") and TRICKY in text
+    argv = json.loads(args.read_text(encoding="utf-8"))
+    assert argv[-2:] == ["--max-turns", "15"]
+    assert not any("rm -rf" in a or "not the founder" in a for a in argv)
+
+
+def test_dry_run_reads_bot_ids_from_zulip_when_on(wake, tmp_path, monkeypatch, capsys):
+    env = _env(tmp_path, monkeypatch, "FOUNDER_ZULIP_ID=8\nZULIP_CTO_EMAIL=cto-bot@x\n"
+                                      "ZULIP_CTO_API_KEY=k\nZULIP_COO_EMAIL=coo-bot@x\n"
+                                      "ZULIP_COO_API_KEY=k\nBOT_WAKES=on\n")
+    monkeypatch.delenv("BOT_WAKES", raising=False)
+    monkeypatch.setattr(wake, "STATE_DIR", tmp_path / ".wake")
+    monkeypatch.setattr(wake.load_config, "__defaults__", (env,))
+    ids = {wake.ZulipClient._basic_auth_header(e, "k"): uid
+           for e, uid in (("cto-bot@x", 102), ("coo-bot@x", 101))}
+    client = FakeClient(history=[bmsg(10, "COO", "CTO", stream="cto", topic="t")])
+
+    def request(self, method, path, params=None):
+        if path == "users/me":
+            return {"result": "success", "user_id": ids[self._auth_header]}
+        return client._request(method, path, params)
+    monkeypatch.setattr(wake.ZulipClient, "_request", request)
+    monkeypatch.setattr(wake.subprocess, "Popen", lambda *a, **k: pytest.fail("spawned"))
+    assert wake.main(["--dry-run", "--json"]) == 0
+    lines = [json.loads(x) for x in capsys.readouterr().out.splitlines()]
+    by_role = {d["role"]: d for d in lines}
+    assert by_role["CTO"]["action"] == "spawn" and by_role["CTO"]["origin"] == "bot:COO"
+    assert by_role["COO"]["action"] == "skip" and "own role" in by_role["COO"]["reason"]
+
+
+def test_run_knows_every_bot_before_the_first_backfill(wake, tmp_path, monkeypatch):
+    # COO starts first; its backfill holds the CPSO bot's @**COO**. Every id
+    # must be known by then, or the wake is skipped as "not the founder".
+    history = [bmsg(10, "CPSO", "COO", "@**COO** handoff ready", stream="coo")]
+    done = threading.Event()
+
+    class Client(FakeClient):
+        def __init__(self, site, email, key, timeout=None):
+            super().__init__(history=history, members=alone("COO", "coo"))
+            self.email = email
+
+        def own_user(self):
+            return {"user_id": BOT_ID[self.email.split("-")[0].upper()]}
+
+        def get_events(self, queue_id, last_event_id, dont_block=False):
+            done.wait(5)
+            raise OSError("test over")
+
+    monkeypatch.setattr(wake, "ZulipClient", Client)
+    monkeypatch.setattr(wake, "STATE_DIR", tmp_path / ".wake")
+    monkeypatch.setattr(wake, "TICK_SECONDS", 0.01)
+    w = make_bots(wake, tmp_path)
+    w.bot_ids = {}
+    w.role("COO")["last_message_id"] = 9
+
+    def stop():
+        raise KeyboardInterrupt
+    w.tick = stop
+    cfg = {"site": "http://z", "missing": [],
+           "bots": {r: (f"{r.lower()}-bot@x", "k") for r in ("COO", "CPSO", "CTO")}}
+    try:
+        assert wake.run(cfg, w) == 0
+    finally:
+        done.set()
+    d = next(e for e in w.emitted if e.get("role") == "COO")
+    assert d["action"] == "spawn" and d["origin"] == "bot:CPSO"
+    assert w.bot_ids == {101: "COO", 105: "CPSO", 102: "CTO"}
+
+
+# -- ops#322 x ops#321: the merged rules ----------------------------------------
+
+def _design(role, room):
+    """#design: the founder, the COO bot and the PM bot; no CTO."""
+    return [user(FOUNDER, "Founder", bot=False), user(101, "COO"), user(103, "PM")]
+
+
+def test_a_bot_mention_of_a_role_outside_the_room_wakes_nothing(wake, tmp_path):
+    w = make_bots(wake, tmp_path)
+    w.members = _design
+    d = w.on_message("CTO", bmsg(10, "COO", "CTO", stream="design"), ["mentioned"])
+    assert d["action"] == "skip" and "CTO is not a member of #design" in d["reason"]
+    assert w.spawner.started == []
+    assert w._bots()["log"] == []  # refused before any cap counted it
+    # the PM is in the room: the same bot's @**PM** there does wake it
+    d = w.on_message("PM", bmsg(11, "COO", "PM", stream="design"), ["mentioned"])
+    assert d["action"] == "spawn" and d["origin"] == "bot:COO"
+
+
+def test_two_topics_in_one_room_count_against_one_cap(wake, tmp_path):
+    clock = Clock()
+    w = make_bots(wake, tmp_path, clock=clock)
+    ds = []
+    for i in range(7):  # the COO bot varies --topic inside #cto
+        w.spawner.finish_all()
+        ds.append(w.on_message("CTO", bmsg(10 + i, "COO", "CTO", stream="cto",
+                                           topic=f"topic {i % 2}"), ["mentioned"]))
+        clock.t += 60
+    assert [d["action"] for d in ds[:6]].count("skip") == 0
+    assert ds[6]["action"] == "skip" and "bot loop stopped in this room" in ds[6]["reason"]
+    # a founder message in either topic resets the room
+    w.on_message("CTO", msg(30, "@**CTO** go on", stream="cto", topic="topic 1"), ["mentioned"])
+    w.spawner.finish_all()
+    d = w.on_message("CTO", bmsg(31, "COO", "CTO", stream="cto", topic="topic 0"),
+                     ["mentioned"])
+    assert d["action"] in ("resume", "queue")
+
+
+def test_the_founder_is_routed_by_the_room_rule_only(wake, tmp_path):
+    # #coo holds the COO and the PM: an untagged line there is not delivered to
+    # the open COO session (the old own-stream rule is gone), it only keeps it open
+    def coo_room(role, room):
+        return [user(FOUNDER, "Founder", bot=False), user(101, "COO"), user(103, "PM")]
+    clock = Clock()
+    w = make(wake, tmp_path, clock=clock, members=coo_room)
+    assert w.on_message("COO", msg(10, "@**COO** plan", stream="coo"),
+                        ["mentioned"])["action"] == "spawn"
+    w.spawner.finish_all()
+    clock.t += 60
+    d = w.on_message("COO", msg(11, "and one more thing", stream="coo"), [])
+    assert d["action"] == "skip" and "only @**COO** wakes COO" in d["reason"]
+    assert "extends the open session's idle timer" in d["reason"]
+    assert len(w.spawner.started) == 1
+    assert w.role("COO")["session"]["last_founder_at"] == clock.t
+    # a mention elsewhere is not "in the topic": the room is the key
+    assert w.on_message("COO", msg(12, "@**COO** now?", stream="coo", topic="other"),
+                        ["mentioned"])["action"] == "resume"
+
+
+def test_a_bot_opened_session_gets_the_catch_up_too(wake, tmp_path):
+    rows = []
+    w = make_bots(wake, tmp_path)
+    w.members = crowd
+    w.history = _room(rows)
+    first = bmsg(10, "COO", "CTO", "@**CTO** check the schema", stream="All hands")
+    rows.append(first)
+    assert w.on_message("CTO", first, ["mentioned"])["action"] == "spawn"
+    assert w.role("CTO")["session"]["seen_id"] == 10
+    w.spawner.finish_all()
+    rows.append(bmsg(11, "PM", "COO", "PM: the spec is in docs/spec.md", stream="All hands"))
+    rows.append(bmsg(12, "CTO", "COO", "CTO: looking", stream="All hands"))  # its own post
+    nxt = bmsg(13, "COO", "CTO", "@**CTO** and the index?", stream="All hands")
+    rows.append(nxt)
+    d = w.on_message("CTO", nxt, ["mentioned"])
+    assert d["action"] == "resume" and d["origin"] == "bot:COO"
+    prompt = w.spawner.started[-1][1]
+    # one marker for each job: BOT_MARKER heads the prompt, NOT_FOUNDER marks lines
+    assert prompt.count(wake.BOT_MARKER.format(src="COO")) == 1
+    assert f"- PM {wake.NOT_FOUNDER}: PM: the spec is in docs/spec.md" in prompt
+    assert "CTO: looking" not in prompt
+    assert prompt.index("docs/spec.md") < prompt.index("Message from COO")
+    assert w.role("CTO")["session"]["seen_id"] == 13
+    # the queued resume of a bot-opened session carries it as well
+    rows.append(bmsg(14, "PM", "COO", "PM: index is fine", stream="All hands"))
+    q = bmsg(15, "COO", "CTO", "@**CTO** ok?", stream="All hands")
+    rows.append(q)
+    assert w.on_message("CTO", q, ["mentioned"])["action"] == "queue"
+    w.spawner.finish_all()
+    w.tick()
+    prompt = w.spawner.started[-1][1]
+    assert f"- PM {wake.NOT_FOUNDER}: PM: index is fine" in prompt
+    assert w.role("CTO")["session"]["seen_id"] == 15
+
+
+def test_the_pa_is_never_woken_outside_pa_by_anyone(wake, tmp_path):
+    # the founder rule (2026-10-17): the PA wakes only in #pa or a founder DM
+    w = make_bots(wake, tmp_path)
+    w.members = crowd
+    for i, m in enumerate([msg(10, "@**PA** hi", stream="All hands"),
+                           msg(11, "hi", stream="errands"),
+                           bmsg(12, "COO", "PA", stream="All hands"),
+                           bmsg(13, "COO", "PA", stream="pa")]):
+        assert w.on_message("PA", m, ["mentioned"])["action"] == "skip", i
     assert w.spawner.started == []

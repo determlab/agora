@@ -124,7 +124,7 @@ def test_a_role_bot_cannot_invite_anyone(run):
     status, body = cto("POST", "users/me/subscriptions", subscriptions=[{"name": "design"}],
                        principals=[run.bots["COO"]["email"]])
     assert status == 400 and body["code"] == "INVITE_NOT_ALLOWED", body
-    assert "ops#321" in body["msg"] and "Invite button" in body["msg"]
+    assert "Invite button" in body["msg"] and "ops#321" not in body["msg"]
     members = run.api(run.founder)("GET", f"streams/{run.store.stream_by_ref('design')['stream_id']}/members")[1]
     assert run.bots["COO"]["id"] not in members["subscribers"]
 
@@ -255,7 +255,7 @@ def test_cli_invite_is_refused_while_321_is_off_and_never_takes_a_person(run, cl
     body = json.loads(out.out)
     assert body["ok"] is False and body["code"] == code
     if code == "INVITE_OFF":
-        assert "ops#321" in body["error"] and "Invite button" in body["error"]
+        assert "Invite button" in body["error"] and "ops#321" not in body["error"]
     else:
         assert "never a person" in body["error"]
     assert "Nothing was changed" in out.err
