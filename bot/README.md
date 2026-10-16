@@ -281,6 +281,8 @@ folder) the PA is skipped and the start line says what to add.
 | no open conversation for the role | `spawn`: `claude -p --model <opus or sonnet> --session-id <new uuid>` in `C:\PlayGround\ops` (`WAKE_OPS_DIR`; the PA in `PA_DIR`), the topic's last 20 messages before yours in the first prompt |
 | conversation open, its turn has ended | `resume`: `claude -p --resume <uuid>` |
 | conversation open, a turn is still running | `queue`; delivered as one resume when the turn ends |
+| conversation open in the role's own stream (`#cto` for the CTO), your message in its topic **without** a mention | same as a mention: `resume` or `queue`. It never opens a new session (ops#318) |
+| the saved session never started, or its conversation does not exist (no `~/.claude/projects/*/<uuid>.jsonl`) | dropped, never resumed; your message opens a fresh one (ops#318) |
 
 The command lives in one dict, `AGENT` at the top of `wake.py` — swap
 `claude` for another CLI there. Models follow ops CLAUDE.md: COO and CTO on
@@ -292,8 +294,9 @@ sessions) is `bot/.wake/state.json`, gitignored.
 at 4 hours of age, the session gets one last turn: post one line in the
 topic — what was agreed and where it is written — then it is forgotten. A
 follow-up of yours in that topic without a mention keeps the session open (it
-resets the 15 minutes) but is not delivered: mention the role to have it read
-(the role bot only sees the streams it is subscribed to). At 4 hours a running
+resets the 15 minutes); in the role's own stream it is also delivered, in any
+other stream it is not: mention the role to have it read there (the role bot
+only sees the streams it is subscribed to). At 4 hours a running
 turn is stopped first, and the close turn runs once that process has exited; a
 close turn gets 2 minutes, then it is stopped. The next mention opens a fresh
 session — no `--resume` — whose first prompt holds the topic's last 20

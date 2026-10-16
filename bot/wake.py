@@ -19,7 +19,11 @@ How it works:
     delivers the message (hooks/agora_hook.py). Otherwise the role gets a
     conversation: the first message spawns it (``AGENT["spawn"]``), later ones
     resume it (``AGENT["resume"]``), one message per turn, queued while a turn
-    runs.
+    runs. In the role's own stream (``#cto``) a founder message in the open
+    session's topic needs no mention: it goes to that session (ops#318).
+  - A session whose process never started or whose conversation does not
+    exist is dropped, never resumed; the next message opens a fresh one.
+  - Topics stay plain UTF-8 everywhere: state.json, prompts, the send hint.
   - A fresh conversation's first prompt carries the topic's last 20 messages
     before the new one, so the previous session's close line is the handoff
     (no ``--resume`` across sessions, ops#293 4b).
@@ -47,6 +51,7 @@ Stdlib only (D2).
 from __future__ import annotations
 
 import argparse
+import glob
 import importlib.util
 import json
 import os
@@ -82,6 +87,10 @@ AGENT: dict[str, Any] = {
                "PA": "sonnet"},
     # A founder message in this stream calls the role without a mention.
     "home_streams": {"PA": "pa"},
+    # Where a conversation the agent made is kept, to tell a session that
+    # exists from an id that never got one (ops#318). None: do not check.
+    "conversations": str(Path(os.environ.get("CLAUDE_CONFIG_DIR")
+                              or Path.home() / ".claude") / "projects" / "*" / "{session_id}.jsonl"),
 }
 ROLES = tuple(AGENT["models"])
 
@@ -179,7 +188,9 @@ def load_state(path: Path) -> dict[str, Any]:
 def save_state(path: Path, state: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(".tmp")
-    tmp.write_text(json.dumps(state, indent=1), encoding="utf-8")
+    # Plain UTF-8, never \\u escapes: a session that reads a topic from here
+    # must copy it as written (ops#318, a Hebrew topic posted as "\\u05db...").
+    tmp.write_text(json.dumps(state, indent=1, ensure_ascii=False), encoding="utf-8")
     os.replace(tmp, path)
 
 
@@ -287,6 +298,19 @@ class Spawner:
             return proc.poll() is None
         return self._ours(pid, created) and _hook()._pid_alive(pid)
 
+    def conversation_exists(self, session_id: str) -> bool:
+        """Whether the agent ever made this conversation. A spawn that never
+        ran leaves none, and a ``--resume`` of it fails (ops#318). Unknown
+        (no pattern, or no conversation folder at all): True."""
+        pattern = AGENT.get("conversations")
+        if not pattern:
+            return True
+        pattern = pattern.format(session_id=str(uuid.UUID(session_id)))
+        root = Path(pattern.split("*")[0])
+        if not root.is_dir():
+            return True
+        return bool(glob.glob(pattern))
+
     def stop(self, pid: int, created: int | None = None) -> None:
         proc = self.procs.get(pid)
         try:
@@ -328,9 +352,21 @@ def _where(msg: dict[str, Any], role: str) -> tuple[str, str]:
     return role.lower(), "direct message"
 
 
+def own_stream(role: str) -> str:
+    """The role's own stream (``#cto`` for the CTO). There the founder's
+    untagged follow-up in an open session's topic goes to that session."""
+    return AGENT["home_streams"].get(role, role.lower())
+
+
+def _quote(text: str) -> str:
+    """A double-quoted argument with the text as plain UTF-8: never a \\u
+    escape, never cut (ops#318). Only quotes and backslashes are escaped."""
+    return json.dumps(text, ensure_ascii=False)
+
+
 def _send_hint(role: str, stream: str, topic: str) -> str:
-    return (f'python "{ZULIP_CLI}" --as {role} send --stream {json.dumps(stream)} '
-            f'--topic {json.dumps(topic)} --text "..."')
+    return (f'python "{ZULIP_CLI}" --as {role} send --stream {_quote(stream)} '
+            f'--topic {_quote(topic)} --text "..."')
 
 
 def _who(msg: dict[str, Any]) -> str:
@@ -359,7 +395,8 @@ def message_prompt(role: str, msg: dict[str, Any], first: bool,
             f"that and closes when he goes quiet.\n\n{history}"
             if first else "")
     return (f"{head}Message from {sender} in {origin}:\n\n{msg.get('content', '')}\n\n"
-            f"Answer in #{stream} › {topic} with:\n  {_send_hint(role, stream, topic)}\n")
+            f"Answer in #{stream} › {topic} with:\n  {_send_hint(role, stream, topic)}\n"
+            f"Copy the stream and topic exactly as written here.\n")
 
 
 def close_prompt(role: str, stream: str, topic: str) -> str:
@@ -434,10 +471,31 @@ class Waker:
         self.save()
         return d
 
+    def _stale(self, sess: dict[str, Any]) -> bool:
+        """A session whose process never started, or whose conversation does
+        not exist, cannot be resumed: drop it (ops#318). Asked only when no
+        turn runs, since a running spawn may not have written it yet."""
+        if sess.get("dry"):
+            return False
+        if not sess.get("pid"):
+            return True
+        exists = getattr(self.spawner, "conversation_exists", None)
+        return exists is not None and not exists(sess["id"])
+
+    def _drop_stale(self, role: str) -> list[dict[str, Any]]:
+        """Forget the role's session if it is stale; messages queued on it
+        open a fresh one."""
+        sess = self.role(role).get("session")
+        if not sess or self._alive(sess) or not self._stale(sess):
+            return []
+        return self._finish(role, f"session {sess['id']} never started or has no "
+                            "conversation; dropped, not resumed")
+
     def _route(self, role: str, msg: dict[str, Any], flags: list[str]) -> dict[str, Any]:
         if msg.get("sender_id") != self.founder_id:
             who = msg.get("sender_email") or msg.get("sender_id")
             return self._decide(role, "skip", f"sender {who} is not the founder", msg)
+        self._drop_stale(role)
         rs = self.role(role)
         sess = rs.get("session")
         now = self.clock()
@@ -445,18 +503,27 @@ class Waker:
         in_home = bool(home) and msg.get("type") == "stream" and \
             msg.get("display_recipient") == home
         if "mentioned" not in flags and msg.get("type") != "private" and not in_home:
-            if sess and not sess.get("closing") and \
-                    _where(msg, role) == (sess.get("stream"), sess.get("topic")):
+            in_topic = bool(sess) and not sess.get("closing") and \
+                _where(msg, role) == (sess.get("stream"), sess.get("topic"))
+            if not in_topic:
+                return self._decide(role, "skip", f"not a mention of or a DM to {role}", msg)
+            if msg.get("display_recipient") != own_stream(role):
                 # The founder is still in the conversation's topic: not idle.
                 sess["last_founder_at"] = now
                 return self._decide(role, "skip", f"not a mention of {role}; extends the "
                                     "open session's idle timer, not delivered", msg)
-            return self._decide(role, "skip", f"not a mention of or a DM to {role}", msg)
+            # In the role's own stream, an untagged follow-up in the open
+            # session's topic goes to that session (ops#318); it opens none.
         hand = registry_live(role, _any_pid_alive)
         if hand:
             return self._decide(role, "skip", f"live {role} session (pid {hand}); "
                                 "its hook delivers the message", msg)
         if sess and sess.get("closing"):
+            if not self._alive(sess):
+                # Nothing is running for it: forget it and start fresh now,
+                # never a close turn on a session the founder is talking to.
+                self._finish(role, "the founder wrote to a closing session; closed")
+                return self._spawn(role, [msg])
             sess.setdefault("pending", []).append(msg)
             return self._decide(role, "queue", "the session is closing; a fresh one "
                                 "opens with this message", msg)
@@ -575,6 +642,8 @@ class Waker:
         if not sess or sess.get("dry"):
             return out
         running = self._alive(sess)
+        if not running and self._stale(sess):
+            return self._drop_stale(role)
         if sess.get("closing"):
             out += self._tick_closing(role, sess, running, now)
             return out
@@ -744,7 +813,7 @@ def run(cfg: dict[str, Any], waker: Waker) -> int:
 
     def start(role: str) -> None:
         rs = waker.role(role)
-        pairs, events = open_queue(clients[role], rs, AGENT["home_streams"].get(role))
+        pairs, events = open_queue(clients[role], rs, own_stream(role))
         for msg, flags in pairs:
             waker.on_message(role, msg, flags)
         process_batch(waker, role, events)
@@ -798,7 +867,7 @@ def dry_run(cfg: dict[str, Any], waker: Waker) -> int:
         rs = waker.role(role)
         after = rs.get("last_message_id")
         pairs = backfill(client, None if after is None else int(after),
-                         home=AGENT["home_streams"].get(role))
+                         home=own_stream(role))
         for msg, flags in pairs:
             waker.on_message(role, msg, flags)
     waker.tick()

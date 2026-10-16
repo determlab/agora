@@ -52,6 +52,7 @@ class FakeSpawner:
         self.running: set[int] = set()
         self.stopped: list[int] = []
         self.stubborn: set[int] = set()  # stop() does not end these
+        self.missing: set[str] = set()  # session ids with no conversation
         self._pid = 1000
 
     def start(self, argv, prompt, role, cwd=None):
@@ -71,6 +72,9 @@ class FakeSpawner:
         self.stopped.append(pid)
         if pid not in self.stubborn:
             self.running.discard(pid)
+
+    def conversation_exists(self, session_id):
+        return session_id not in self.missing
 
     def finish_all(self):
         self.running.clear()
@@ -597,12 +601,14 @@ def test_zulip_down_does_not_stop_the_tick(wake, tmp_path):
 
 
 def test_founder_follow_up_in_the_topic_extends_the_idle_timer(wake, tmp_path):
+    # outside the role's own stream (#coo for the CTO), an untagged follow-up
+    # only keeps the session open; in #cto it is delivered (next test)
     clock = Clock()
     w = make(wake, tmp_path, clock=clock)
-    w.on_message("CTO", msg(10), ["mentioned"])
+    w.on_message("CTO", msg(10, stream="coo"), ["mentioned"])
     w.spawner.finish_all()
     clock.t += 10 * 60
-    d = w.on_message("CTO", msg(11, "hm, thinking"), [])
+    d = w.on_message("CTO", msg(11, "hm, thinking", stream="coo"), [])
     assert d["action"] == "skip" and "extends" in d["reason"]
     clock.t += 10 * 60
     assert w.tick() == []  # 20 min since the mention, 10 since the follow-up
@@ -786,3 +792,143 @@ def test_failed_resume_in_tick_does_not_crash_the_loop(wake, tmp_path):
     out = w.tick()
     assert out[-1]["action"] == "error"
     assert w.role("CTO")["session"] is None
+
+
+# -- ops#318: untagged follow-ups, plain UTF-8 topics, stale sessions ----------
+
+def test_untagged_follow_up_in_own_stream_topic_goes_to_the_open_session(wake, tmp_path):
+    w = make(wake, tmp_path)
+    w.on_message("CTO", msg(10), ["mentioned"])
+    sid = w.spawner.started[0][0][5]
+    # while the turn runs it queues, then is resumed into the same session
+    d = w.on_message("CTO", msg(11, "and the index? " + TRICKY), [])
+    assert d["action"] == "queue"
+    w.spawner.finish_all()
+    [r] = w.tick()
+    assert r["action"] == "resume"
+    argv, prompt, _ = w.spawner.started[-1]
+    assert argv[4:6] == ["--resume", sid]
+    assert "and the index?" in prompt and not any("index" in a or "rm -rf" in a for a in argv)
+    # after the turn, the next untagged one resumes at once
+    w.spawner.finish_all()
+    assert w.on_message("CTO", msg(12, "ok"), [])["action"] == "resume"
+    assert len(w.spawner.started) == 3
+
+
+def test_untagged_never_opens_a_session_nor_reaches_another_topic(wake, tmp_path):
+    w = make(wake, tmp_path)
+    assert w.on_message("CTO", msg(10), [])["action"] == "skip"  # no session: needs a mention
+    assert w.spawner.started == []
+    w.on_message("CTO", msg(11), ["mentioned"])
+    w.spawner.finish_all()
+    assert w.on_message("CTO", msg(12, topic="other"), [])["action"] == "skip"
+    assert w.on_message("CTO", msg(13, sender=99), [])["action"] == "skip"
+    assert w.on_message("PM", msg(14, stream="pm"), [])["action"] == "skip"  # PM has no session
+    assert len(w.spawner.started) == 1
+
+
+def test_backfill_reads_the_role_own_stream(wake, tmp_path, monkeypatch):
+    # a restart must not miss an untagged follow-up in #cto
+    assert wake.own_stream("CTO") == "cto" and wake.own_stream("PA") == "pa"
+    homes = []
+    monkeypatch.setattr(wake, "backfill", lambda client, after, home=None: homes.append(home) or [])
+    cfg = {"site": "http://x", "bots": {"CTO": ("c@x", "k"), "PA": ("p@x", "k")}, "skipped": {}}
+    wake.dry_run(cfg, make(wake, tmp_path, dry_run=True))
+    assert homes == ["cto", "pa"]
+
+
+HEBREW = "כללי"
+
+
+def test_hebrew_topic_stays_plain_utf8_in_state_and_prompt(wake, tmp_path):
+    w = make(wake, tmp_path)
+    w.on_message("CMO", msg(10, "שלום", stream="cmo", topic=HEBREW), ["mentioned"])
+    raw = (tmp_path / "state.json").read_bytes()
+    assert HEBREW.encode("utf-8") in raw and b"\\u05db" not in raw
+    assert wake.load_state(tmp_path / "state.json")["roles"]["CMO"]["session"]["topic"] == HEBREW
+    _, prompt, _ = w.spawner.started[0]
+    assert f'--stream "cmo" --topic "{HEBREW}"' in prompt
+    assert "\\u05" not in prompt and "\ufffd" not in prompt
+    assert f"#cmo › {HEBREW}" in prompt
+    close = wake.close_prompt("CMO", "cmo", HEBREW)
+    assert f'--topic "{HEBREW}"' in close and "\\u05" not in close
+    # the prompt reaches the child as whole UTF-8 characters
+    assert prompt.encode("utf-8").decode("utf-8") == prompt
+
+
+def test_hebrew_topic_reaches_a_real_child_on_stdin_intact(wake, tmp_path, monkeypatch):
+    out = tmp_path / "seen.txt"
+    script = ("import sys,pathlib; pathlib.Path(sys.argv[1]).write_bytes("
+              "sys.stdin.buffer.read())")
+    monkeypatch.setattr(wake, "resolve_program", lambda argv: argv)
+    sp = wake.Spawner(log_dir=tmp_path)
+    prompt = wake.message_prompt("CMO", msg(10, stream="cmo", topic=HEBREW), first=True)
+    pid = sp.start([sys.executable, "-c", script, str(out)], prompt, "CMO", str(tmp_path))
+    sp.procs[pid].wait(timeout=30)
+    assert out.read_bytes().decode("utf-8") == prompt
+    assert f'--topic "{HEBREW}"' in out.read_text(encoding="utf-8")
+
+
+def test_closing_session_that_never_started_is_dropped_not_resumed(wake, tmp_path):
+    clock = Clock()
+    w = make(wake, tmp_path, clock=clock)
+    sid = str(uuid.uuid4())
+    # left by an earlier run: closing, its close turn not run, no process ever
+    w.role("CMO")["session"] = {"id": sid, "stream": "cmo", "topic": HEBREW, "closing": True,
+                                "started_at": clock.t, "last_founder_at": clock.t,
+                                "pid": None, "pending": []}
+    [d] = w.tick()
+    assert d["action"] == "closed" and "dropped" in d["reason"]
+    assert w.spawner.started == [] and w.role("CMO")["session"] is None
+    d = w.on_message("CMO", msg(10, stream="cmo", topic=HEBREW), ["mentioned"])
+    assert d["action"] == "spawn"
+    argv = w.spawner.started[0][0]
+    assert argv[4] == "--session-id" and argv[5] != sid
+    assert not any(a == "--resume" for a, *_ in w.spawner.started)
+
+
+def test_session_whose_conversation_does_not_exist_starts_fresh(wake, tmp_path):
+    w = make(wake, tmp_path)
+    w.on_message("CMO", msg(10, stream="cmo"), ["mentioned"])
+    sid = w.spawner.started[0][0][5]
+    w.spawner.finish_all()
+    w.spawner.missing.add(sid)  # claude exited before it made the conversation
+    d = w.on_message("CMO", msg(11, "again", stream="cmo"), ["mentioned"])
+    assert d["action"] == "spawn"
+    argv = w.spawner.started[-1][0]
+    assert argv[4] == "--session-id" and argv[5] != sid
+    assert [a[0][4] for a in w.spawner.started] == ["--session-id", "--session-id"]
+    # an untagged follow-up to a stale session is not resumed either
+    w2 = make(wake, tmp_path / "b")
+    w2.on_message("CMO", msg(20, stream="cmo"), ["mentioned"])
+    w2.spawner.finish_all()
+    w2.spawner.missing.add(w2.spawner.started[0][0][5])
+    assert w2.on_message("CMO", msg(21, stream="cmo"), [])["action"] == "skip"
+    assert len(w2.spawner.started) == 1 and w2.role("CMO")["session"] is None
+
+
+def test_founder_message_to_a_closing_session_with_nothing_running_starts_fresh(wake, tmp_path):
+    clock = Clock()
+    w = make(wake, tmp_path, clock=clock)
+    sid = str(uuid.uuid4())
+    w.role("CTO")["session"] = {"id": sid, "stream": "cto", "topic": "t", "closing": True,
+                                "started_at": clock.t, "last_founder_at": clock.t,
+                                "pid": 5, "pid_created": 50, "pending": []}
+    d = w.on_message("CTO", msg(10, topic="t"), ["mentioned"])
+    assert d["action"] == "spawn"
+    assert [a[0][4] for a in w.spawner.started] == ["--session-id"]
+    assert w.spawner.started[0][0][5] != sid
+
+
+def test_real_spawner_checks_the_conversation_file(wake, tmp_path, monkeypatch):
+    sid = str(uuid.uuid4())
+    monkeypatch.setitem(wake.AGENT, "conversations",
+                        str(tmp_path / "projects" / "*" / "{session_id}.jsonl"))
+    sp = wake.Spawner(log_dir=tmp_path)
+    assert sp.conversation_exists(sid) is True  # no folder at all: cannot tell
+    (tmp_path / "projects" / "C--PlayGround-ops").mkdir(parents=True)
+    assert sp.conversation_exists(sid) is False
+    (tmp_path / "projects" / "C--PlayGround-ops" / f"{sid}.jsonl").write_text("{}")
+    assert sp.conversation_exists(sid) is True
+    with pytest.raises(ValueError):
+        sp.conversation_exists("../../etc/passwd")
