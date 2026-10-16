@@ -252,8 +252,8 @@ for it.
 Write `@**CTO** <question>` in any stream (or DM the CTO bot) and a CTO
 session opens in the ops repo on its own, answers in that stream and topic,
 and closes when you go quiet. Same for `@**COO**`, `@**PM**`, `@**CMO**`,
-`@**CPSO**`. `@**PA**`, or any message of yours in `#pa`, opens a PA session
-in your PA folder (`PA_DIR`) instead of the ops repo. `tools/up.cmd` in ops
+`@**CPSO**`. Any message of yours in `#pa`, or a DM to the PA, opens a PA session
+(never an `@**PA**` in another stream) in your PA folder (`PA_DIR`) instead of the ops repo. `tools/up.cmd` in ops
 starts it next to the chat server; `down.cmd` stops it.
 
 ```

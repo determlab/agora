@@ -656,9 +656,11 @@ def test_pa_runs_in_pa_dir_on_sonnet(wake, tmp_path, monkeypatch):
     assert "founder's PA" in prompt and "--as PA send" in prompt and "agents/pa.md" not in prompt
 
 
-def test_pa_mention_elsewhere_spawns_and_others_in_pa_never_do(wake, tmp_path):
+def test_pa_mention_elsewhere_skips_and_others_in_pa_never_do(wake, tmp_path):
     w = make(wake, tmp_path)
-    assert w.on_message("PA", msg(10, "@**PA** hi", stream="coo"), ["mentioned"])["action"] == "spawn"
+    d = w.on_message("PA", msg(10, "@**PA** hi", stream="coo"), ["mentioned"])
+    assert d["action"] == "skip" and d["reason"] == "PA wakes only in #pa or a founder DM (ops#327)"
+    assert w.spawner.started == []
     w2 = make(wake, tmp_path / "b")
     assert w2.on_message("PA", msg(11, stream="pa", sender=99), [])["action"] == "skip"
     assert w2.on_message("PA", msg(12, stream="coo"), [])["action"] == "skip"
@@ -677,15 +679,27 @@ def test_pa_stays_out_of_company_streams_without_a_mention(wake, tmp_path):
         d = w.on_message("PA", msg(i, text, stream="All hands", topic="כולם"), flags)
         assert d["action"] == "skip", text
     assert w.spawner.started == [] and w.role("PA").get("session") is None
-    # an explicit @**PA** there, and anything in #pa, still wake it
+    # even an explicit @**PA** there never wakes it; anything in #pa still does
     d = w.on_message("PA", msg(30, "@**PA** book it", stream="All hands"), ["mentioned"])
-    assert d["action"] == "spawn"
+    assert d["action"] == "skip" and d["reason"] == "PA wakes only in #pa or a founder DM (ops#327)"
+    assert w.spawner.started == []
     w2 = make(wake, tmp_path / "b")
     assert w2.on_message("PA", msg(31, "hi", stream="pa"), [])["action"] == "spawn"
     # other roles' routing is unchanged
     w3 = make(wake, tmp_path / "c")
     assert w3.on_message("COO", msg(32, "@**COO** x", stream="All hands"),
                          ["mentioned"])["action"] == "spawn"
+
+
+def test_pa_mention_elsewhere_never_touches_an_open_pa_session(wake, tmp_path):
+    w = make(wake, tmp_path)
+    w.on_message("PA", msg(50, "hi", stream="pa", topic="errands"), [])
+    before = dict(w.role("PA")["session"])
+    n = len(w.spawner.started)
+    d = w.on_message("PA", msg(51, "@**PA** leave", stream="All hands", topic="כולם"), ["mentioned"])
+    assert d["action"] == "skip"
+    sess = w.role("PA")["session"]
+    assert sess == before and not sess.get("pending") and len(w.spawner.started) == n
 
 
 def test_pa_unwoken_room_never_becomes_the_close_room(wake, tmp_path):
