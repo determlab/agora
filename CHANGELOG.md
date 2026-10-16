@@ -26,6 +26,18 @@ milestones in the history, not tagged releases.
 
 ### Added
 
+- **Rooms (ops#322).** The page shows plain chat rooms: a name, a member
+  list, one conversation, no topics anywhere. On the wire a room is a stream
+  whose new messages go to one topic, `chat`; old streams show as rooms with
+  all their history, and no row is rewritten. Invite with the Invite button
+  or by picking someone not in the room in the `@` picker; only a person
+  invites (a bot gets `INVITE_NOT_ALLOWED`). Room names are letters, digits,
+  space and `-_.` (`BAD_ROOM_NAME` otherwise), because a name reaches a shell
+  hint. `bot/zulip.py` gains `--room` on `send`/`read`/`wait`/`typing`, and
+  `invite`, refused until ops#321. `bot/wake.py`: an invite never wakes; a
+  one-bot room wakes on any founder message, a room with several role bots
+  only on `@**ROLE**`; a non-member never wakes; a removal closes the
+  session there; the hint is `send --room`.
 - `#feature`, a private Zulip stream for the big-feature path with exactly
   the founder, the `CTO` bot and the `COO` bot in it — the one exception to
   "each bot in its own stream only". `bot/setup_streams.py` creates it

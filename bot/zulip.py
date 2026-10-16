@@ -425,7 +425,8 @@ def main(argv: list[str] | None = None) -> int:
     invite = sub.add_parser("invite", help="invite a role bot into a room (refused until "
                                            "ops#321; the founder invites from the page)")
     invite.add_argument("--room", required=True)
-    invite.add_argument("--who", required=True, metavar="ROLE", help="one of " + ", ".join(INVITE_ROLES))
+    invite.add_argument("--who", required=True, metavar="ROLE",
+                        help="one of " + ", ".join(INVITE_ROLES))
     invite.add_argument("--json", action="store_true", help="one JSON object on stdout")
     for name, what in (("archive", "hide a stream, or one topic with --topic, from the "
                                    "lists (messages are kept)"),

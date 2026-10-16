@@ -663,6 +663,9 @@ class Waker:
         sess["pid_created"] = self.spawner.created(sess["pid"])
 
     def _close_turn(self, role: str, sess: dict[str, Any], now: float) -> None:
+        if not safe_room(sess.get("stream")):  # a session saved before ops#322
+            raise SpawnError(f"room name {sess.get('stream')!r} is not safe text; "
+                             "closed without a close line")
         sess["close_turn_at"] = now
         self._run(role, "resume", close_prompt(role, sess["stream"]))
 

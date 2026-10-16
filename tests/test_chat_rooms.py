@@ -11,11 +11,11 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import sys
 from pathlib import Path
 
 import pytest
-
 from test_chat_events import Running
 from test_chat_messages import chat
 from test_chat_setup import HUMAN
@@ -188,7 +188,7 @@ def test_invite_and_removal_reach_the_queues_that_asked_for_subscription_events(
 def cli(run, monkeypatch, tmp_path):
     mod = _load("zulip")
     monkeypatch.setattr(mod, "DOTENV", str(tmp_path / "missing.env"))
-    for key in list(__import__("os").environ):
+    for key in list(os.environ):
         if key.startswith("ZULIP_"):
             monkeypatch.delenv(key)
     monkeypatch.setenv("ZULIP_SITE", run.base)

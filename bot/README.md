@@ -76,9 +76,9 @@ Pool workers get neither a bot user nor a stream subscription — they are
 processes with no session to wake (RFC-004); their state is the label on the
 issue, their voice is the PR.
 
-**topic = the issue number** inside a role stream, e.g. `#cto 141 record
-shape`. A decision that isn't tied to one issue uses the ledger id instead,
-e.g. `D12 event queue resume`. Unchanged from the original issue body.
+**Topics are gone (ops#322).** Each stream is now a room with one fixed
+topic, `chat`; the old "topic = the issue number" convention is history.
+Name the issue in the message instead, e.g. `ops#141: record shape`.
 
 Run it (idempotent — a second run creates nothing):
 ```
@@ -224,10 +224,22 @@ is invisible to sessions already connected — D1). The bot is
 `ZULIP_COO_EMAIL` / `ZULIP_COO_API_KEY`; environment first, then `bot/.env`.
 
 ```
-python bot/zulip.py --as COO send --stream coo --topic "#141 record shape" --text "Done, PR #45."
-python bot/zulip.py --as COO read --stream coo --topic "#141 record shape" --since 42
+python bot/zulip.py --as COO send --room coo --text "Done, PR #45."
+python bot/zulip.py --as COO read --room coo --since 42 [--json]
 python bot/zulip.py --as COO read --mentions --since 42
+python bot/zulip.py --as COO wait --room coo --seconds 600 [--json]
 ```
+
+**Rooms (ops#322).** A room is a stream whose messages all go to one fixed
+topic, `chat`; the page shows no topics. `send --room X` is `--stream X
+--topic chat`; `read --room X` and `wait --room X` cover the whole room, old
+topics included (`wait --room` exits 2 with the next message from someone
+else, 0 when `--seconds` runs out). `--stream`/`--topic` still work.
+`invite --room X --who ROLE --json` is refused (exit 2, `"code":"INVITE_OFF"`)
+until ops#321 sets who may invite whom; it takes role bots only, never a
+person (`NOT_A_ROLE`). Until then the founder invites from the page. The
+server refuses any bot that adds or removes someone else
+(`INVITE_NOT_ALLOWED`), so no bot ever invites the PA.
 
 `python bot/zulip.py --as COO wait` parks until the bot is mentioned or
 DMed, prints the message and exits 2 — the same code the session hook runs
@@ -247,13 +259,22 @@ does; without `--topic` it marks the whole stream read, the same as the
 sidebar's "mark all as read". A message the bot itself sent is never unread
 for it.
 
-## Wake: an @mention opens a role session (ops#293)
+## Wake: an @mention opens a role session (ops#293, rooms ops#322)
 
-Write `@**CTO** <question>` in any stream (or DM the CTO bot) and a CTO
-session opens in the ops repo on its own, answers in that stream and topic,
-and closes when you go quiet. Same for `@**COO**`, `@**PM**`, `@**CMO**`,
-`@**CPSO**`. `@**PA**`, or any message of yours in `#pa`, opens a PA session
-in your PA folder (`PA_DIR`) instead of the ops repo. `tools/up.cmd` in ops
+Write `@**CTO** <question>` in a room the CTO bot is in (or DM the CTO bot)
+and a CTO session opens in the ops repo on its own, answers in that room, and
+closes when you go quiet. Same for `@**COO**`, `@**PM**`, `@**CMO**`,
+`@**CPSO**`. `@**PA**` opens a PA session in your PA folder (`PA_DIR`)
+instead of the ops repo.
+
+Who wakes, by membership (ops#322): in a room with **one** role bot (`#cto`,
+`#pa`) any message of yours wakes it, no tag needed. In a room with **two or
+more** (`#coo` with the PM, `All hands`) only `@**ROLE**` wakes, and only that
+role (`@**all**` and a quote's silent `@_**ROLE**` wake nobody). A role that
+is not in the room never wakes there. An invite only adds the bot; it wakes
+nothing. Removing a bot from a room closes its open session there. A room
+name that is not letters, digits, space or `-_.` is never put in a hint (the
+server refuses such a name at create and rename, too). `tools/up.cmd` in ops
 starts it next to the chat server; `down.cmd` stops it.
 
 ```
@@ -278,10 +299,11 @@ folder) the PA is skipped and the start line says what to add.
 |---|---|
 | sender is not `FOUNDER_ZULIP_ID` (a bot, anyone else) | `skip`, logged |
 | a session for that role you opened by hand is alive (Claude Code's registry names it after the role) | `skip` — its Stop-hook wait delivers it |
-| no open conversation for the role | `spawn`: `claude -p --model <opus or sonnet> --session-id <new uuid>` in `C:\PlayGround\ops` (`WAKE_OPS_DIR`; the PA in `PA_DIR`), the topic's last 20 messages before yours in the first prompt |
+| no open conversation for the role | `spawn`: `claude -p --model <opus or sonnet> --session-id <new uuid>` in `C:\PlayGround\ops` (`WAKE_OPS_DIR`; the PA in `PA_DIR`), the room's last 20 messages before yours in the first prompt |
 | conversation open, its turn has ended | `resume`: `claude -p --resume <uuid>` |
 | conversation open, a turn is still running | `queue`; delivered as one resume when the turn ends |
-| conversation open in the role's own stream (`#cto` for the CTO), your message in its topic **without** a mention | same as a mention: `resume` or `queue`. It never opens a new session (ops#318) |
+| a room with two or more role bots, your message there **without** `@**ROLE**` | `skip`; if that role's session is open in this room, it only keeps it open (resets the 15 minutes) |
+| the role is not a member of the room | `skip`; an open session of it in that room is closed |
 | the saved session never started, or its conversation does not exist (no `~/.claude/projects/*/<uuid>.jsonl`) | dropped, never resumed; your message opens a fresh one (ops#318) |
 
 The command lives in one dict, `AGENT` at the top of `wake.py` — swap
@@ -290,17 +312,17 @@ Opus, PM, CMO, CPSO and PA on Sonnet. Each role's output goes to
 `bot/.wake/<ROLE>.log`; state (queue ids, last event and message ids, open
 sessions) is `bot/.wake/state.json`, gitignored.
 
-**Idle close:** 15 minutes after your last message in the session's topic, or
+**Idle close:** 15 minutes after your last message in the session's room, or
 at 4 hours of age, the session gets one last turn: post one line in the
-topic — what was agreed and where it is written — then it is forgotten. A
-follow-up of yours in that topic without a mention keeps the session open (it
-resets the 15 minutes); in the role's own stream it is also delivered, in any
-other stream it is not: mention the role to have it read there (the role bot
-only sees the streams it is subscribed to). At 4 hours a running
+room — what was agreed and where it is written — then it is forgotten. A
+follow-up of yours in that room keeps the session open (it resets the 15
+minutes); in a one-bot room it is also delivered, in a room with several role
+bots it is not: tag the role to have it read there. At 4 hours a running
 turn is stopped first, and the close turn runs once that process has exited; a
 close turn gets 2 minutes, then it is stopped. The next mention opens a fresh
-session — no `--resume` — whose first prompt holds the topic's last 20
-messages, so the previous close line is the handoff. While Zulip is down the
+session — no `--resume` — whose first prompt holds the room's last 20
+messages, so the previous close line is the handoff. When the PA is in a room
+with others, its prompt names them and says others read the room. While Zulip is down the
 retry loop keeps running these limits.
 
 **Restart:** the saved queue is resumed from `last_event_id`; if Zulip expired
@@ -316,8 +338,9 @@ create time: after a restart a pid whose create time does not match (Windows
 reused it) counts as dead and is never stopped. No skip-permissions flag and no new
 permissions: the session runs under the ops repo's own settings, so a tool the
 ops settings do not allow is refused there. No password, no human account.
-A DM is answered in the role's own stream, topic `direct message`
-(`zulip.py send` posts to streams only).
+A DM is answered in the role's own room (`zulip.py send` posts to rooms
+only). The hint a session gets is `send --room "<room>"`, and wake.py builds
+it only for a room name that is safe text.
 
 ## PA (Cowork) (ops#295)
 
@@ -338,8 +361,8 @@ ZULIP_PA_API_KEY=<key>
 The PA uses two commands, the same as the role sessions:
 
 ```
-python bot/zulip.py --as PA read --stream pa --topic "X"
-python bot/zulip.py --as PA send --stream pa --topic "X" --text "..."
+python bot/zulip.py --as PA read --room pa
+python bot/zulip.py --as PA send --room pa --text "..."
 ```
 
 A missing key says which two lines to add and the setup command that prints

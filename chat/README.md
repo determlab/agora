@@ -80,6 +80,28 @@ so `GET /api/v1/dashboard` reads it gone without waiting for the next full
 sync; every queue watching `dashboard` events gets one, same as a sync. No
 `--approve-cmd` answers `APPROVE_NOT_CONFIGURED` (400).
 
+## Rooms (ops#322)
+
+The page shows **rooms**: a name, a member list and one conversation. On the
+wire a room is a stream, and every new message goes to one fixed topic,
+`chat` (`POST /messages` without a topic gets it). A stream from before
+shows as a room with all its messages in time order, old topics included;
+nothing in the database is rewritten, so going back is free. The page has no
+topic UI anywhere.
+
+- **Room names** are letters (any script, Hebrew included), digits, space and
+  `- _ .`, at most 60, no space at either end. Create and rename refuse
+  anything else with `BAD_ROOM_NAME`: the name reaches a shell hint in
+  `bot/wake.py`, which checks it again.
+- **Invite** is a subscription: the page's Invite button, or picking someone
+  not in the room in the `@` picker. Only a person invites or removes others;
+  a bot gets `INVITE_NOT_ALLOWED` (an agent invite waits for ops#321). Only
+  an existing account can be invited.
+- A queue that registers for `subscription` gets Zulip's events: `add` /
+  `remove` for the user whose membership changed, `peer_add` /
+  `peer_remove` for the room's other members. An invite wakes nobody;
+  `bot/wake.py` closes a removed bot's session in that room.
+
 ## Archive a stream or a topic
 
 Archive hides a room from the lists; no message is deleted. A stream: `DELETE
@@ -121,10 +143,10 @@ clear:
 own endpoint and argument names) marks every message in that topic, not sent
 by the caller, read; `POST /api/v1/mark_stream_as_read` with `stream_id` does
 the same for every topic in the stream — the sidebar's "mark all as read".
-The page shows a small round bubble next to each stream and topic with
-unread messages (hidden at 0), starts every stream's topic list collapsed on
-load, marks a topic read when it is opened (and when a message arrives while
-it is already open), loads every count from the server on page load so a
+The page shows a small round bubble next to each room with unread messages
+(hidden at 0, the sum of its topics), marks a room read when it is opened
+(and when a message arrives while it is already open), loads every count
+from the server on page load so a
 reload never disagrees with what was on screen, and shows the total in the
 tab title as `(N) Agora`. From a shell: `python bot/zulip.py unread --json`
 and `python bot/zulip.py mark-read --stream S [--topic T]`.
@@ -148,7 +170,7 @@ passes.
 ## Point a tool at it
 
     set ZULIP_SITE=http://127.0.0.1:8095
-    python bot/zulip.py --as COO send --stream coo --topic "#61" --text "hello"
+    python bot/zulip.py --as COO send --room coo --text "hello"
 
 `python -m pytest -q tests/test_chat_compat.py` runs every tool against a
 fresh server and names the command that fails.

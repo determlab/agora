@@ -1079,3 +1079,15 @@ def test_322_the_pa_in_a_shared_room_is_told_who_else_reads_it(wake, tmp_path):
     w2 = make(wake, tmp_path / "b")
     w2.on_message("PA", msg(11, "my schedule?", stream="pa"), [])
     assert "Also in" not in w2.spawner.started[0][1]
+
+
+def test_322_a_saved_session_with_an_unsafe_room_closes_without_a_hint(wake, tmp_path):
+    clock = Clock()
+    w = make(wake, tmp_path, clock=clock)
+    w.role("CTO")["session"] = {"id": str(uuid.uuid4()), "stream": "a$(x)", "topic": "t",
+                                "started_at": clock.t, "last_founder_at": clock.t,
+                                "pid": 5, "pid_created": 50}
+    clock.t += 16 * 60
+    [d] = w.tick()  # idle: the close turn would need a hint; it is refused, not crashed
+    assert d["action"] == "error" and "not safe text" in d["reason"]
+    assert w.spawner.started == [] and w.role("CTO")["session"] is None
