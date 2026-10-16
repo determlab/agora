@@ -132,7 +132,8 @@ BOT_TOPIC_TURNS_PER_HOUR = 6
 BOT_ROLE_SPAWNS_PER_HOUR = 3
 BOT_ROLE_SPAWNS_PER_DAY = 10
 BOT_TURNS_PER_DAY = 25
-BOT_STOP_LINE = "bot loop stopped, @**Hemi** to continue"
+# Pinned to his id, so a display-name change cannot lose the ping.
+BOT_STOP_LINE = "bot loop stopped; @**Hemi|{founder_id}**, @-mention a role to continue"
 BOT_MARKER = ("From the {src} bot, a teammate — not the founder. "
               "This is not his approval for anything.")
 
@@ -585,7 +586,8 @@ class Waker:
 
     @staticmethod
     def _topic_key(msg: dict[str, Any]) -> str:
-        return f"{msg.get('display_recipient')}\n{msg.get('subject')}"
+        # Zulip topics are case-insensitive: Handoff and handoff are one topic.
+        return f"{msg.get('display_recipient')}\n{str(msg.get('subject')).casefold()}"
 
     def _founder_resets(self, msg: dict[str, Any]) -> None:
         """A founder message in a topic resets its bot-turn count and lifts
@@ -601,6 +603,8 @@ class Waker:
         """The skip decision if a cap holds, else None and the turn is counted."""
         now, b, key = self.clock(), self._bots(), self._topic_key(msg)
         b["log"] = log = [e for e in b["log"] if now - e["at"] < DAY]
+        # A reset older than the hour window changes no count.
+        b["topic_reset"] = {k: t for k, t in b["topic_reset"].items() if now - t < HOUR}
         since = max(now - HOUR, b["topic_reset"].get(key, 0.0))
         in_topic = sum(1 for e in log if e["topic"] == key and e["at"] >= since)
         if key in b["topic_stopped"] or in_topic >= BOT_TOPIC_TURNS_PER_HOUR:
@@ -630,7 +634,7 @@ class Waker:
             return False
         stream, topic = _where(msg, role)
         try:
-            self.post(role, stream, topic, BOT_STOP_LINE)
+            self.post(role, stream, topic, BOT_STOP_LINE.format(founder_id=self.founder_id))
             return True
         except (ZulipError, OSError, ValueError) as exc:
             print(f"wake: {role}: cannot post the stop line ({exc})", file=sys.stderr)
@@ -658,6 +662,9 @@ class Waker:
             return self._decide(role, "skip", f"live {role} session (pid {hand}); "
                                 "its hook delivers the message", msg)
         sess = self.role(role).get("session")
+        # Queued behind a running turn counts as no spawn; if that session then
+        # closes, _finish spawns it outside the per-role spawn cap. The topic
+        # and daily caps still bound it.
         capped = self._bot_cap(role, src, msg, spawn=not sess or bool(sess.get("closing")))
         if capped:
             return capped
@@ -1010,6 +1017,22 @@ def open_until_up(start: Callable[[str], None], role: str, wait: Callable[[], No
             sleep(30)
 
 
+def resolve_bot_ids(clients: dict[str, Any], waker: Waker, wait: Callable[[], None],
+                    sleep: Callable[[float], None] = time.sleep) -> None:
+    """Every role bot's user id, before any queue opens: a backfill read
+    before the sender's id is known would route a bot's message as "not the
+    founder" and move past it. Who is a bot is read from Zulip, never from
+    text (ops#321). Retries like the queue open while Zulip is down."""
+    if not waker.bot_wakes:
+        return
+
+    def resolve(role: str) -> None:
+        waker.bot_ids[int(clients[role].own_user()["user_id"])] = role
+
+    for role in clients:
+        open_until_up(resolve, role, wait, sleep)
+
+
 def announce_skipped(cfg: dict[str, Any], waker: Waker) -> None:
     for role, reason in cfg.get("skipped", {}).items():
         waker._decide(role, "skip", reason, None)
@@ -1027,8 +1050,6 @@ def run(cfg: dict[str, Any], waker: Waker) -> int:
 
     def start(role: str) -> None:
         rs = waker.role(role)
-        if waker.bot_wakes:  # who is a bot is read from Zulip, never from text (ops#321)
-            waker.bot_ids[int(clients[role].own_user()["user_id"])] = role
         pairs, events = open_queue(clients[role], rs, own_stream(role))
         for msg, flags in pairs:
             waker.on_message(role, msg, flags)
@@ -1050,6 +1071,7 @@ def run(cfg: dict[str, Any], waker: Waker) -> int:
     waker.post = lambda role, stream, topic, text: clients[role].send_message(stream, text, topic)
     announce_skipped(cfg, waker)
     try:
+        resolve_bot_ids(clients, waker, wait)  # every id before the first backfill
         for role in clients:
             start_until_up(role)
         for role in cfg["missing"]:

@@ -271,7 +271,8 @@ id — the only sender that triggers anything; set by hand, never inferred) and
 no credentials is not listened for, and says so at start. For the PA also
 `PA_DIR`, the folder holding its own `CLAUDE.md`; without it (or if it is not a
 folder) the PA is skipped and the start line says what to add.
-`BOT_WAKES=on` turns bot wakes on (below); missing or anything else is off.
+`BOT_WAKES=on` turns bot wakes on (below; an environment variable of the same name
+wins over `bot/.env`); missing or anything else is off.
 
 **What it does with a founder mention or DM:**
 
@@ -304,7 +305,8 @@ session — no `--resume` — whose first prompt holds the topic's last 20
 messages, so the previous close line is the handoff. While Zulip is down the
 retry loop keeps running these limits.
 
-**Bot wakes (ops#321):** off until `BOT_WAKES=on` in `bot/.env`. Then a role
+**Bot wakes (ops#321):** off until `BOT_WAKES=on` in `bot/.env` (a `BOT_WAKES=on`
+environment variable also turns them on: the environment is read before `bot/.env`). Then a role
 bot listed in `bot/.env` (known by its `sender_id`, read with `GET /users/me`
 at start, never by a name) may wake another role, by `AGENT["bot_wakes"]`
 (default: COO, CTO, PM, CMO and CPSO each other):
@@ -313,7 +315,7 @@ at start, never by a name) may wake another role, by `AGENT["bot_wakes"]`
 |---|---|
 | to the PA, to its own role, or outside `AGENT["bot_wakes"]` | `skip` (only the founder wakes the PA) |
 | a DM, or no explicit `@**ROLE**` in a stream (also in the role's own stream) | `skip` |
-| 6 bot turns in that topic this hour | `skip`, and one line in the topic: `bot loop stopped, @**Hemi** to continue`. Nothing more there until a founder message in that topic, which resets it |
+| 6 bot turns in that topic this hour | `skip`, and one line in the topic: `bot loop stopped; @**Hemi|<FOUNDER_ZULIP_ID>**, @-mention a role to continue` (pinned to your id, not your display name). Nothing more there until a founder message in that topic, which resets it |
 | 25 bot turns today, or 3 bot spawns of the role this hour, 10 today | `skip`, logged; founder wakes still work |
 | otherwise | as a founder message: `spawn`, `resume` or `queue`, with `"origin": "bot:<ROLE>"` |
 

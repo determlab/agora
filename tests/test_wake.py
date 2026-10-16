@@ -9,6 +9,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import sys
+import threading
 import uuid
 from pathlib import Path
 
@@ -389,7 +390,7 @@ def test_dry_run_json_prints_one_line_per_message_and_spawns_nothing(wake, tmp_p
 def test_real_spawner_puts_the_prompt_on_stdin(wake, tmp_path, monkeypatch):
     got, args = tmp_path / "stdin.txt", tmp_path / "argv.json"
     script = ("import sys,json,pathlib;"
-              "pathlib.Path(sys.argv[1]).write_text(sys.stdin.read(),encoding='utf-8');"
+              "pathlib.Path(sys.argv[1]).write_bytes(sys.stdin.buffer.read());"
               "pathlib.Path(sys.argv[2]).write_text(json.dumps(sys.argv),encoding='utf-8')")
     monkeypatch.setitem(wake.AGENT, "cwd", str(tmp_path))
     sp = wake.Spawner(log_dir=tmp_path / "logs")
@@ -1088,7 +1089,8 @@ def test_topic_cap_posts_the_stop_line_once(wake, tmp_path):
                                              "resume", "resume"]
     assert all(d["action"] == "skip" and "bot loop stopped" in d["reason"] for d in ds[6:])
     # posted once, by the bot of the role the stopped message was for
-    assert posts == [("CPSO", "coo", "handoff", "bot loop stopped, @**Hemi** to continue")]
+    line = "bot loop stopped; @**Hemi|8**, @-mention a role to continue"
+    assert posts == [("CPSO", "coo", "handoff", line)]
     assert [d.get("stop_line") for d in ds[6:]] == [True, False, False]
     assert len(w.spawner.started) == 6
     # another topic is not stopped
@@ -1257,7 +1259,7 @@ def test_live_hand_session_gets_bot_message_through_its_hook(wake, tmp_path, mon
 def test_bot_prompt_reaches_a_real_child_on_stdin_only(wake, tmp_path, monkeypatch):
     got, args = tmp_path / "stdin.txt", tmp_path / "argv.json"
     script = ("import sys,json,pathlib;"
-              "pathlib.Path(sys.argv[1]).write_text(sys.stdin.read(),encoding='utf-8');"
+              "pathlib.Path(sys.argv[1]).write_bytes(sys.stdin.buffer.read());"
               "pathlib.Path(sys.argv[2]).write_text(json.dumps(sys.argv),encoding='utf-8')")
     monkeypatch.setitem(wake.AGENT, "spawn", [sys.executable, "-c", script, str(got),
                                               str(args), "{model}", "{session_id}"])
@@ -1296,3 +1298,42 @@ def test_dry_run_reads_bot_ids_from_zulip_when_on(wake, tmp_path, monkeypatch, c
     by_role = {d["role"]: d for d in lines}
     assert by_role["CTO"]["action"] == "spawn" and by_role["CTO"]["origin"] == "bot:COO"
     assert by_role["COO"]["action"] == "skip" and "own role" in by_role["COO"]["reason"]
+
+
+def test_run_knows_every_bot_before_the_first_backfill(wake, tmp_path, monkeypatch):
+    # COO starts first; its backfill holds the CPSO bot's @**COO**. Every id
+    # must be known by then, or the wake is skipped as "not the founder".
+    history = [bmsg(10, "CPSO", "COO", "@**COO** handoff ready", stream="coo")]
+    done = threading.Event()
+
+    class Client(FakeClient):
+        def __init__(self, site, email, key, timeout=None):
+            super().__init__(history=history)
+            self.email = email
+
+        def own_user(self):
+            return {"user_id": BOT_ID[self.email.split("-")[0].upper()]}
+
+        def get_events(self, queue_id, last_event_id, dont_block=False):
+            done.wait(5)
+            raise OSError("test over")
+
+    monkeypatch.setattr(wake, "ZulipClient", Client)
+    monkeypatch.setattr(wake, "STATE_DIR", tmp_path / ".wake")
+    monkeypatch.setattr(wake, "TICK_SECONDS", 0.01)
+    w = make_bots(wake, tmp_path)
+    w.bot_ids = {}
+    w.role("COO")["last_message_id"] = 9
+
+    def stop():
+        raise KeyboardInterrupt
+    w.tick = stop
+    cfg = {"site": "http://z", "missing": [],
+           "bots": {r: (f"{r.lower()}-bot@x", "k") for r in ("COO", "CPSO", "CTO")}}
+    try:
+        assert wake.run(cfg, w) == 0
+    finally:
+        done.set()
+    d = next(e for e in w.emitted if e.get("role") == "COO")
+    assert d["action"] == "spawn" and d["origin"] == "bot:CPSO"
+    assert w.bot_ids == {101: "COO", 105: "CPSO", 102: "CTO"}
