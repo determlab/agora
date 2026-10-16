@@ -252,7 +252,7 @@ dialog .buttons { display: flex; justify-content: flex-end; gap: .5rem; margin-t
 #side { grid-row: 2; }
 #main { grid-row: 2; }
 #dash { grid-row: 2; grid-column: 1 / -1; overflow: auto; padding: .75rem 1rem;
-  display: flex; flex-direction: column; gap: .75rem; }
+  display: flex; flex-direction: column; gap: .75rem; font-size: 15px; }
 /* The board, in the approved mockup's look (B8UrALfZEZ34F1sPeJEiNz, ops#220).
    Class names (dhead/cards/card/rows/ref/chip/live/big/bar/role/st/sync/go/
    tseg/tb/plan/tl/lane/ev/now/evlist/mk) are the mockup's own, kept on
@@ -268,7 +268,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
   background: var(--bubble); padding: 8px 12px; display: flex; flex-direction: column; min-width: 0; }
 .kpi .kv { font-size: 26px; font-weight: 700; line-height: 1.2; font-variant-numeric: tabular-nums;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.kpi .kl { font-size: 12px; color: var(--muted); font-weight: 600; }
+.kpi .kl { font-size: 13px; color: var(--muted); font-weight: 600; }
 .kpi.ok { border-inline-start-color: var(--ok); }
 .kpi.ok .kv { color: var(--ok); }
 .kpi.warn { border-inline-start-color: var(--wait); }
@@ -276,12 +276,15 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 .kpi.bad { border-inline-start-color: var(--error); }
 .kpi.bad .kv { color: var(--error); }
 .kpi.none .kv { color: var(--muted); }
+a.kpi { color: inherit; text-decoration: none; }
+a.kpi:hover .kl { text-decoration: underline; }
+.dash-more { min-height: 44px; font-size: 15px; font-weight: 600; }
 .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(290px, 100%), 1fr));
   gap: 12px; align-items: start; }
 .card { border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; background: var(--bubble);
   display: flex; flex-direction: column; gap: 8px; min-width: 0; }
 .card.wide { grid-column: 1 / -1; }
-.card h3 { margin: 0; font-size: 12px; letter-spacing: .06em; color: var(--muted); font-weight: 700;
+.card h3 { margin: 0; font-size: 14px; letter-spacing: .06em; color: var(--muted); font-weight: 700;
   display: flex; gap: 8px; align-items: center; }
 .card h3 .cnt { margin-inline-start: auto; font-variant-numeric: tabular-nums; color: var(--text); }
 .dash-body { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
@@ -291,20 +294,26 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 .rows li { display: flex; gap: 8px; align-items: baseline; font-size: 14px; min-width: 0; }
 .tx, .one { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   unicode-bidi: plaintext; }
-.ref { font-family: ui-monospace, Consolas, monospace; font-size: 12.5px; direction: ltr;
+.ref { font-family: ui-monospace, Consolas, monospace; font-size: 13px; direction: ltr;
   unicode-bidi: isolate; color: var(--accent); white-space: nowrap; }
 a.ref, a.dash-label { text-decoration: none; }
+/* ops#326: under 13px nothing on the board (the ui-ux-pro-max floor). */
+#dash .muted { font-size: 13px; }
+/* ops#326: a cut text opens in place on one tap (a phone has no hover):
+   the full text, never a tooltip only. */
+.clamp { cursor: pointer; }
+.tx.clamp.open, .one.clamp.open { white-space: normal; overflow: visible; overflow-wrap: anywhere; }
 a.dash-label:not(.ref) { color: var(--text); }
 a.dash-label:hover { text-decoration: underline; }
 a.ref:hover { text-decoration: underline; }
-.chip { font-size: 11px; font-weight: 700; border-radius: 4px; padding: 0 6px; white-space: nowrap; line-height: 18px;
+.chip { font-size: 13px; font-weight: 700; border-radius: 4px; padding: 0 6px; white-space: nowrap; line-height: 18px;
   background: var(--accent-soft); color: var(--text); flex: none; }
 .chip.p0, .chip.bad { background: var(--error); color: #fff; }
 .chip.p1, .chip.warn { background: var(--wait); color: #1b1300; }
 .chip.p2, .chip.a { background: var(--accent-soft); color: var(--text); }
 .chip.b { background: var(--mention); color: var(--text); }
 .chip.none { background: none; border: 1px dashed var(--line); color: var(--muted); font-weight: 500; }
-.more { align-self: flex-start; border: 0; background: none; padding: 0; font-size: 12px; color: var(--accent); }
+.more { align-self: flex-start; border: 0; background: none; padding: 0; font-size: 13px; color: var(--accent); }
 .more:hover { text-decoration: underline; }
 .cut { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
 .live { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; font-size: 14px; margin: 0; }
@@ -312,7 +321,7 @@ a.ref:hover { text-decoration: underline; }
 .live dd { margin: 0; font-variant-numeric: tabular-nums; min-width: 0; white-space: nowrap; overflow: hidden;
   text-overflow: ellipsis; }
 .live dd.warn { color: var(--wait); }
-.live .act { direction: ltr; unicode-bidi: isolate; font-family: ui-monospace, Consolas, monospace; font-size: 12.5px; }
+.live .act { direction: ltr; unicode-bidi: isolate; font-family: ui-monospace, Consolas, monospace; font-size: 13px; }
 .idle { display: flex; align-items: center; gap: 10px; font-size: 14px; }
 .big { font-size: 22px; font-weight: 700; font-family: ui-monospace, Consolas, monospace;
   direction: ltr; unicode-bidi: isolate; }
@@ -324,7 +333,7 @@ a.ref:hover { text-decoration: underline; }
 .prod { display: flex; flex-direction: column; gap: 3px; }
 .prod .top { display: flex; gap: 8px; align-items: baseline; font-size: 14px; min-width: 0; }
 .role { display: flex; align-items: center; gap: 10px; font-size: 14px; min-width: 0; }
-.role .av { width: 32px; height: 28px; font-size: 10px; letter-spacing: 0; border-radius: 8px; display: grid; place-items: center;
+.role .av { width: 40px; height: 28px; font-size: 13px; letter-spacing: 0; border-radius: 8px; display: grid; place-items: center;
   font-weight: 700; color: #fff; flex: none; background: var(--accent); }
 .role .tx { display: flex; flex-direction: column; white-space: normal; overflow: hidden; }
 .role .av.role-pool { background: var(--run2); }
@@ -332,14 +341,14 @@ a.ref:hover { text-decoration: underline; }
 .role .av.role-coo { background: #7a4f9a; }
 .role .av.role-cmo { background: #b4552d; }
 .role .av.role-pm { background: #6b7b2c; }
-.st { font-size: 12px; font-weight: 700; display: flex; align-items: center; gap: 5px; white-space: nowrap; }
+.st { font-size: 13px; font-weight: 700; display: flex; align-items: center; gap: 5px; white-space: nowrap; }
 .st::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
 .st.busy::before { background: var(--ok); }
 .st.wait::before { background: var(--wait); }
-.go { border: 1px solid var(--line); background: none; border-radius: 6px; font-size: 12px; padding: 2px 10px;
+.go { border: 1px solid var(--line); background: none; border-radius: 6px; font-size: 13px; padding: 2px 10px;
   white-space: nowrap; color: var(--accent); }
 .go:disabled { opacity: .55; cursor: default; }
-.sync { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--muted);
+.sync { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--muted);
   border: 1px solid var(--line); border-radius: 999px; padding: 2px 10px; background: var(--bubble);
   margin-inline-start: auto; min-width: 0; max-width: 100%; }
 #dash-pill-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
@@ -353,44 +362,47 @@ a.ref:hover { text-decoration: underline; }
 .dash-list { list-style: none; margin: 0; padding: 0; }
 .dash-label { font-weight: 600; flex: none; }
 /* approvals carousel (ops#176), mockup look: one card at a time, N of M. */
-.appr-head { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); }
+.appr-head { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--muted); }
 .appr-nav { display: flex; gap: 4px; margin-inline-start: auto; }
-.appr-nav .go { padding: 0 8px; font-size: 14px; direction: ltr; unicode-bidi: isolate; }  /* no bidi mirroring: prev points right, next left (QA ops#220) */
+.appr-nav .go { min-width: 44px; min-height: 44px; padding: 0 8px; font-size: 18px; direction: ltr; unicode-bidi: isolate; }  /* no bidi mirroring: prev points right, next left (QA ops#220) */
 .appr-body { display: flex; flex-direction: column; gap: 4px; border-inline-start: 3px solid var(--accent);
   padding-inline-start: 10px; }
 .appr-body .q, .appr-body .why { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden; }
-.appr-body .q { font-size: 15px; font-weight: 700; overflow-wrap: anywhere; unicode-bidi: plaintext; }
-.appr-body .why { font-size: 13px; color: var(--muted); overflow-wrap: anywhere; unicode-bidi: plaintext; }
-.appr-meta { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; font-size: 12px; }
-.appr-note { font: inherit; font-size: 13px; padding: 4px 8px; border: 1px solid var(--line); border-radius: 6px;
+.appr-body .q.open, .appr-body .why.open { display: block; -webkit-line-clamp: none; overflow: visible; }
+.appr-body .q { font-size: 16px; font-weight: 700; overflow-wrap: anywhere; unicode-bidi: plaintext; }
+.appr-body .why { font-size: 14px; color: var(--muted); overflow-wrap: anywhere; unicode-bidi: plaintext; }
+.appr-meta { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; font-size: 13px; }
+.appr-note { font: inherit; font-size: 15px; padding: 4px 8px; border: 1px solid var(--line); border-radius: 6px;
   background: var(--panel); color: var(--text); width: 100%; }
-.appr-btns { display: flex; gap: 6px; flex-wrap: wrap; }
-.appr-btns button { border-radius: 6px; font-size: 13px; font-weight: 700; padding: 4px 14px; border: 1px solid var(--line);
-  background: none; }
+/* ops#326: a decision gets thumb-sized buttons, כן and לא at the two ends. */
+.appr-btns { display: flex; gap: 12px; }
+.appr-btns button { flex: 1 1 0; min-height: 48px; border-radius: 8px; font-size: 16px; font-weight: 700;
+  padding: 4px 14px; border: 1px solid var(--line); background: none; }
 .appr-btns .yes { background: var(--ok); border-color: var(--ok); color: #fff; }
 .appr-btns .no { color: var(--error); border-color: var(--error); }
 .appr-btns .later { color: var(--muted); }
-.appr-undo { display: flex; align-items: center; gap: 10px; font-size: 13px; min-width: 0; }
+.appr-undo { display: flex; align-items: center; gap: 10px; font-size: 15px; min-width: 0; }
+.appr-undo .go { min-height: 44px; min-width: 64px; font-size: 15px; }
 .appr-undo .tx { font-weight: 600; }
-#dash-approvals h3 .cnt { flex: none; min-width: 1.1rem; height: 1.1rem; margin-inline-start: auto;
+#dash-approvals h3 .cnt { flex: none; min-width: 1.5rem; height: 1.5rem; margin-inline-start: auto;
   padding: 0 .3rem; border-radius: 999px; background: var(--accent); color: var(--accent-text);
-  font-size: 10px; font-weight: 700; line-height: 1.1rem; text-align: center; }
+  font-size: 13px; font-weight: 700; line-height: 1.5rem; text-align: center; }
 /* tokens: today / this week, one bar per role (blue) and per pool run (orange), plan bars */
 .tokhead { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; flex-direction: row !important; }
 .tseg { margin-inline-start: auto; display: inline-flex; border: 1px solid var(--line); border-radius: 999px; padding: 1px; }
-.tseg button { border: 0; background: none; border-radius: 999px; padding: 0 10px; font-size: 12px; color: var(--muted); }
+.tseg button { border: 0; background: none; border-radius: 999px; padding: 0 10px; font-size: 13px; color: var(--muted); }
 .tseg button[aria-pressed="true"] { background: var(--text); color: var(--panel); }
 .tbars { display: flex; flex-direction: column; gap: 6px; }
 .tb { display: grid; grid-template-columns: minmax(0, 112px) 1fr 52px; gap: 8px; align-items: center; font-size: 13px; }
 .tb .lb { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; unicode-bidi: plaintext; }
-.tb .v { font-family: ui-monospace, Consolas, monospace; font-size: 12px; text-align: left; direction: ltr;
+.tb .v { font-family: ui-monospace, Consolas, monospace; font-size: 13px; text-align: left; direction: ltr;
   font-variant-numeric: tabular-nums; }
 .tb .track { height: 10px; background: var(--accent-soft); border-radius: 3px; overflow: hidden; }
 .tb .track i { display: block; height: 100%; background: var(--accent); border-radius: 3px; }
 .tb.pool .track i { background: var(--run2); }
 .plan { display: flex; flex-direction: column; gap: 6px; border-top: 1px solid var(--line); padding-top: 8px; }
 .plan .pl { display: flex; justify-content: space-between; gap: 8px; font-size: 13px; flex-wrap: wrap; }
-.plan .pl span:last-child { color: var(--muted); font-size: 12px; }
+.plan .pl span:last-child { color: var(--muted); font-size: 13px; }
 .warnline { color: var(--wait); }
 /* today's timeline: three lanes, hour axis, red "now" line, event list under it */
 .tl { overflow-x: auto; padding: 16px 18px 4px; }
@@ -419,7 +431,7 @@ a.ref:hover { text-decoration: underline; }
 .evlist { display: flex; flex-direction: column; gap: 4px; margin: 0; padding: 0; list-style: none; font-size: 13px; }
 .evlist.all, .tbars.all { max-height: 320px; overflow-y: auto; }
 .evlist li { display: flex; gap: 8px; align-items: center; min-width: 0; }
-.evlist time { font-family: ui-monospace, Consolas, monospace; font-size: 12px; color: var(--muted); direction: ltr; flex: none; }
+.evlist time { font-family: ui-monospace, Consolas, monospace; font-size: 13px; color: var(--muted); direction: ltr; flex: none; }
 .mk { width: 10px; height: 10px; flex: none; border-radius: 2px; background: var(--accent); }
 .mk.mg { border-radius: 50%; background: var(--ok); }
 .mk.dc { background: var(--founder); transform: rotate(45deg); }
@@ -433,12 +445,12 @@ a.ref:hover { text-decoration: underline; }
 .g-row { display: grid; gap: 4px; }
 .g-head { display: flex; justify-content: space-between; gap: 8px; align-items: baseline; font-size: 13.5px; }
 .g-name { font-weight: 600; flex: 1; min-width: 0; unicode-bidi: plaintext; }
-.g-state { font-size: 11px; font-weight: 600; border-radius: 6px; padding: 1px 7px; white-space: nowrap;
+.g-state { font-size: 13px; font-weight: 600; border-radius: 6px; padding: 1px 7px; white-space: nowrap;
   background: var(--code); color: var(--muted); }
 .g-state.closed { background: color-mix(in srgb, var(--ok) 18%, transparent); color: var(--ok); }
 .g-state.in_work { background: var(--accent-soft); color: var(--accent); }
 .g-state.waiting_founder { background: color-mix(in srgb, var(--wait) 20%, transparent); color: var(--wait); }
-.g-pct { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.g-pct { font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .g-track { position: relative; height: 14px; border-radius: 999px; background: var(--panel);
   border: 1px solid var(--line); direction: ltr; }
 .g-bar { position: absolute; top: 0; bottom: 0; border-radius: 999px; overflow: hidden;
@@ -448,7 +460,7 @@ a.ref:hover { text-decoration: underline; }
 .g-bar.in_work { border-color: var(--accent); } .g-bar.in_work i { background: var(--accent); }
 .g-bar.waiting_founder { border-color: var(--wait); } .g-bar.waiting_founder i { background: var(--wait); }
 .g-today { position: absolute; top: -4px; bottom: -4px; border-left: 2px dashed var(--accent); }
-.g-dates, .g-notset { font-size: 12px; color: var(--muted); }
+.g-dates, .g-notset { font-size: 13px; color: var(--muted); }
 .g-row .g-dates { direction: ltr; }  /* the axis runs left to right: the dates read the same way */
 /* ops#275: on a wide screen (>= 1200 px, set by setView through WIDE) the
    board and the chat sit side by side and the switch is not needed; under
@@ -460,6 +472,15 @@ a.ref:hover { text-decoration: underline; }
   #dash { padding: .5rem; }
   .sync { margin-inline-start: 0; flex-basis: 100%; }
   .kpi .kv { font-size: 22px; }
+  /* ops#326: on a phone the timeline is its event list only (no 640px
+     chart to scroll sideways), and a row wraps to two lines with its
+     Hebrew text first, the ref after it, small and muted. */
+  #dash-timeline .tl { display: none; }
+  .rows li { flex-wrap: wrap; row-gap: 2px; }
+  .rows li .tx { order: -1; flex: 1 1 100%; white-space: normal; display: -webkit-box;
+    -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+  .rows li .tx.open { display: block; -webkit-line-clamp: none; }
+  .rows li .ref { color: var(--muted); }
 }
 </style>
 </head>
@@ -543,16 +564,19 @@ a.ref:hover { text-decoration: underline; }
     </div>
     <div id="dash-kpis" class="kpis" aria-label="במבט אחד"></div>
     <div class="cards">
+      <section class="dash-card card wide" id="dash-approvals"><h3></h3><div class="dash-body"><div class="muted">טוען…</div></div></section>
+      <section class="dash-card card" id="dash-waiting"><h3></h3><div class="dash-body"><div class="muted">טוען…</div></div></section>
+      <section class="dash-card card" id="dash-live"><h3></h3><div class="dash-body"><div class="muted">טוען…</div></div></section>
+      <section class="dash-card card" id="dash-stuck"><h3></h3><div class="dash-body"><div class="muted">טוען…</div></div></section>
+    </div>
+    <button type="button" id="dash-more-btn" class="more dash-more" aria-expanded="false" aria-controls="dash-more">עוד פרטים</button>
+    <div class="cards" id="dash-more" hidden>
       <section class="dash-card card wide" id="dash-timeline"><h3></h3><div class="dash-body"><div class="muted">טוען…</div></div></section>
       <section class="dash-card card wide" id="dash-gantt"><h3></h3><div class="dash-body"><div class="muted">טוען…</div></div></section>
-      <section class="dash-card card" id="dash-approvals"><h3></h3><div class="dash-body"><div class="muted">טוען…</div></div></section>
-      <section class="dash-card card" id="dash-live"><h3></h3><div class="dash-body"><div class="muted">טוען…</div></div></section>
       <section class="dash-card card" id="dash-roles"><h3></h3><div class="dash-body"><div class="muted">טוען…</div></div></section>
       <section class="dash-card card" id="dash-tokens"><h3></h3><div class="dash-body"><div class="muted">טוען…</div></div></section>
       <section class="dash-card card" id="dash-queue"><h3></h3><div class="dash-body"><div class="muted">טוען…</div></div></section>
       <section class="dash-card card" id="dash-prs"><h3></h3><div class="dash-body"><div class="muted">טוען…</div></div></section>
-      <section class="dash-card card" id="dash-waiting"><h3></h3><div class="dash-body"><div class="muted">טוען…</div></div></section>
-      <section class="dash-card card" id="dash-stuck"><h3></h3><div class="dash-body"><div class="muted">טוען…</div></div></section>
       <section class="dash-card card" id="dash-week"><h3></h3><div class="dash-body"><div class="muted">טוען…</div></div></section>
       <section class="dash-card card" id="dash-products"><h3></h3><div class="dash-body"><div class="muted">טוען…</div></div></section>
       <section class="dash-card card" id="dash-progress"><h3></h3><div class="dash-body"><div class="muted">טוען…</div></div></section>
@@ -1442,6 +1466,7 @@ const dashOpen = new Set();   // lists whose "הצג הכל" is open: survives e
 const approvalsNotes = {};    // card id -> the note typed so far: a sync re-render keeps it
 const TOKVIEW = "agora-board-tokens";
 const VIEW = "agora-chat-view";
+const MORE = "agora-board-more";   // "1": the nine cards under "עוד פרטים" are open
 let tokView = "24h";          // the tokens card's toggle: "24h" (היום) or "7d" (השבוע)
 
 function minsAgo(now, thenMs) { return Math.max(0, Math.round((now - thenMs) / 60000)); }
@@ -1459,7 +1484,8 @@ function agoText(mins) {
 // timestamp sitting next to a silent problem. `now` (ms) is a parameter so
 // this stays pure and testable; live callers omit it and get Date.now().
 function pillText(d, now) {
-  if (d.last_error) return "שגיאה: " + d.last_error;
+  // ops#326: the server's own (English) error is the pill's title, not its text.
+  if (d.last_error) return "הסנכרון נכשל · " + (d.doc ? "מוצג הנתון האחרון" : "הנתון לא זמין עכשיו");
   if (now === undefined) now = Date.now();
   if (d.last_sync == null) return "עוד לא סונכרן · מקור: GitHub";
   return (d.stale ? "ישן: " : "מתעדכן אוטומטית · ") + "סנכרון אחרון " + agoText(minsAgo(now, d.last_sync * 1000))
@@ -1467,13 +1493,7 @@ function pillText(d, now) {
 }
 
 function renderPill(d, now) {
-  const text = $("dash-pill-text");
-  if (d.last_error) {
-    // The server's error is English: its own <bdi>, so RTL cannot reorder it.
-    text.replaceChildren("שגיאה: ", el("bdi", null, d.last_error));
-  } else {
-    text.textContent = pillText(d, now);
-  }
+  $("dash-pill-text").textContent = pillText(d, now);
   $("dash-pill").classList.toggle("stale", !!d.stale && !d.last_error);
   $("dash-pill").classList.toggle("bad", !!d.last_error);
   $("dash-pill").title = d.last_error
@@ -1511,6 +1531,28 @@ function cutList(box, items, key, limit) {
   return wrap;
 }
 
+// ops#326: a text cut to one line (or three) opens in full on one tap, or
+// Enter, and closes on the next; aria-expanded says which. A phone has no
+// hover, so the title tooltip is never the only way to the whole text.
+function tapToOpen(node) {
+  node.classList.add("clamp");
+  node.tabIndex = 0;
+  node.setAttribute("role", "button");
+  node.setAttribute("aria-expanded", "false");
+  const flip = () => node.setAttribute("aria-expanded", String(node.classList.toggle("open")));
+  node.onclick = flip;
+  node.onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); flip(); } };
+  return node;
+}
+
+// ops#326: a card whose source is missing says so in plain Hebrew; the
+// developer's reason (a file name, a ticket) goes in its title.
+function noData(why) {
+  const n = el("div", "muted", "הנתון לא זמין עכשיו");
+  n.title = why;
+  return n;
+}
+
 function link(cls, text, url) {
   const a = el(url ? "a" : "span", cls, text);
   if (url) { a.href = url; a.target = "_blank"; a.rel = "noopener"; }
@@ -1518,13 +1560,14 @@ function link(cls, text, url) {
 }
 
 // One row: {chip, chipText, label, url, ref, detail, title, meta}. The
-// detail is one line; its full text is the row's hover title.
+// detail is one line; its full text is the row's hover title and one tap
+// away (tapToOpen).
 function rowItem(row) {
   const li = el("li");
   if (row.chip) li.append(el("span", "chip " + row.chip, row.chipText || row.chip.toUpperCase()));
   if (row.label) li.append(link("dash-label" + (row.ref !== false ? " ref" : ""), row.label, row.url));
   if (row.detail) {
-    const d = el("span", "dash-detail tx", row.detail);
+    const d = tapToOpen(el("span", "dash-detail tx", row.detail));
     d.title = row.title || row.detail;
     li.append(d);
   }
@@ -1557,17 +1600,18 @@ function renderKpis(doc, now) {
   if (now === undefined) now = Date.now();
   doc = doc || {};
   const wrap = el("div", "kpis-in");
-  const tile = (label, value, tone, hint) => {
-    const t = el("div", "kpi " + tone);
+  const tile = (label, value, tone, hint, href) => {
+    const t = el(href ? "a" : "div", "kpi " + tone);
+    if (href) t.href = href;
     t.append(el("span", "kv", value), el("span", "kl", label));
     t.title = hint;
     wrap.append(t);
   };
   const moves = Array.isArray(doc.next_moves) ? doc.next_moves : null;
   tile("מחכה לך", moves ? String(moves.length) : "—", moves ? (moves.length ? "warn" : "ok") : "none",
-       moves ? moves.length + " כרטיסי אישור פתוחים" : "אין נתון");
+       moves ? moves.length + " כרטיסי אישור פתוחים" : "אין נתון", "#dash-approvals");
   const live = Array.isArray(doc.live) ? doc.live : [];
-  tile("ה-POOL", live.length ? (live.length > 1 ? live.length + " רצות" : "רץ") : "פנוי",
+  tile("הרובוטים", live.length ? (live.length > 1 ? live.length + " רצות" : "רץ") : "פנוי",
        live.length ? "ok" : "none", live.length ? live.map((r) => r.ref).join(", ") : "אין ריצה עכשיו");
   const t = doc.timeline;
   const merges = t && Array.isArray(t.merges)
@@ -1604,7 +1648,7 @@ function renderTimeline(t, now) {
   if (now === undefined) now = Date.now();
   const wrap = el("div", "tlwrap");
   if (!t || typeof t !== "object") {
-    wrap.append(el("div", "muted", "אין נתוני ציר זמן במסמך: צריך dashboard.py עדכני (ops#220)"));
+    wrap.append(noData("אין נתוני ציר זמן במסמך: צריך dashboard.py עדכני (ops#220)"));
     return wrap;
   }
   const {from, to} = timelineWindow(now);
@@ -1711,7 +1755,7 @@ function renderTimeline(t, now) {
     const li = el("li");
     li.append(el("time", null, hhmm(x.ms)), el("span", "mk " + x.mk));
     if (x.ref) li.append(link("ref", x.ref, x.url));
-    const tx = el("span", "tx", x.text);
+    const tx = tapToOpen(el("span", "tx", x.text));
     tx.title = x.text;
     li.append(tx);
     return li;
@@ -1741,9 +1785,10 @@ function renderLive(rows) {
     if (title) dd.title = title;
     dl.append(dd);
   };
-  add("issue", link("big ref", r.ref, r.url));
-  const round = joinDetail(r.round != null ? String(r.round) : null, r.phase);
-  add("סבב", round || "—", null, joinDetail(round, r.prev_end ? "הסבב הקודם הסתיים " + r.prev_end : null));
+  add("משימה", link("big ref", r.ref, r.url));
+  // The phase is the run log's own English ("CODER round 1 ..."): in the title only (ops#326).
+  const round = r.round != null ? String(r.round) : null;
+  add("סבב", round || "—", null, joinDetail(round, r.phase, r.prev_end ? "הסבב הקודם הסתיים " + r.prev_end : null));
   const idle = r.idle_min != null ? Math.max(0, r.idle_min) : null;
   add("דקות", joinDetail(r.claimed_min != null ? r.claimed_min + " מאז שהתחיל" : null,
                          idle != null ? idle + " מאז הפעולה האחרונה" : null) || "—",
@@ -1753,7 +1798,8 @@ function renderLive(rows) {
   if (rows.length > 1) {
     wrap.append(el("div", "muted", "עוד " + (rows.length - 1) + " ריצות:"));
     wrap.append(renderRows(rows.slice(1).map((x) => ({label: x.ref, url: x.url,
-      detail: joinDetail(x.round != null ? "סבב " + x.round : null, x.last_action)})), "live-more"));
+      detail: x.round != null ? "סבב " + x.round : "—",
+      title: joinDetail(x.round != null ? "סבב " + x.round : null, x.last_action)})), "live-more"));
   }
   return wrap;
 }
@@ -1766,7 +1812,13 @@ function stuckRow(r) {
   const ref = (r.repo || "") + (has ? "#" + r.number : "");
   const c = CHECK_HE[r.check] || [r.check, "none"];
   // The chip already says which check it is: drop the text's own "label: " prefix.
-  const text = String(r.text || "").replace(/^agent:needs-human:\s*/, "");
+  let text = String(r.text || "").replace(/^agent:needs-human:\s*/, "");
+  // An IDLE row is the producer's English about labels ("2 issue(s) at
+  // agent:go, nothing at agent:working"): said in Hebrew, the original in the title (ops#326).
+  if (r.check === "IDLE") {
+    const n = /^(\d+) issue/.exec(text);
+    text = (n ? n[1] + " משימות מוכנות, " : "") + "אף משימה לא בעבודה";
+  }
   return {label: ref, detail: text, title: r.text || "",
           url: r.repo && has ? "https://github.com/determlab/" + r.repo + "/issues/" + r.number : null,
           meta: c[0], metaCls: c[1]};
@@ -1795,7 +1847,7 @@ function renderRoles(rows) {
     const av = el("span", "av role-" + name.toLowerCase().replace(/[^a-z]/g, ""), name.slice(0, 4));
     av.setAttribute("aria-hidden", "true");
     const tx = el("div", "tx");
-    const line = el("div", "one", name + " · " + (r.doing || ""));
+    const line = tapToOpen(el("div", "one", name + " · " + (r.doing || "")));
     line.title = line.textContent;
     tx.append(line);
     if (r.ref) tx.append(link("ref", r.ref, r.url));
@@ -1816,20 +1868,21 @@ function renderQueue(rows) {
   })), "dash-queue", "התור ריק");
 }
 
-// open PRs: the CTO's last verdict type as a chip (type B comes to the
-// founder); "לא נבדק" until the CTO wrote one. `null` = GitHub unreadable.
+// open PRs: the CTO's last verdict type as a chip, in words (ops#326): type
+// B "מחכה לך", type A "מחכה למיזוג"; "לא נבדק" until the CTO wrote one.
+// `null` = GitHub unreadable.
+const PR_TYPE_HE = {A: "מחכה למיזוג", B: "מחכה לך"};
 function renderPrs(list, total) {
   const wrap = el("div");
-  if (list === undefined) { wrap.append(el("div", "muted", "אין נתון במסמך: צריך dashboard.py עדכני (ops#220)")); return wrap; }
+  if (list === undefined) { wrap.append(noData("אין נתון במסמך: צריך dashboard.py עדכני (ops#220)")); return wrap; }
   if (list === null) { wrap.append(el("div", "muted", "GitHub לא נקרא בסנכרון האחרון")); return wrap; }
   wrap.append(renderRows(list.map((p) => ({
-    chip: p.type ? p.type.toLowerCase() : "none", chipText: p.type ? "type " + p.type : "לא נבדק",
+    chip: p.type ? p.type.toLowerCase() : "none", chipText: p.type ? PR_TYPE_HE[p.type] || p.type : "לא נבדק",
     label: p.ref, url: p.url, detail: (p.draft ? "טיוטה · " : "") + (p.title || ""),
     meta: p.verdict === "CHANGES" ? "שינויים" : null, metaCls: "warn",
   })), "dash-prs", "אין PRs פתוחים"));
   if (typeof total === "number" && total > list.length)
     wrap.append(el("div", "muted", "מוצגים " + list.length + " מתוך " + total + " (" + list.length + "+)"));
-  wrap.append(el("div", "muted", "type B מגיע אליך. type A: ממתין למיזוג."));
   return wrap;
 }
 
@@ -1843,7 +1896,7 @@ function renderWeek(w) {
   wrap.append(top);
   const bits = [];
   if (w.percent_of_company != null) bits.push(w.percent_of_company + "% מכל העבודה");
-  if (w.median_go_to_close_h != null) bits.push("חציון agent:go עד סגירה: " + w.median_go_to_close_h + "h");
+  if (w.median_go_to_close_h != null) bits.push("חציון מהתחלה עד סגירה: " + w.median_go_to_close_h + " שע׳");
   if (bits.length) wrap.append(el("div", "muted", bits.join(" · ")));
   return wrap;
 }
@@ -2053,8 +2106,8 @@ function ganttDm(iso, asOf) {
 }
 function renderGantt(g, asOf) {
   const wrap = el("div");
-  if (!Array.isArray(g)) { wrap.append(el("div", "muted", "אין נתון במסמך: צריך dashboard.py עדכני (ops#250)")); return wrap; }
-  if (!g.length) { wrap.append(el("div", "muted", "היעדים עוד לא הוגדרו ב-roadmap.md.")); return wrap; }
+  if (!Array.isArray(g)) { wrap.append(noData("אין נתון במסמך: צריך dashboard.py עדכני (ops#250)")); return wrap; }
+  if (!g.length) { const n = el("div", "muted", "היעדים עוד לא הוגדרו."); n.title = "roadmap.md"; wrap.append(n); return wrap; }
   const day = (s) => Date.parse(s + "T00:00:00Z");
   const isDated = (x) => !!x.start && !!x.end && x.start !== "not set" && x.end !== "not set"
     && !isNaN(day(x.start)) && !isNaN(day(x.end));
@@ -2108,13 +2161,41 @@ function mountCard(id, node) {
 // item is never dropped — prev/next only move the index, never filter the
 // list. Yes/No/Later open a 10s Undo window (the founder's answer on #176)
 // before POST /api/v1/dashboard/approve actually sends the decision; Undo
-// cancels the timer and nothing is sent.
+// cancels the timer and nothing is sent. The window counts down second by
+// second, and leaving the page inside it sends the answer at once (ops#326).
 let approvalsIdx = 0;
-let approvalsPending = null;  // {id, answer, note, q_he, timer} during the Undo window
+let approvalsPending = null;  // {id, answer, note, q_he, until, timer, tick} during the Undo window
 
 function clearApprovalsPending() {
-  if (approvalsPending) clearTimeout(approvalsPending.timer);
+  if (approvalsPending) { clearTimeout(approvalsPending.timer); clearTimeout(approvalsPending.tick); }
   approvalsPending = null;
+}
+
+function undoLeft(p, now) { return Math.max(0, Math.ceil((p.until - now) / 1000)); }
+
+// One tick per whole second: the undo bar's count goes 10, 9, ... 0 in
+// place, without a re-render (the Undo button keeps its focus).
+function tickApprovals() {
+  const p = approvalsPending;
+  if (!p) return;
+  const now = Date.now();
+  const c = $("dash-approvals").querySelector(".appr-count");
+  if (c) c.textContent = "נשלח בעוד " + undoLeft(p, now) + " שניות";
+  if (p.until > now) p.tick = setTimeout(tickApprovals, (p.until - now) % 1000 || 1000);
+}
+
+// Closing the tab (or leaving the app) inside the Undo window: the answer
+// goes now instead of being lost with the page's timer. A keepalive fetch,
+// not navigator.sendBeacon: the API takes its key in the Authorization
+// header, which sendBeacon cannot send.
+function flushApprovals() {
+  const p = approvalsPending;
+  if (!p || !S.creds) return;
+  clearApprovalsPending();
+  delete approvalsNotes[p.id];
+  fetch("/api/v1/dashboard/approve", {method: "POST", keepalive: true, credentials: "omit", cache: "no-store",
+    body: new URLSearchParams({id: p.id, answer: p.answer, note: p.note || ""}),
+    headers: {Authorization: basic(S.creds.email, S.creds.key)}}).then(loadDashboard, () => {});
 }
 
 async function commitApproval(id, answer, note) {
@@ -2137,14 +2218,14 @@ function renderApprovals(moves) {
   if (approvalsPending) {
     const p = approvalsPending;
     const bar = el("div", "appr-undo");
-    const what = el("span", "tx", (ANSWER_HE[p.answer] || p.answer) + ": " + (p.q_he || p.id));
+    const what = tapToOpen(el("span", "tx", (ANSWER_HE[p.answer] || p.answer) + ": " + (p.q_he || p.id)));
     what.title = what.textContent;
     bar.append(what);
     const undo = el("button", "go appr-undo-btn", "בטל");
     undo.type = "button";
     undo.onclick = () => { clearApprovalsPending(); mountCard("dash-approvals", renderApprovals(moves)); };
     bar.append(undo);
-    wrap.append(bar, el("div", "muted", "נשלח בעוד 10 שניות"));
+    wrap.append(bar, el("div", "muted appr-count", "נשלח בעוד " + undoLeft(p, Date.now()) + " שניות"));
     return wrap;
   }
   if (!moves.length) {
@@ -2176,10 +2257,10 @@ function renderApprovals(moves) {
   }
   wrap.append(head);
   const body = el("div", "appr-body");
-  const q = el("div", "q", item.q_he || item.id || "");
-  q.title = q.textContent;   // three lines at most; the whole text on hover
+  const q = tapToOpen(el("div", "q", item.q_he || item.id || ""));
+  q.title = q.textContent;   // three lines at most; the whole text on one tap (ops#326) or hover
   body.append(q);
-  if (item.why_he) { const why = el("div", "why", item.why_he); why.title = item.why_he; body.append(why); }
+  if (item.why_he) { const why = tapToOpen(el("div", "why", item.why_he)); why.title = item.why_he; body.append(why); }
   const meta = el("div", "appr-meta");
   if (item.cost_he) meta.append(el("span", "chip a", "עלות: " + item.cost_he));
   if (item.link) {
@@ -2205,7 +2286,8 @@ function renderApprovals(moves) {
   // re-rendering into the pending state above; only the timer firing (Undo
   // not clicked) actually calls the server.
   const startPending = (answer) => {
-    const pending = {id: item.id, answer, note: note.value.trim(), q_he: item.q_he};
+    const pending = {id: item.id, answer, note: note.value.trim(), q_he: item.q_he, until: Date.now() + 10000};
+    pending.tick = setTimeout(tickApprovals, 1000);
     pending.timer = setTimeout(() => {
       approvalsPending = null;
       delete approvalsNotes[pending.id];
@@ -2217,7 +2299,7 @@ function renderApprovals(moves) {
   yes.onclick = () => startPending("yes");
   no.onclick = () => startPending("no");
   later.onclick = () => startPending("later");
-  btns.append(yes, no, later);
+  btns.append(yes, later, no);   // כן and לא at the two ends of the row (ops#326)
   wrap.append(btns);
   return wrap;
 }
@@ -3345,7 +3427,7 @@ const DASH_TITLES = {
   // "מחכה לאישור שלך" is the mockup's own title for its approvals card
   // (DASH.approvals); this app's `stuck`-derived NEEDSHUMAN card is a
   // different thing (not in the mockup), so it keeps a title of its own.
-  "dash-live": "ה-POOL עכשיו", "dash-approvals": "מחכה לאישור שלך", "dash-waiting": "ריצות שממתינות לך",
+  "dash-live": "הרובוטים עכשיו", "dash-approvals": "מחכה לאישור שלך", "dash-waiting": "ריצות שממתינות לך",
   "dash-roles": "מי עובד על מה", "dash-queue": "התור לפי עדיפות", "dash-prs": "PRs פתוחים",
   "dash-week": "השבוע", "dash-products": "מוצרים", "dash-stuck": "תקוע",
   "dash-progress": "התמונה הגדולה", "dash-tokens": "טוקנים", "dash-timeline": "ציר הזמן של היום",
@@ -3354,6 +3436,25 @@ const DASH_TITLES = {
 for (const [id, title] of Object.entries(DASH_TITLES)) {
   $(id).querySelector("h3").textContent = title;
 }
+
+// ops#326: four cards by default (approvals, runs waiting for you, the pool
+// now, stuck); the other nine fold under one "עוד פרטים" toggle, and the
+// choice is remembered like the view.
+function setDashMore(open) {
+  $("dash-more").hidden = !open;
+  $("dash-more-btn").setAttribute("aria-expanded", String(open));
+  $("dash-more-btn").textContent = open ? "פחות פרטים" : "עוד פרטים (" + $("dash-more").children.length + ")";
+}
+$("dash-more-btn").addEventListener("click", () => {
+  const open = $("dash-more").hidden;
+  try { localStorage.setItem(MORE, open ? "1" : "0"); } catch (e) { /* private window: the toggle still works */ }
+  setDashMore(open);
+});
+let moreOpen = false;
+try { moreOpen = localStorage.getItem(MORE) === "1"; } catch (e) { /* private window: closed */ }
+setDashMore(moreOpen);
+addEventListener("pagehide", flushApprovals);
+document.addEventListener("visibilitychange", () => { if (document.visibilityState === "hidden") flushApprovals(); });
 
 // Under 1200 px chat and the board are never shown together (founder's ruling
 // on agora#100): the switch hides the channel list and chat and gives the
