@@ -2,7 +2,7 @@
 <html lang="he" dir="rtl">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
 <title>agora · צ'אט</title>
 <link rel="manifest" href="/manifest.json">
 <link rel="apple-touch-icon" href="/icon-192.png">
@@ -73,7 +73,7 @@ code, pre { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
 #keys code { background: var(--code); padding: 0 .2rem; }
 /* The frame: the app sits in a rounded card on the page background. */
 #app { display: grid; grid-template-columns: 16rem 1fr; grid-template-rows: auto 1fr;
-  height: calc(100vh - 2rem); position: relative; overflow: hidden; background: var(--panel);
+  height: calc(100vh - 2rem); height: calc(100dvh - 2rem); position: relative; overflow: hidden; background: var(--panel);
   border: 1px solid var(--line); border-radius: 14px; box-shadow: var(--shadow); }
 #side { border-inline-end: 1px solid var(--line); overflow-y: auto; background: var(--panel);
   padding: .75rem .5rem; display: flex; flex-direction: column; gap: .25rem; }
@@ -83,6 +83,8 @@ code, pre { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
   border-bottom: 1px solid var(--line); margin-bottom: .35rem; }
 #who { flex: 1; min-width: 0; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #forget { font-size: 11px; }
+#side-tools { display: flex; align-items: center; gap: .5rem; padding: 0 .35rem .35rem; }
+#side-tools:empty { display: none; }
 #streams-head { display: flex; align-items: center; justify-content: space-between;
   font-size: 11px; font-weight: 700; letter-spacing: .08em; color: var(--muted); padding: .25rem; }
 #side ul { list-style: none; margin: 0; padding: 0; }
@@ -90,7 +92,7 @@ code, pre { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
 .stream-row.open { background: var(--accent-soft); }
 .stream-name { flex: 1; min-width: 0; display: flex; align-items: center; gap: .3rem; text-align: start;
   border: 0; background: none; padding: .3rem .4rem; font-weight: 600; }
-.stream-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.stream-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: right; }
 .caret { transition: transform .15s; color: var(--muted); }
 .stream-row.folded .caret { transform: rotate(90deg); }
 .gear { opacity: 0; transition: opacity .15s; }
@@ -101,7 +103,7 @@ code, pre { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
   padding: 0 .3rem; border-radius: 999px; background: var(--accent); color: var(--accent-text);
   font-size: 10px; font-weight: 700; line-height: 1.1rem; text-align: center; }
 .topic-row .badge { margin-inline-start: 0; margin-inline-end: .3rem; }
-.topic { display: block; width: 100%; text-align: start; border: 0; background: none;
+.topic { display: block; width: 100%; text-align: right; border: 0; background: none;
   padding-block: .2rem; padding-inline: 1.4rem .5rem; border-radius: 6px; color: var(--muted);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .topic:hover { color: var(--text); }
@@ -138,6 +140,10 @@ button.archived-name:hover { color: var(--text); }
 #messages { flex: 1; min-height: 0; overflow-y: auto; padding: .75rem 1rem; background: var(--bg); }
 .day { display: flex; align-items: center; gap: .75rem; font-size: 12px; color: var(--muted); margin: 1rem 0 .5rem; }
 .day::before, .day::after { content: ""; flex: 1; border-top: 1px solid var(--line); }
+/* Where the unread messages start when a topic opens (ops#325). */
+.new-line { display: flex; align-items: center; gap: .75rem; font-size: 12px; font-weight: 700;
+  color: var(--accent); margin: .75rem 0 .25rem; }
+.new-line::before, .new-line::after { content: ""; flex: 1; border-top: 1px solid var(--accent); }
 /* Messages are laid out physically: others on the left, your own group
    mirrored to the right (avatar, name and the tail corner with it). */
 .msg { direction: ltr; display: flex; align-items: flex-start; gap: .5rem; margin: .15rem 0; }
@@ -158,6 +164,11 @@ button.archived-name:hover { color: var(--text); }
 .msg.mine .bubble { background: var(--mine); border-color: transparent; }
 .msg.mention .bubble { background: var(--mention); border-color: var(--mention-line); }
 .body { white-space: pre-wrap; overflow-wrap: anywhere; }
+/* A long message folds to 6 lines, its code blocks to 3, until "הצג עוד". */
+.body.folded { max-height: calc(6 * 1.45em); overflow: hidden; }
+.body.folded pre { max-height: calc(3 * 1.45em + .8rem); overflow: hidden; }
+.more-btn { display: block; border: 0; background: none; padding: .15rem 0 0; font-size: 12px;
+  font-weight: 600; color: var(--accent); }
 .body pre { background: var(--code); border-radius: 6px; padding: .4rem .5rem; margin: .25rem 0;
   white-space: pre-wrap; text-align: left; }
 .chip { background: var(--code); border: 1px solid var(--line); border-radius: 4px; padding: 0 .25rem; font-size: 12.5px; }
@@ -170,9 +181,10 @@ button.archived-name:hover { color: var(--text); }
 .msg:hover .quote-btn, .quote-btn:focus { opacity: 1; }
 .quote.jumpable { cursor: pointer; }
 .msg.jump-flash .bubble { outline: 2px solid var(--accent); outline-offset: 2px; }
-/* Reactions: always visible (not hover-only), so a tap works on the phone
-   the founder actually reads this on, with no hover state to discover. */
-.react-btn { flex: none; font-size: 14px; }
+/* Reactions: the chips are always visible; the "+" that adds one shows on
+   hover, or after a tap on the bubble (ops#325: not on every message). */
+.react-btn { flex: none; font-size: 14px; opacity: 0; transition: opacity .15s; }
+.msg:hover .react-btn, .msg.tapped .react-btn, .react-btn:focus { opacity: 1; }
 .reactions { display: flex; flex-wrap: wrap; gap: .25rem; margin: .2rem .25rem 0; }
 .msg.mine .reactions { justify-content: flex-end; }
 .reaction-chip { display: inline-flex; align-items: center; gap: .25rem; border: 1px solid var(--line);
@@ -188,7 +200,8 @@ button.archived-name:hover { color: var(--text); }
 #new-pill { position: absolute; left: 50%; transform: translateX(-50%); bottom: 10rem;
   border: 0; border-radius: 999px; padding: .3rem .9rem; background: var(--accent);
   color: var(--accent-text); box-shadow: 0 2px 6px rgba(0, 0, 0, .25); }
-#write { border-top: 1px solid var(--line); background: var(--panel); padding: .5rem 1rem; }
+#write { border-top: 1px solid var(--line); background: var(--panel); padding: .5rem 1rem;
+  padding-bottom: calc(.5rem + env(safe-area-inset-bottom, 0px)); }
 #compose-row { display: flex; gap: .5rem; align-items: flex-end; }
 #compose-wrap { flex: 1; display: flex; position: relative; }
 #compose { flex: 1; min-height: 2.6rem; max-height: 40vh; resize: none; border-radius: 10px; }
@@ -230,13 +243,25 @@ dialog .buttons { display: flex; justify-content: flex-end; gap: .5rem; margin-t
   max-width: min(36rem, 90vw); padding: .5rem 1rem; border-radius: 10px; background: var(--text);
   color: var(--panel); box-shadow: 0 4px 14px rgba(0, 0, 0, .25); }
 #toast.bad { background: var(--error); color: #ffffff; }
+.toast-act { border: 0; background: none; color: inherit; font-weight: 700; text-decoration: underline;
+  margin-inline-start: .5rem; padding: 0 .25rem; }
 @media (max-width: 700px) {
   body { padding: 0; }
-  #app { grid-template-columns: 1fr; height: 100vh; border: 0; border-radius: 0; }
-  #side { position: absolute; top: 0; bottom: 0; right: 0; width: 16rem; z-index: 5; transform: translateX(100%);
+  #app { grid-template-columns: 1fr; height: 100vh; height: 100dvh; border: 0; border-radius: 0;
+    padding-top: env(safe-area-inset-top, 0px); }
+  #side { position: absolute; top: env(safe-area-inset-top, 0px); bottom: 0; right: 0; width: 16rem; z-index: 5; transform: translateX(100%);
     transition: transform .15s; box-shadow: 0 0 12px rgba(0, 0, 0, .3); }
   #app.side-open #side { transform: none; }
   #menu-btn { display: inline-block; }
+  /* ops#325: one top bar row — menu, the room name, the live dot (its text
+     is the dot's title); members, bell and theme sit in the side menu
+     (placeTools), and the chat / board switch sits at the bar's end. */
+  #top { min-height: 3.75rem; padding: .5rem; padding-inline-end: 8rem; }
+  #live-text { display: none; }
+  #view-switch { position: absolute; z-index: 4; margin: 0; inset-inline-end: .5rem;
+    top: calc(env(safe-area-inset-top, 0px) + 1.875rem); transform: translateY(-50%); }
+  #view-switch button { padding: 3px 8px; }
+  .dhead h2 { flex: 1; min-height: 3.25rem; display: flex; align-items: center; margin-inline-end: 7.5rem; }
 }
 /* A2 (#82), revised by the founder on agora#100: #dash (the human view of
    GET /api/v1/dashboard) and chat are never shown together. #view-switch
@@ -461,6 +486,21 @@ a.ref:hover { text-decoration: underline; }
   .sync { margin-inline-start: 0; flex-basis: 100%; }
   .kpi .kv { font-size: 22px; }
 }
+/* ops#325: a phone has no hover, so nothing may wait for one: the row and
+   message actions are always shown, and "+" only on the tapped bubble. */
+@media (hover: none) {
+  .gear, .mark-read, .topic-archive, .quote-btn { opacity: 1; }
+  .msg:not(.tapped) .react-btn { display: none; }
+}
+/* ops#325: a finger needs 44px targets, and iOS zooms into any field under 16px. */
+@media (pointer: coarse) {
+  .btn, .icon, .topic, .stream-name, .new-topic, .archived-name, .reaction-chip, .react-picker button,
+  .more-btn { min-height: 44px; }
+  .icon, .react-btn, .reaction-chip { min-width: 44px; }
+  #top, #me-row, #side-tools, .stream-row, .topic-row, .line, .reactions { gap: 8px; }
+  input, select, textarea, #compose, .appr-note { font-size: 16px; }
+  #hint { display: none; }
+}
 </style>
 </head>
 <body>
@@ -496,6 +536,7 @@ a.ref:hover { text-decoration: underline; }
       <button type="button" id="pair-btn" class="icon" title="התחברות בטלפון בלי להעתיק מפתח">התחבר בטלפון</button>
       <button type="button" id="forget" class="icon" title="מוחק את ה-API key מהדפדפן הזה">שכח מפתח</button>
     </div>
+    <div id="side-tools"></div>
     <div id="streams-head"><span>ערוצים</span>
       <span><button type="button" id="archive-btn" class="icon" title="ערוצים ונושאים בארכיון" aria-expanded="false">ארכיון</button>
       <button type="button" id="new-stream-btn" class="icon" title="ערוץ חדש" aria-label="ערוץ חדש">+</button></span></div>
@@ -527,7 +568,7 @@ a.ref:hover { text-decoration: underline; }
         </div>
         <button type="button" id="send-btn" class="btn primary">שלח</button>
       </div>
-      <p id="hint" class="muted">@ פותח רשימת שמות · Enter שולח · Shift+Enter שורה חדשה</p>
+      <p id="hint" class="muted">הקלדת @ פותחת רשימת שמות · Enter שולח · Shift+Enter שורה חדשה</p>
       <p id="send-error" class="error" hidden></p>
     </div>
   </main>
@@ -626,8 +667,7 @@ a.ref:hover { text-decoration: underline; }
         <button type="button" class="icon quote-btn">ציטוט</button>
       </div>
       <div class="reactions">
-        <button type="button" class="icon react-btn" title="הוסיפו ריאקציה (לחיצה ארוכה לבחירה)"
-                aria-label="הוסיפו ריאקציה">&#128077;+</button>
+        <button type="button" class="icon react-btn" title="הוסף תגובה" aria-label="הוסף תגובה">+</button>
       </div>
     </div>
   </div>
@@ -981,6 +1021,9 @@ const S = {
   panel: null,          // the stream the members panel is about
   adding: null,         // {stream_id, text}: the "+ new topic" field being typed in
   pick: null,           // the @ picker: {items, index, start}
+  unfolded: new Set(),  // message ids opened with "הצג עוד": a re-render keeps them open
+  tapped: null,         // the message id whose bubble was tapped: it shows "+"
+  newFrom: null,        // the first unread message id when the open topic was opened
   toastTimer: 0,
 };
 
@@ -1234,13 +1277,19 @@ async function reconnect(gen) {
 
 // A toast says what the server confirmed, or why it refused: callers pass the
 // result they read back (D3), never what they asked for.
-function toast(text, bad) {
+function toast(text, bad, action) {
   const t = $("toast");
   t.textContent = text;
+  if (action) {
+    const b = el("button", "toast-act", action.label);
+    b.type = "button";
+    b.addEventListener("click", () => { t.hidden = true; action.run(); });
+    t.append(b);
+  }
   t.classList.toggle("bad", !!bad);
   t.hidden = false;
   clearTimeout(S.toastTimer);
-  S.toastTimer = setTimeout(() => { t.hidden = true; }, bad ? 7000 : 3500);
+  S.toastTimer = setTimeout(() => { t.hidden = true; }, bad || action ? 7000 : 3500);
 }
 
 function svgIcon(d, cls) {
@@ -1392,11 +1441,12 @@ function renderArchive() {
 }
 
 // One archive or restore: the server's refusal is shown as it is, and the
-// lists are read back from the server, never guessed.
-async function archiveAction(done, call) {
+// lists are read back from the server, never guessed. `undo`, if given, is
+// the toast's "בטל" button (ops#325: an archive by a stray tap is undone).
+async function archiveAction(done, call, undo) {
   try { await call(); } catch (e) { toast("לא בוצע: " + e.message, true); return false; }
   try { await loadStreams(); } catch (e) { /* the next reconnect reloads */ }
-  toast(done);
+  toast(done, false, undo ? {label: "בטל", run: undo} : null);
   return true;
 }
 
@@ -2453,10 +2503,11 @@ function renderStreams() {
     label.dir = "auto";
     label.textContent = "#" + s.name;
     name.append(svgIcon(CARET, "caret"), label);
-    if (s.invite_only) {
+    // Most channels are private: only the exception gets a chip (ops#325).
+    if (!s.invite_only) {
       const tag = document.createElement("span");
       tag.className = "tag";
-      tag.textContent = "פרטי";
+      tag.textContent = "ציבורי";
       name.append(tag);
     }
     name.addEventListener("click", () => {
@@ -2503,7 +2554,8 @@ function renderStreams() {
       arc.title = "העבר את הנושא לארכיון (ההודעות נשמרות)";
       arc.textContent = "ארכב";
       arc.addEventListener("click", () => archiveAction(
-        "#" + s.name + " › " + topic + " הועבר לארכיון", () => archiveTopic(s.stream_id, topic)));
+        "#" + s.name + " › " + topic + " הועבר לארכיון", () => archiveTopic(s.stream_id, topic),
+        () => archiveAction("#" + s.name + " › " + topic + " שוחזר", () => restoreTopic(s.stream_id, topic))));
       item.className = "topic-row";
       item.append(btn);
       const topicUnread = unread ? unread.topics.get(topic.toLowerCase()) || 0 : 0;
@@ -2571,6 +2623,7 @@ function closeTopic() {
   S.open = null;
   S.msgs = [];
   S.shown = new Set();
+  S.newFrom = null;
   $("messages").replaceChildren();
   $("topic-title").textContent = "בחרו נושא";
   $("members-btn").disabled = true;
@@ -2595,12 +2648,16 @@ async function openTopic(streamId, stream, topic) {
   S.open = {stream_id: streamId, stream, topic};
   S.shown = new Set();
   S.msgs = [];
+  S.newFrom = null;
   $("messages").replaceChildren();
   $("new-pill").hidden = true;
   $("topic-title").textContent = "#" + stream + " › " + topic;
   $("members-btn").disabled = false;
   $("members-btn").textContent = membersLabel(null);
   refreshCount(streamId);
+  // Read before markTopicRead clears it: where the "חדש" line goes (ops#325).
+  const entry = S.unread.get(streamId);
+  const unreadN = entry ? entry.topics.get(topic.toLowerCase()) || 0 : 0;
   markTopicRead(streamId, topic);
   $("app").classList.remove("side-open");
   S.collapsed.delete(streamId);
@@ -2616,8 +2673,29 @@ async function openTopic(streamId, stream, topic) {
     return;
   }
   if (!S.open || S.open.stream_id !== streamId || S.open.topic !== topic) return;
+  S.newFrom = firstNewId(got.messages, unreadN, S.me ? S.me.user_id : null);
   addMessages(got.messages, true);
+  scrollToNew();
   if (!isTouch()) $("compose").focus();
+}
+
+// The first of the last `n` messages from someone else (the unread count
+// counts only those), or the oldest loaded one if fewer were loaded.
+function firstNewId(list, n, meId) {
+  if (!n || !list.length) return null;
+  const sorted = [...list].sort((a, b) => a.id - b.id);
+  let seen = 0;
+  for (let i = sorted.length - 1; i >= 0; i--) {
+    if (sorted[i].sender_id !== meId && ++seen === n) return sorted[i].id;
+  }
+  return sorted[0].id;
+}
+
+// The "חדש" line at the top of the screen, the new messages under it.
+function scrollToNew() {
+  const box = $("messages");
+  const line = box.querySelector(".new-line");
+  if (line) box.scrollTop += line.getBoundingClientRect().top - box.getBoundingClientRect().top;
 }
 
 // -- messages
@@ -2660,10 +2738,32 @@ function renderMessages() {
       sep.textContent = dayLabel(when, now);
       nodes.push(sep);
     }
-    nodes.push(messageNode(m, when, newDay || prev.sender_id !== m.sender_id));
+    const isNew = m.id === S.newFrom;
+    if (isNew) {
+      const line = el("div", "new-line", "חדש");
+      line.dir = "rtl";
+      nodes.push(line);
+    }
+    nodes.push(messageNode(m, when, isNew || newDay || prev.sender_id !== m.sender_id));
     prev = m;
   }
   box.replaceChildren(...nodes);
+  // A body that is "long" by count but fits in 6 lines at this width needs no button.
+  for (const b of box.querySelectorAll(".body.folded")) {
+    if (b.clientHeight && b.scrollHeight <= b.clientHeight + 1) {
+      b.classList.remove("folded");
+      const more = b.closest(".bubble").querySelector(".more-btn");
+      if (more) more.remove();
+    }
+  }
+}
+
+// ops#325: one agent report must not fill the phone screen.
+const FOLD_LINES = 6;
+const FOLD_CHARS = 400;
+function isLong(text) {
+  const t = String(text);
+  return t.split("\n").length > FOLD_LINES || t.length > FOLD_CHARS;
 }
 
 function inlineNodes(text) {
@@ -2741,12 +2841,38 @@ function messageNode(m, when, first) {
   } else {
     fillBody(body, m.content);
   }
+  if (isLong(q ? q.rest : m.content) && !S.unfolded.has(m.id)) {
+    body.classList.add("folded");
+    const more = el("button", "more-btn", "הצג עוד");
+    more.type = "button";
+    more.setAttribute("aria-expanded", "false");
+    // Opens in place: the bubble grows downward, the scroll position stays.
+    more.addEventListener("click", () => {
+      S.unfolded.add(m.id);
+      body.classList.remove("folded");
+      more.remove();
+    });
+    node.querySelector(".bubble").append(more);
+  }
+  if (S.tapped === m.id) node.classList.add("tapped");
+  // A tap on the bubble (not on a link or button in it) shows its "+".
+  node.querySelector(".bubble").addEventListener("click", (e) => {
+    if (e.target.closest && e.target.closest("a, button, .quote")) return;
+    tapMessage(node, m.id);
+  });
   node.querySelector(".quote-btn").addEventListener("click", () => {
     insertText(quoteBlock(m.sender_full_name, q ? q.rest : m.content, m.id));
   });
   wireReactBtn(node.querySelector(".react-btn"), m);
   renderReactions(node, m);
   return node;
+}
+
+function tapMessage(node, id) {
+  const was = S.tapped === id;
+  for (const n of $("messages").querySelectorAll(".msg.tapped")) n.classList.remove("tapped");
+  S.tapped = was ? null : id;
+  if (!was) node.classList.add("tapped");
 }
 
 // The quote block's own id (parseQuote's "[said](#near/ID)") is not always
@@ -2772,8 +2898,8 @@ async function jumpToQuote(id) {
   setTimeout(() => node.classList.remove("jump-flash"), 1500);
 }
 
-// -- reactions (ops#249 batch 1): one tap adds "👍" (the "yes" replacement
-// the issue asks for); a long press opens a short picker for anything else.
+// -- reactions (ops#249 batch 1; ops#325): a tap on "+" opens a short
+// picker; nothing reacts 👍 unless someone picked it.
 
 const REACTION_SET = ["👍", "❤️", "😂", "😮", "😢", "🙏", "✅", "🎉"];
 let reactPicker = null;
@@ -2806,19 +2932,8 @@ document.addEventListener("click", (e) => {
   if (reactPicker && !reactPicker.contains(e.target) && !e.target.closest(".react-btn")) closeReactPicker();
 });
 
-// pointerdown/up rather than a plain click, so the same button can mean "one
-// tap: 👍" and "hold: pick another" without two different controls.
 function wireReactBtn(btn, m) {
-  let timer = 0, held = false;
-  const start = () => {
-    held = false;
-    timer = setTimeout(() => { held = true; openReactPicker(btn, m); }, 450);
-  };
-  const cancel = () => clearTimeout(timer);
-  btn.addEventListener("pointerdown", start);
-  btn.addEventListener("pointerup", cancel);
-  btn.addEventListener("pointerleave", cancel);
-  btn.addEventListener("click", () => { if (!held) toggleReaction(m, "👍"); });
+  btn.addEventListener("click", () => openReactPicker(btn, m));
 }
 
 async function toggleReaction(m, name) {
@@ -3407,6 +3522,15 @@ function toggleTheme() {
   applyTheme(next);
 }
 $("theme-btn").addEventListener("click", toggleTheme);
+
+// ops#325: under 700 px the top bar has room only for where you are, so
+// members, bell and theme move into the side menu, and back when it widens.
+const SMALL = matchMedia("(max-width: 700px)");
+function placeTools() {
+  (SMALL.matches ? $("side-tools") : $("top")).append($("members-btn"), $("notify-btn"), $("theme-btn"));
+}
+SMALL.addEventListener("change", placeTools);
+placeTools();
 $("dash-theme").addEventListener("click", toggleTheme);  // the board hides #top, so it has its own
 
 // -- PWA install + phone notifications (ops#249 batch 1)
