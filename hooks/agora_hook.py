@@ -83,6 +83,15 @@ FEATURE_STREAM = "feature"
 SHARED_ROLES = ("COO", "CTO", "PM", "CMO", "CPSO")
 # How often a session re-reads which of its rooms are multi-bot.
 ROOMS_SECONDS = 5 * 60
+# The bot caps of bot/wake.py (ops#321), for the role bots' posts a multi-bot
+# room delivers to a live session: wake.py skips a role that has one, so the
+# hook counts them itself. The same keys and defaults, from the environment
+# first, then bot/.env. One count for every session on the machine, beside
+# the per-session state: per room an hour, all rooms a day.
+BOT_TOPIC_TURNS_PER_HOUR = 6
+BOT_TURNS_PER_DAY = 10000
+HOUR, DAY = 60 * 60, 24 * 60 * 60
+BOT_CAPS_FILE = "agora-wait-bot-caps.json"
 
 
 def _payload() -> dict:
@@ -183,6 +192,14 @@ def _from_bot(msg: dict) -> bool:
     """Zulip names every bot it creates ``<short_name>-bot@<domain>`` (see
     ``_wakes``); a message carries no ``is_bot``."""
     return str(msg.get("sender_email") or "").partition("@")[0].endswith("-bot")
+
+
+def _role_bot(msg: dict) -> str | None:
+    """The role whose bot sent ``msg`` (``cto-bot@`` is the CTO's), one of
+    ``SHARED_ROLES``; None for a person, the PA, the watchdog or any other bot."""
+    short = str(msg.get("sender_email") or "").partition("@")[0].lower()
+    role = short[:-len("-bot")].upper() if short.endswith("-bot") else ""
+    return role if role in SHARED_ROLES else None
 
 
 def _zulip_creds(name: str) -> tuple[str, str, str] | None:
@@ -300,8 +317,10 @@ def _wakes(event: dict, bot_email: str, name: str = "",
 
     A multi-bot room (issue #146, ``meetings``: see ``_multi_bot_rooms``)
     wakes on every message but the session's own, for every role but the PA:
-    a member reads the whole discussion there. A bot's post comes marked as
-    not the founder (``_rewake_text``).
+    a member reads the whole discussion there. Only a person's post or a role
+    bot's (``_role_bot``) counts, as in bot/wake.py; the watchdog's or another
+    bot's follows the usual rules. A role bot's post comes marked as not the
+    founder (``_rewake_text``) and only inside the bot caps (``_within_caps``).
     """
     if event.get("type") != "message":
         return False
@@ -313,7 +332,8 @@ def _wakes(event: dict, bot_email: str, name: str = "",
     if msg.get("type") != "stream":
         return False
     stream = str(msg.get("display_recipient") or "").lower()
-    if name.upper() != "PA" and stream.casefold() in (meetings or ()):
+    if (name.upper() != "PA" and stream.casefold() in (meetings or ())
+            and (not _from_bot(msg) or _role_bot(msg))):
         return True  # the PA reads company rooms only when mentioned (ops#327)
     if stream == FEATURE_STREAM:
         sender = str(msg.get("sender_email") or "")
@@ -344,6 +364,71 @@ def _rewake_text(name: str, msg: dict, meetings: set | None = None) -> str:
             marker = BOT_MARKER.format(src=sender) + "\n\n"
         reply = f"Reply in #{stream}, topic {topic!r}."
     return f"{marker}{where}\n\n{msg.get('content', '')}\n\n{reply}"
+
+
+def _caps() -> tuple[int, int]:
+    """(hourly per room, daily) bot caps, read as bot/wake.py reads them. A
+    value that is not a positive whole number keeps the default: wake.py
+    refuses to start on one, and a hook never fails loudly."""
+    env = _dotenv(DOTENV)
+
+    def get(key: str, default: int) -> int:
+        value = (os.environ.get(key) or env.get(key) or "").strip()
+        ok = value.isascii() and value.isdigit() and int(value) > 0
+        return int(value) if ok else default
+
+    return (get("BOT_TOPIC_TURNS_PER_HOUR", BOT_TOPIC_TURNS_PER_HOUR),
+            get("BOT_TURNS_PER_DAY", BOT_TURNS_PER_DAY))
+
+
+def _within_caps(hits: list, meetings: set | None) -> list:
+    """``hits`` less the role bots' posts in multi-bot rooms past the caps.
+
+    The same rule as bot/wake.py's ``_bot_cap``: a role bot's post in a
+    room is counted when delivered; past ``BOT_TOPIC_TURNS_PER_HOUR`` in that
+    room in the last hour, or ``BOT_TURNS_PER_DAY`` in all rooms in a day, it
+    is dropped. A person's post there is never capped and resets the room's
+    hourly count. Everything else passes untouched: mentions and DMs
+    elsewhere, and the usual rules. The count lives in one file for every
+    session; two sessions writing at once can lose a count, never the cap."""
+    def room(m: dict) -> str | None:
+        r = str(m.get("display_recipient") or "").casefold()
+        return r if m.get("type") == "stream" and r in (meetings or ()) else None
+
+    if not any(room(m) for m in hits):
+        return hits
+    path = STATE_DIR / BOT_CAPS_FILE
+    try:
+        saved = json.loads(path.read_text(encoding="utf-8"))
+        log = [{"at": float(e["at"]), "room": str(e["room"])} for e in saved["log"]]
+        reset = {str(k): float(t) for k, t in dict(saved["reset"]).items()}
+    except (OSError, ValueError, TypeError, KeyError, AttributeError):
+        log, reset = [], {}
+    hour_cap, day_cap = _caps()
+    now = time.time()
+    log = [e for e in log if now - e["at"] < DAY]
+    reset = {k: t for k, t in reset.items() if now - t < HOUR}
+    kept = []
+    for m in hits:
+        r = room(m)
+        if r is None or (_from_bot(m) and not _role_bot(m)):
+            kept.append(m)
+        elif not _from_bot(m):
+            reset[r] = now  # the founder's line: uncapped, and a fresh hour
+            kept.append(m)
+        else:
+            since = max(now - HOUR, reset.get(r, 0.0))
+            in_room = sum(1 for e in log if e["room"] == r and e["at"] >= since)
+            if in_room < hour_cap and len(log) < day_cap:
+                log.append({"at": now, "room": r})
+                kept.append(m)
+    try:
+        tmp = path.with_suffix(f".{os.getpid()}.tmp")
+        tmp.write_text(json.dumps({"log": log, "reset": reset}), encoding="utf-8")
+        os.replace(tmp, path)
+    except OSError:
+        pass
+    return kept
 
 
 def do_register() -> int:
@@ -673,6 +758,7 @@ def _poll_once(creds: tuple[str, str, str], name: str, state: dict,
     if seen:
         state["last_message_id"] = max([floor, *seen])
     _save_state(state_path, state)
+    hits = _within_caps(hits, meetings)
     if not hits:
         return None
     return "\n\n---\n\n".join(_rewake_text(name, m, meetings) for m in hits)

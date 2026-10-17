@@ -998,3 +998,62 @@ def test_room_lookup_down_means_the_old_rules(tmp_path):
     finally:
         fake.close()
     assert (code, out, err) == (0, "", "")
+
+
+# -- issue #146: a live session reads role bots' posts only inside the bot caps --
+
+def test_the_bot_after_the_hourly_cap_is_not_delivered_but_the_founder_still_is(tmp_path):
+    """Two bot posts an hour (BOT_TOPIC_TURNS_PER_HOUR=2): the third is
+    dropped, the founder's line after it still wakes the session."""
+    script = [ok(said(1, "bot one", stream="Launch", email=CTO_BOT, who="CTO"),
+                 said(2, "bot two", stream="Launch", email=CTO_BOT, who="CTO")),
+              ok(said(3, "bot three", stream="Launch", email=CTO_BOT, who="CTO"),
+                 said(4, "founder here", stream="Launch"))]
+    fake = FakeZulip(script, idle=0.3)
+    env = _session_env(tmp_path, fake.url)
+    env["BOT_TOPIC_TURNS_PER_HOUR"] = "2"
+    try:
+        first = _finish(_wait_proc(tmp_path, env, seconds=3))
+        second = _finish(_wait_proc(tmp_path, env, seconds=3))
+    finally:
+        fake.close()
+    assert first[0] == 2 and "bot one" in first[1] and "bot two" in first[1]
+    code, out, err = second
+    assert (code, err) == (2, "")
+    assert "founder here" in out
+    assert "bot three" not in out
+
+
+def test_the_cap_counts_per_room_and_a_founder_line_resets_it(hook, monkeypatch):
+    monkeypatch.setenv("BOT_TOPIC_TURNS_PER_HOUR", "1")
+    bot = lambda i, room: {**said(i, "b", stream=room, email=CTO_BOT, who="CTO")["message"]}
+    meetings = {"launch", "all hands"}
+    assert hook._within_caps([bot(1, "Launch")], meetings) == [bot(1, "Launch")]
+    assert hook._within_caps([bot(2, "Launch")], meetings) == []
+    assert hook._within_caps([bot(3, "All hands")], meetings) == [bot(3, "All hands")]
+    founder = said(4, "go on", stream="Launch")["message"]
+    assert hook._within_caps([founder, bot(5, "Launch")], meetings) == [
+        founder, bot(5, "Launch")]
+    monkeypatch.setenv("BOT_TURNS_PER_DAY", "3")
+    assert hook._within_caps([founder, bot(6, "Launch")], meetings) == [founder]
+    # outside a multi-bot room nothing is counted or dropped
+    assert hook._within_caps([bot(7, "coo")], meetings) == [bot(7, "coo")]
+
+
+def test_a_watchdog_post_in_a_multi_bot_room_is_not_delivered(tmp_path):
+    code, out, err = _run(tmp_path, [ok(said(
+        1, "hourly: 2 issues ready", stream="All hands", email=WATCHDOG,
+        who="Watchdog"))], seconds=3)
+    assert (code, out, err) == (0, "", "")
+
+
+def test_the_caps_defaults_are_wakes(hook):
+    spec = importlib.util.spec_from_file_location(
+        "wake_for_caps_test", HOOK.parent.parent / "bot" / "wake.py")
+    sys.path.insert(0, str(HOOK.parent.parent / "bot"))
+    try:
+        wake = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(wake)
+    finally:
+        sys.path.remove(str(HOOK.parent.parent / "bot"))
+    assert hook._caps() == (wake.BOT_TOPIC_TURNS_PER_HOUR, wake.BOT_TURNS_PER_DAY)

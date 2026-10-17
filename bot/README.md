@@ -276,6 +276,10 @@ every member role (resumed, queued behind its running turn, or a fresh
 session opened), and a role bot's untagged post goes to every other member's
 open session there (never opens one), marked as a bot's and under the bot caps
 below. There is no list of meeting rooms; room membership decides who reads.
+A hand-opened live session reads the room through its hook, and the hook
+applies the same caps (`BOT_TOPIC_TURNS_PER_HOUR` per room an hour,
+`BOT_TURNS_PER_DAY` a day, from bot/.env) to role bots' posts; your lines are
+never capped, and the watchdog or any other non-role bot does not count.
 The PA is home-only: it never joins a company room and never counts as a
 member there. A role that
 is not in the room never wakes there. An invite only adds the bot; it wakes
