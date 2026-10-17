@@ -1457,36 +1457,19 @@ def test_a_live_reaction_event_updates_the_open_message_in_place():
     assert got["noCrash"] is True
 
 
-def test_one_tap_reacts_a_long_press_opens_the_picker():
+def test_325_a_tap_on_plus_opens_the_picker_and_never_reacts_by_itself():
     prelude = FAKE_DOM + """
-      const timers = [];
-      let nextId = 1;
-      function setTimeout(f, ms) { const id = nextId++; timers.push([id, f, ms]); return id; }
-      function clearTimeout(id) { const i = timers.findIndex((t) => t[0] === id); if (i >= 0) timers.splice(i, 1); }
       let pickedWith = null, toggledWith = null;
       function openReactPicker(btn, m) { pickedWith = m; }
       function toggleReaction(m, name) { toggledWith = [m.id, name]; }
     """
     got = _js(("wireReactBtn",), """
       const btn = document.createElement("button");
-      const m = {id: 3};
-      wireReactBtn(btn, m);
-      // A quick tap: pointerdown then pointerup well before the long-press delay.
-      btn.on.pointerdown();
-      btn.on.pointerup();
+      wireReactBtn(btn, {id: 3});
       btn.on.click();
       out.tap = [toggledWith, pickedWith];
-      toggledWith = null;
-      // A long press: pointerdown, the delayed callback fires (simulated —
-      // nothing here advances real time), then the eventual click is a no-op.
-      btn.on.pointerdown();
-      const [, fire] = timers[timers.length - 1];
-      fire();
-      btn.on.click();
-      out.hold = [toggledWith, pickedWith];
     """, prelude=prelude)
-    assert got["tap"] == [[3, "👍"], None]
-    assert got["hold"] == [None, {"id": 3}]
+    assert got["tap"] == [None, {"id": 3}]
 
 
 def test_254_the_reaction_row_sits_under_the_message_text():
@@ -2687,7 +2670,7 @@ def test_322_opening_a_room_reads_all_its_messages_across_old_topics(world):
       function addMessages(list) { S.msgs.push(...(list || [])); }
       const ROOM_TOPIC = "chat";
     """
-    got = _js(("membersLabel", "openRoom"), """
+    got = _js(("membersLabel", "openRoom", "firstNewId", "scrollToNew"), """
       await openRoom(4, "feature");
       out.calls = calls; out.title = $("room-title").textContent; out.open = S.open;
       out.buttons = [$("members-btn").disabled, $("invite-btn").disabled];
