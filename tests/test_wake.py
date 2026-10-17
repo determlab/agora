@@ -2029,3 +2029,52 @@ def test_first_prompt_tells_a_role_to_use_its_skills_but_not_the_pa(wake):
     assert "matching skill" not in pa
     resume = wake.message_prompt("CTO", msg(10, stream="cto", topic="t"), first=False)
     assert "matching skill" not in resume
+
+
+# -- founder wildcard mentions (ops#336) ---------------------------------------
+
+def _room_of(*roles):
+    def members(role, room):
+        return [user(FOUNDER, "Founder", bot=False)] + [
+            user(300 + i, r) for i, r in enumerate(roles)]
+    return members
+
+
+@pytest.mark.parametrize("tag", ["all", "everyone", "channel", "stream", "topic"])
+def test_founder_wildcard_wakes_every_member_role(wake, tmp_path, tag):
+    w = make(wake, tmp_path, members=_room_of("COO", "PM", "CMO"))
+    for i, role in enumerate(("COO", "PM", "CMO")):
+        d = w.on_message(role, msg(10 + i, f"@**{tag}** are you here?", stream="All hands"), [])
+        assert d["action"] == "spawn", (role, d)
+
+
+def test_founder_wildcard_does_not_wake_a_non_member_role(wake, tmp_path):
+    w = make(wake, tmp_path, members=_room_of("COO", "PM"))
+    d = w.on_message("CMO", msg(10, "@**all** here?", stream="All hands"), [])
+    assert d["action"] == "skip"
+    assert w.spawner.started == []
+
+
+def test_founder_wildcard_never_wakes_the_pa_outside_pa(wake, tmp_path):
+    w = make(wake, tmp_path, members=_room_of("COO", "PA"))
+    d = w.on_message("PA", msg(10, "@**all** here?", stream="All hands"), [])
+    assert d["action"] == "skip"
+    assert w.spawner.started == []
+
+
+def test_silent_wildcard_wakes_nobody(wake, tmp_path):
+    w = make(wake, tmp_path, members=_room_of("COO", "PM", "CMO"))
+    for i, role in enumerate(("COO", "PM", "CMO")):
+        d = w.on_message(role, msg(10 + i, "@_**all** fyi", stream="All hands"), [])
+        assert d["action"] == "skip"
+    assert w.spawner.started == []
+
+
+def test_bot_wildcard_wakes_nobody(wake, tmp_path):
+    w = make_bots(wake, tmp_path)
+    w.members = _room_of("COO", "PM", "CMO")
+    for i, role in enumerate(("PM", "CMO")):
+        d = w.on_message(role, bmsg(10 + i, "COO", "all", content="@**all** ping",
+                                    stream="All hands"), ["mentioned"])
+        assert d["action"] == "skip"
+    assert w.spawner.started == []
