@@ -428,6 +428,15 @@ def test_325_the_keyboard_hint_is_gone_on_touch_and_starts_with_hebrew_on_deskto
     assert re.match(r"[֐-׿]", hint) and "@" in hint
 
 
+def test_325_the_hint_and_the_mic_privacy_line_both_sit_under_the_composer():
+    # Merge with #131 (ops#323): its #mic-note follows this PR's #hint, both kept.
+    page = PAGE.read_text(encoding="utf-8")
+    assert page.count('id="hint"') == 1 and page.count('id="mic-note"') == 1
+    hint = page.index('id="hint"')
+    assert hint < page.index('id="mic-note"') < page.index('id="send-error"')
+    assert "הקלדת @" in page[hint : page.index("</p>", hint)]
+
+
 # -- seen in the browser: RTL sidebar alignment
 
 
