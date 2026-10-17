@@ -2382,12 +2382,14 @@ def _board_ids() -> tuple[list[str], list[str]]:
     return ids(first), ids(more)
 
 
-def test_326_approvals_come_first_full_width_right_under_the_kpi_strip():
+def test_326_approvals_come_first_full_width_right_under_the_brief():
+    # founder 2026-10-17: the brief replaced the KPI strip on top; the strip
+    # moved under "עוד פרטים" with the cards the brief now covers.
     first, _ = _board_ids()
-    assert first[0] == "dash-approvals" and first[1] == "dash-waiting"
+    assert first[0] == "dash-approvals"
     text = PAGE.read_text(encoding="utf-8")
     assert '<section class="dash-card card wide" id="dash-approvals">' in text
-    assert text.index('id="dash-kpis"') < text.index('id="dash-approvals"') < text.index('id="dash-timeline"')
+    assert text.index('id="dash-brief"') < text.index('id="dash-approvals"') < text.index('id="dash-kpis"')         < text.index('id="dash-timeline"')
     # the KPI "מחכה לך" is a link that scrolls to the approvals card
     got = _dash("""
       const k = renderKpis({next_moves: [{id: "a"}]}, Date.parse("2026-10-16T12:00:00Z"));
@@ -2396,10 +2398,10 @@ def test_326_approvals_come_first_full_width_right_under_the_kpi_strip():
     assert got == {"tag": "A", "href": "#dash-approvals", "others": ["DIV", "DIV", "DIV"]}
 
 
-def test_326_four_cards_by_default_and_one_remembered_toggle_shows_the_other_nine():
+def test_326_approvals_by_default_and_one_remembered_toggle_shows_the_other_twelve():
     first, more = _board_ids()
-    assert first == ["dash-approvals", "dash-waiting", "dash-live", "dash-stuck"]
-    assert len(more) == 9 and set(first) | set(more) == {"dash-" + c for c in (
+    assert first == ["dash-approvals"]
+    assert len(more) == 12 and set(first) | set(more) == {"dash-" + c for c in (
         "approvals", "waiting", "live", "stuck", "timeline", "gantt", "roles", "tokens", "queue", "prs",
         "week", "products", "progress")}
     [(_, btn)] = [(t, a) for t, a in _markup().elements if a.get("id") == "dash-more-btn"]
@@ -3081,3 +3083,91 @@ def test_the_privacy_note_is_a_visible_line_when_the_mic_is_offered():
       out.with = $("mic-note").hidden;
     """, DICTATION_STUB)
     assert out == {"without": True, "with": False}
+
+
+
+# -- the brief (founder, 2026-10-17: moving, stuck with owner, tokens, progress)
+
+BRIEF = {
+    "counts": {"moving": 2, "merged_24h": 15, "stuck": 3, "for_founder": 1},
+    "stuck": [
+        {"ref": "bricks#63", "title": "Release bricks 0.5.0", "url": "u1", "why": "צריך אותך", "owner": "חמי", "age_h": None},
+        {"ref": "shal#462", "title": "driver retries", "url": "u2", "why": "אושר ולא מוזג", "owner": "CTO", "age_h": 33},
+        {"ref": "ops#273", "title": "signed verdicts", "url": "u3", "why": "ה-CTO ביקש תיקון", "owner": "PM", "age_h": 259}],
+    "moving": [
+        {"ref": "shal#507", "title": "Bash: pytest", "url": "u4", "what": "כותב קוד עכשיו", "where": "מחשב", "age_h": None, "min": 4},
+        {"ref": "agora#132", "title": "merged", "url": "u5", "what": "נכנס לקוד", "where": None, "age_h": 3}],
+    "tokens": {"rows": [{"who": "COO", "weighted": 30000000, "share": 0.9}, {"who": "PM", "weighted": None, "share": None},
+                        {"who": "coders_pc", "weighted": 1500000, "share": 0.045}],
+               "total": 33000000, "age_h": 0, "cloud_measured": False,
+               "plan_5h": {"percent": 5, "resets_at": "2026-10-17T08:40:00Z", "expired": False},
+               "plan_7d": {"percent": 44, "resets_at": "2026-10-18T21:00:00Z", "expired": False}},
+    "progress": {"v1_share": {"v1": 13, "internal": 26, "other": 0, "total": 39, "share": 0.33, "rule": 0.67, "ok": False},
+                 "goals": [{"he": "arena", "percent": 75, "state": "in_work", "days_left": -5, "late": True},
+                           {"he": "pypi", "percent": 0, "state": "waiting_founder", "days_left": 14, "late": False}],
+                 "milestones": [{"repo": "shal", "title": "v0.4.0", "closed": 20, "total": 23, "percent": 87, "url": "m"}],
+                 "stage1": {"due": "2026-12-08", "days_left": 52, "done": 1, "total": 3}},
+}
+BRIEF_FUNCS = ("ageText", "briefTiles", "briefSection", "briefRow", "briefStuck", "briefMoving", "briefTokens",
+               "briefProgress", "renderBrief")
+
+
+def _brief(body: str):
+    return _js(DASH_FUNCS + BRIEF_FUNCS, body, prelude=_dash_prelude() + _consts("OWNER_CLS", "TOK_WHO_HE"))
+
+
+def test_brief_tiles_say_what_moves_what_is_stuck_and_what_waits_for_the_founder():
+    got = _brief(f"""
+      const b = {json.dumps(BRIEF, ensure_ascii=False)};
+      const t = briefTiles(b);
+      out.tiles = t.childNodes.map((n) => [n.className, n.childNodes.map((c) => c.textContent)]);
+    """)
+    assert got["tiles"] == [
+        ["bf-tile ok", ["2", "זז עכשיו", "15 נכנסו לקוד ב-24 שעות"]],
+        ["bf-tile bad", ["3", "תקוע", "לכל אחד יש בעלים"]],
+        ["bf-tile you", ["1", "מחכה לך", "רק אתה יכול"]]]
+
+
+def test_brief_every_stuck_row_leads_with_its_owner_and_age():
+    got = _brief(f"""
+      const b = {json.dumps(BRIEF, ensure_ascii=False)};
+      const sec = briefStuck(b.stuck);
+      const ul = sec.childNodes[1];
+      out.rows = ul.childNodes.map((li) => li.childNodes[0].childNodes.map((c) => [c.className, c.textContent]));
+    """)
+    assert got["rows"][0][0] == ["chip own own-founder", "חמי"]
+    assert got["rows"][1] == [["chip own own-cto", "CTO"], ["dash-label ref", "shal#462"], ["why", "אושר ולא מוזג"],
+                              ["age", "כבר 33 שע׳"]]
+    assert got["rows"][2][0] == ["chip own own-pm", "PM"] and got["rows"][2][3] == ["age", "כבר 11 ימים"]
+
+
+def test_brief_tokens_label_every_number_and_say_the_cloud_is_not_measured():
+    got = _brief(f"""
+      const b = {json.dumps(BRIEF, ensure_ascii=False)};
+      const sec = briefTokens(b.tokens, Date.parse("2026-10-17T04:00:00Z"));
+      out.text = sec.textContent;
+    """)
+    t = got["text"]
+    assert "תוכנית 5 שעות: 5% · מתאפס בעוד 4:40" in t and "תוכנית שבועית: 44%" in t
+    assert "30.0M · 90%" in t and "לא נמדד" in t and "קודרים בענן" in t and "קודרים במחשב" in t
+    assert "זה דירוג, לא חשבון" in t
+
+
+def test_brief_progress_shows_the_v1_rule_and_late_goals():
+    got = _brief(f"""
+      const b = {json.dumps(BRIEF, ensure_ascii=False)};
+      out.text = briefProgress(b.progress).textContent;
+    """)
+    t = got["text"]
+    assert "13 מתוך 39 מיזוגים בשבוע (33%)" in t and "מתחת ליעד: 2 מתוך 3" in t
+    assert "באיחור 5 ימים" in t and "עוד 14 ימים" in t
+    assert "20 מתוך 23 משימות" in t and "שלב 1: עוד 52 ימים · 1 מתוך 3 בדיקות עברו" in t
+
+
+def test_brief_missing_says_so_and_empty_lists_say_so_in_words():
+    got = _brief("""
+      out.none = renderBrief(undefined).textContent;
+      out.empty = renderBrief({counts: {moving: 0, stuck: 0, for_founder: 0}, stuck: [], moving: []}).textContent;
+    """)
+    assert got["none"] == "הנתון לא זמין עכשיו"
+    assert "שום דבר לא תקוע" in got["empty"] and "שום דבר לא זז עכשיו" in got["empty"]

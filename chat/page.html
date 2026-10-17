@@ -310,6 +310,48 @@ a.ref:hover { text-decoration: underline; }
 .chip.p2, .chip.a { background: var(--accent-soft); color: var(--text); }
 .chip.b { background: var(--mention); color: var(--text); }
 .chip.none { background: none; border: 1px dashed var(--line); color: var(--muted); font-weight: 500; }
+/* The brief (founder, 2026-10-17: "the board shows nothing useful"): the
+   top of the board answers three questions, in this order - what moves,
+   what is stuck and whose move it is, what it costs - then progress against
+   priorities.md. The owner chip leads every stuck row: who must move is the
+   answer, so it is the one strong colour on the row. */
+.brief { display: flex; flex-direction: column; gap: 12px; }
+.bf-tiles { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.bf-tile { border: 1px solid var(--line); border-radius: 10px; background: var(--bubble); padding: 8px 10px;
+  display: flex; flex-direction: column; min-width: 0; }
+.bf-tile .kv { font-size: 28px; font-weight: 700; line-height: 1.15; font-variant-numeric: tabular-nums; }
+.bf-tile .kl { font-size: 14px; font-weight: 700; }
+.bf-tile .ks { font-size: 13px; color: var(--muted); }
+.bf-tile.ok .kv { color: var(--ok); }
+.bf-tile.bad { border-color: var(--error); }
+.bf-tile.bad .kv { color: var(--error); }
+.bf-tile.you { border-color: var(--founder); }
+.bf-tile.you .kv { color: var(--founder); }
+.bf-tile.none .kv { color: var(--muted); }
+.bf-sec { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; background: var(--bubble);
+  display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.bf-sec h3 { margin: 0; font-size: 15px; font-weight: 700; display: flex; gap: 8px; align-items: baseline; }
+.bf-sec h3 .cnt { margin-inline-start: auto; font-size: 13px; color: var(--muted); font-weight: 600; }
+.rows li.bf-row { display: flex; flex-direction: column; align-items: stretch; gap: 2px; min-width: 0; padding-block: 4px;
+  border-top: 1px solid var(--line); }
+.rows li.bf-row:first-child { border-top: 0; padding-top: 0; }
+.bf-head { display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: baseline; min-width: 0; font-size: 14px; }
+.bf-head .why { flex: 1; min-width: 0; font-weight: 600; }
+.bf-head .age { color: var(--muted); font-size: 13px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.bf-row .tx { font-size: 13px; color: var(--muted); }
+.chip.own { color: #fff; min-width: 3.2em; text-align: center; }
+.chip.own-founder { background: var(--founder); }
+.chip.own-cto { background: var(--accent); color: var(--accent-text); }
+.chip.own-pm { background: var(--run2); }
+.bf-tok { display: grid; grid-template-columns: auto 1fr auto; gap: 6px 10px; align-items: center; font-size: 14px; }
+.bf-tok .who { font-weight: 600; }
+.bf-tok .val { font-variant-numeric: tabular-nums; white-space: nowrap; color: var(--muted); font-size: 13px; }
+.bf-tok .pbar { min-width: 40px; }
+.bf-line { font-size: 14px; display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+.bf-line .lbl { font-weight: 600; }
+.bf-sec > .lbl { font-size: 13px; font-weight: 700; color: var(--muted); }
+.bf-rule { position: relative; }
+.bf-rule .mark { position: absolute; top: -3px; bottom: -3px; width: 2px; background: var(--text); }
 .more { align-self: flex-start; border: 0; background: none; padding: 0; font-size: 13px; color: var(--accent); }
 .more:hover { text-decoration: underline; }
 .cut { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
@@ -478,6 +520,9 @@ a.ref:hover { text-decoration: underline; }
     -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
   .rows li .tx.open { display: block; -webkit-line-clamp: none; }
   .rows li .ref { color: var(--muted); }
+  /* A brief row is already two lines (owner + why, then the title). */
+  .rows li.bf-row .tx { order: 0; flex: none; }
+  .rows li.bf-row .ref { color: var(--accent); }
 }
 </style>
 </head>
@@ -564,15 +609,16 @@ a.ref:hover { text-decoration: underline; }
       <button type="button" id="dash-sync" class="go">סנכרן עכשיו</button>
       <button type="button" id="dash-theme" class="icon" title="כהה / בהיר" aria-label="כהה / בהיר">&#9681;</button>
     </div>
-    <div id="dash-kpis" class="kpis" aria-label="במבט אחד"></div>
+    <div id="dash-brief" class="brief" aria-label="מה קורה עכשיו"><div class="muted">טוען…</div></div>
     <div class="cards">
       <section class="dash-card card wide" id="dash-approvals"><h3></h3><div class="dash-body"><div class="muted">טוען…</div></div></section>
+    </div>
+    <button type="button" id="dash-more-btn" class="more dash-more" aria-expanded="false" aria-controls="dash-more">עוד פרטים</button>
+    <div id="dash-kpis" class="kpis" aria-label="במבט אחד" hidden></div>
+    <div class="cards" id="dash-more" hidden>
       <section class="dash-card card" id="dash-waiting"><h3></h3><div class="dash-body"><div class="muted">טוען…</div></div></section>
       <section class="dash-card card" id="dash-live"><h3></h3><div class="dash-body"><div class="muted">טוען…</div></div></section>
       <section class="dash-card card" id="dash-stuck"><h3></h3><div class="dash-body"><div class="muted">טוען…</div></div></section>
-    </div>
-    <button type="button" id="dash-more-btn" class="more dash-more" aria-expanded="false" aria-controls="dash-more">עוד פרטים</button>
-    <div class="cards" id="dash-more" hidden>
       <section class="dash-card card wide" id="dash-timeline"><h3></h3><div class="dash-body"><div class="muted">טוען…</div></div></section>
       <section class="dash-card card wide" id="dash-gantt"><h3></h3><div class="dash-body"><div class="muted">טוען…</div></div></section>
       <section class="dash-card card" id="dash-roles"><h3></h3><div class="dash-body"><div class="muted">טוען…</div></div></section>
@@ -2280,9 +2326,165 @@ function setCount(id, n) {
   cnt.textContent = n == null ? "" : String(n);
 }
 
+// -- the brief (founder, 2026-10-17): doc.brief from ops tools/dashboard.py.
+// Moving, stuck (each with the role that must move it), tokens, progress.
+// Every number carries its word; the page adds no logic of its own beyond
+// wording, so a wrong row is fixed in dashboard.py, not here.
+const OWNER_CLS = {"חמי": "own-founder", "CTO": "own-cto", "PM": "own-pm"};
+const TOK_WHO_HE = {coders_pc: "קודרים במחשב"};
+
+function ageText(h) {
+  if (h == null) return "";
+  if (h < 1) return "פחות משעה";
+  if (h < 48) return h + " שע׳";
+  return Math.round(h / 24) + " ימים";
+}
+
+function briefTiles(b) {
+  const c = b.counts || {};
+  const wrap = el("div", "bf-tiles");
+  const tile = (n, label, sub, tone) => {
+    const t = el("div", "bf-tile " + (n == null ? "none" : tone));
+    t.append(el("span", "kv", n == null ? "—" : String(n)), el("span", "kl", label));
+    if (sub) t.append(el("span", "ks", sub));
+    wrap.append(t);
+  };
+  tile(c.moving, "זז עכשיו", c.merged_24h != null ? c.merged_24h + " נכנסו לקוד ב-24 שעות" : "", c.moving ? "ok" : "none");
+  tile(c.stuck, "תקוע", c.stuck ? "לכל אחד יש בעלים" : "שום דבר", c.stuck ? "bad" : "ok");
+  tile(c.for_founder, "מחכה לך", c.for_founder ? "רק אתה יכול" : "אין", c.for_founder ? "you" : "ok");
+  return wrap;
+}
+
+function briefSection(title, count) {
+  const sec = el("section", "bf-sec");
+  const h = el("h3", null, title);
+  if (count != null) h.append(el("span", "cnt", count));
+  sec.append(h);
+  return sec;
+}
+
+function briefRow(chipCls, chipText, ref, url, why, age, text) {
+  const li = el("li", "bf-row");
+  const head = el("div", "bf-head");
+  if (chipText) head.append(el("span", "chip " + chipCls, chipText));
+  head.append(link("dash-label ref", ref, url), el("span", "why", why));
+  if (age) head.append(el("span", "age", age));
+  li.append(head);
+  if (text) {
+    const t = tapToOpen(el("span", "tx", text));
+    t.title = text;
+    li.append(t);
+  }
+  return li;
+}
+
+function briefStuck(rows) {
+  const sec = briefSection("תקוע · של מי הצעד", rows.length ? rows.length + " פריטים" : null);
+  if (!rows.length) { sec.append(el("div", "muted", "שום דבר לא תקוע")); return sec; }
+  const ul = el("ul", "rows");
+  const items = rows.map((s) => briefRow("own " + (OWNER_CLS[s.owner] || "none"), s.owner, s.ref, s.url, s.why,
+    s.age_h != null ? "כבר " + ageText(s.age_h) : "", s.title));
+  sec.append(cutList(ul, items, "bf-stuck", 6));
+  return sec;
+}
+
+function briefMoving(rows) {
+  const sec = briefSection("זז עכשיו", null);
+  if (!rows.length) { sec.append(el("div", "muted", "שום דבר לא זז עכשיו: אין ריצה ואין מיזוג ב-24 שעות")); return sec; }
+  const ul = el("ul", "rows");
+  const items = rows.map((m) => briefRow(m.where ? "a" : "none", m.where || "", m.ref, m.url, m.what,
+    m.age_h != null ? "לפני " + ageText(m.age_h) : (m.min != null ? m.min + " דק׳" : ""), m.title));
+  sec.append(cutList(ul, items, "bf-moving", 5));
+  return sec;
+}
+
+function briefTokens(t, now) {
+  if (now === undefined) now = Date.now();
+  const sec = briefSection("טוקנים · 24 שעות אחרונות", t.total != null ? "סה״כ " + fmtTok(t.total) : null);
+  const plan = el("div", "bf-line");
+  for (const [k, label] of [["plan_5h", "תוכנית 5 שעות"], ["plan_7d", "תוכנית שבועית"]]) {
+    const w = t[k];
+    const s = el("span");
+    s.append(el("span", "lbl", label + ": "),
+             document.createTextNode(w && !w.expired ? w.percent + "% · " + resetText(k === "plan_5h" ? "5h" : "7d", w.resets_at, now)
+                                                     : "אין נתון"));
+    plan.append(s);
+  }
+  sec.append(plan);
+  if (t.total == null) { sec.append(noData("tokens.json missing: the watchdog writes it hourly")); return sec; }
+  const grid = el("div", "bf-tok");
+  for (const r of t.rows || []) {
+    const bar = el("div", "pbar");
+    const i = el("i");
+    i.style.width = Math.round((r.share || 0) * 100) + "%";
+    bar.append(i);
+    grid.append(el("span", "who", TOK_WHO_HE[r.who] || r.who), bar,
+                el("span", "val", r.weighted == null ? "לא נמדד" : fmtTok(r.weighted) + " · " + Math.round((r.share || 0) * 100) + "%"));
+  }
+  grid.append(el("span", "who", "קודרים בענן"), el("span"), el("span", "val", "לא נמדד"));
+  sec.append(grid);
+  const note = el("div", "muted", "משוקלל: קריאה מהמטמון ×0.1, פלט ×5. זה דירוג, לא חשבון."
+    + (t.age_h >= 2 ? " נמדד לפני " + ageText(t.age_h) + "." : ""));
+  sec.append(note);
+  return sec;
+}
+
+function briefProgress(p) {
+  const sec = briefSection("התקדמות מול העדיפויות", null);
+  const v = p.v1_share;
+  if (v && v.total) {
+    const line = el("div", "bf-line");
+    line.append(el("span", "lbl", "עבודה על v1:"),
+                document.createTextNode(v.v1 + " מתוך " + v.total + " מיזוגים בשבוע (" + Math.round(v.share * 100) + "%)"),
+                el("span", "chip " + (v.ok ? "a" : "bad"), v.ok ? "עומד ביעד" : "מתחת ליעד: 2 מתוך 3"));
+    const bar = el("div", "pbar bf-rule");
+    const i = el("i", v.ok ? "" : "bad");
+    i.style.width = Math.round(v.share * 100) + "%";
+    const mark = el("span", "mark");
+    mark.style.insetInlineStart = Math.round(v.rule * 100) + "%";
+    mark.title = "היעד: 2 מתוך 3";
+    bar.append(i, mark);
+    sec.append(line, bar);
+    if (v.internal) sec.append(el("div", "muted", v.internal + " מיזוגים על כלים פנימיים (ops, agora)"));
+  }
+  const ul = el("ul", "rows");
+  for (const g of p.goals || []) {
+    const chip = g.state === "closed" ? ["a", "הושלם"]
+      : g.late ? ["bad", "באיחור " + (-g.days_left) + " ימים"]
+      : g.days_left != null ? ["none", "עוד " + g.days_left + " ימים"] : ["none", "אין תאריך"];
+    ul.append(rowItem({label: g.percent != null ? g.percent + "%" : "—", ref: false, detail: g.he,
+                       meta: chip[1], metaCls: chip[0]}));
+  }
+  if (ul.childNodes.length) sec.append(el("div", "lbl", "יעדים"), ul);
+  const ms = el("ul", "rows");
+  for (const m of p.milestones || []) {
+    const bar = el("span", "bar");
+    const i = el("i");
+    i.style.width = (m.percent || 0) + "%";
+    bar.append(i);
+    const li = rowItem({label: m.repo + " " + m.title, url: m.url, detail: m.closed + " מתוך " + m.total + " משימות"});
+    li.append(bar);
+    ms.append(li);
+  }
+  if (ms.childNodes.length) sec.append(el("div", "lbl", "גרסאות v1"), ms);
+  const s1 = p.stage1;
+  if (s1) sec.append(el("div", "bf-line", "שלב 1: עוד " + s1.days_left + " ימים · " + s1.done + " מתוך " + s1.total + " בדיקות עברו"));
+  return sec;
+}
+
+function renderBrief(b, now) {
+  const wrap = el("div", "brief");
+  if (!b || typeof b !== "object") { wrap.append(noData("doc.brief missing: ops tools/dashboard.py is older than the brief")); return wrap; }
+  wrap.append(briefTiles(b), briefStuck(b.stuck || []), briefMoving(b.moving || []));
+  if (b.tokens) wrap.append(briefTokens(b.tokens, now));
+  if (b.progress) wrap.append(briefProgress(b.progress));
+  return wrap;
+}
+
 function renderDashboard(d) {
   renderPill(d);
   const doc = d.doc && typeof d.doc === "object" ? d.doc : {};
+  $("dash-brief").replaceChildren(renderBrief(doc.brief));
   $("dash-kpis").replaceChildren(renderKpis(doc));
   mountCard("dash-timeline", renderTimeline(doc.timeline));
   // On a narrow screen the timeline scrolls sideways: start at "now" (the
@@ -2292,6 +2494,9 @@ function renderDashboard(d) {
   mountCard("dash-gantt", renderGantt(doc.gantt, doc.as_of));
   mountCard("dash-live", renderLive(doc.live));
   mountCard("dash-approvals", renderApprovals(Array.isArray(doc.next_moves) ? doc.next_moves : []));
+  // An empty approvals card is noise on a phone: the brief's "מחכה לך" tile
+  // already says 0. It stays during an Undo window.
+  $("dash-approvals").hidden = !(Array.isArray(doc.next_moves) && doc.next_moves.length) && !approvalsPending;
   setCount("dash-approvals", Array.isArray(doc.next_moves) ? doc.next_moves.length : null);
   mountCard("dash-tokens", renderTokens(doc.tokens, doc.plan));
   mountCard("dash-waiting", renderWaiting(doc.stuck));
@@ -3393,6 +3598,7 @@ for (const [id, title] of Object.entries(DASH_TITLES)) {
 // choice is remembered like the view.
 function setDashMore(open) {
   $("dash-more").hidden = !open;
+  $("dash-kpis").hidden = !open;
   $("dash-more-btn").setAttribute("aria-expanded", String(open));
   $("dash-more-btn").textContent = open ? "פחות פרטים" : "עוד פרטים (" + $("dash-more").children.length + ")";
 }
