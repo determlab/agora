@@ -2080,3 +2080,32 @@ def test_bot_wildcard_wakes_nobody(wake, tmp_path):
                                     stream="All hands"), ["mentioned"])
         assert d["action"] == "skip"
     assert w.spawner.started == []
+
+
+# -- #145: an untagged answer after the asking session closed ---------------------
+
+def _asked(wake, tmp_path, age):
+    clock = Clock()
+    ask = bmsg(10, "PM", "PM", "question 1: a, b or c?", stream="All hands", topic="chat",
+               timestamp=clock.t - age)
+    w = make_bots(wake, tmp_path, clock=clock)
+    w.members = crowd
+    w.history = lambda role, room, n: [ask]
+    return w
+
+
+def test_145_untagged_answer_after_the_asking_session_closed_wakes_the_asker(wake, tmp_path):
+    w = _asked(wake, tmp_path, age=5 * 60)
+    m = msg(11, "\u05d0", stream="All hands", topic="chat")
+    got = {r: w.on_message(r, m, []) for r in ("COO", "CTO", "PM")}
+    assert {r: d["action"] for r, d in got.items()} == {"COO": "skip", "CTO": "skip",
+                                                       "PM": "spawn"}
+    assert got["PM"]["reason"].startswith("answer to PM's last message")
+    assert "\u05d0" in w.spawner.started[-1][1]
+
+
+def test_145_a_last_bot_message_older_than_30_minutes_wakes_nobody(wake, tmp_path):
+    w = _asked(wake, tmp_path, age=31 * 60)
+    m = msg(11, "\u05d0", stream="All hands", topic="chat")
+    assert {w.on_message(r, m, [])["action"] for r in ("COO", "CTO", "PM")} == {"skip"}
+    assert w.spawner.started == []

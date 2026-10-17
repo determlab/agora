@@ -170,6 +170,7 @@ def role_bots(members: list[dict[str, Any]]) -> set[str]:
 # (a spawn, a resume or a queued turn), rolling windows.
 HOUR, DAY = 60 * 60, 24 * 60 * 60
 BOT_IDLE_SECONDS = 10 * 60
+ASKED_SECONDS = 30 * 60  # an untagged founder answer goes to the bot that asked, within this
 # founder 2026-10-17: daily caps set high on purpose, lower when a problem shows
 BOT_TOPIC_TURNS_PER_HOUR = 6
 BOT_ROLE_SPAWNS_PER_HOUR = 3
@@ -853,8 +854,11 @@ class Waker:
         sess = rs.get("session")
         now = self.clock()
         wakes, why = self._wakes(role, msg)
+        note = ""
         if wakes == "untagged" and self._sole_open(role, msg):
             wakes = "yes"
+        elif wakes == "untagged" and self._asked_by(role, msg):
+            wakes, note = "yes", f"answer to {role}'s last message"
         if wakes != "yes":
             room = _where(msg, role)
             in_room = bool(sess) and not sess.get("closing") and sess.get("stream") == room
@@ -874,7 +878,37 @@ class Waker:
                 why = ("its hook delivers only mentions, DMs and its own room, so this "
                        "untagged message is not delivered")
             return self._decide(role, "skip", f"live {role} session (pid {hand}); {why}", msg)
-        return self._deliver(role, msg, founder=True)
+        return self._deliver(role, msg, founder=True, note=note)
+
+    def _asked_by(self, role: str, msg: dict[str, Any]) -> bool:
+        """An untagged founder message in a multi-bot room with no open
+        session there goes to the role whose bot message was the last one in
+        the same topic, if it is at most ASKED_SECONDS old (an answer to
+        its question after its session closed). Never spawns for anyone else."""
+        if self.history is None or not self.bot_wakes or role == "PA" \
+                or msg.get("type") != "stream":
+            return False
+        room = _where(msg, role)
+        if not safe_room(room):
+            return False
+        for r in self.room_bots.get((role, room), ()):
+            s = self.state["roles"].get(r, {}).get("session")
+            if s and not s.get("closing") and s.get("stream") == room:
+                return False
+        try:
+            rows = self.history(role, room, HISTORY_MESSAGES)
+        except (ZulipError, OSError, ValueError):
+            return False
+        topic = str(msg.get("subject") or "").casefold()
+        mid = int(msg.get("id") or 0)
+        rows = [m for m in rows if str(m.get("subject") or "").casefold() == topic
+                and int(m.get("id") or 0) < mid]
+        if not rows:
+            return False
+        last = max(rows, key=lambda m: int(m.get("id") or 0))
+        at = last.get("timestamp")
+        return (self._bot_of(last) == role and isinstance(at, (int, float))
+                and 0 <= self.clock() - at <= ASKED_SECONDS)
 
     def _sole_open(self, role: str, msg: dict[str, Any]) -> bool:
         """An untagged founder message in a multi-bot room that no member
@@ -892,7 +926,8 @@ class Waker:
                      and not s.get("closing") and s.get("stream") == room]
         return open_here == [role]
 
-    def _deliver(self, role: str, msg: dict[str, Any], founder: bool) -> dict[str, Any]:
+    def _deliver(self, role: str, msg: dict[str, Any], founder: bool,
+                 note: str = "") -> dict[str, Any]:
         """Spawn, resume or queue: the founder's message, or a bot's that
         passed the gate. Only the founder's moves ``last_founder_at``."""
         sess = self.role(role).get("session")
@@ -901,7 +936,7 @@ class Waker:
                 # Nothing is running for it: forget it and start fresh now,
                 # never a close turn on a session someone is talking to.
                 self._finish(role, "a message came to a closing session; closed")
-                return self._spawn(role, [msg])
+                return self._spawn(role, [msg], note)
             sess.setdefault("pending", []).append(msg)
             return self._decide(role, "queue", "the session is closing; a fresh one "
                                 "opens with this message", msg)
@@ -918,7 +953,7 @@ class Waker:
             sess["stream"] = _where(msg, role)
             return self._decide(role, "resume", f"open {role} session, turn ended",
                                 msg, session_id=sess["id"])
-        return self._spawn(role, [msg])
+        return self._spawn(role, [msg], note)
 
     def _prompt(self, role: str, msg: dict[str, Any], first: bool, history: str = "") -> str:
         others = self.others.get((role, _where(msg, role)))
@@ -978,7 +1013,8 @@ class Waker:
         with max-turns; the founder's turns keep today's limits."""
         return bool(sess.get("origin")) and all(self._bot_of(m) for m in msgs)
 
-    def _spawn(self, role: str, msgs: list[dict[str, Any]]) -> dict[str, Any]:
+    def _spawn(self, role: str, msgs: list[dict[str, Any]],
+               note: str = "") -> dict[str, Any]:
         now = self.clock()
         sid = str(uuid.uuid4())
         bots = [self._bot_of(m) for m in msgs]
@@ -994,7 +1030,8 @@ class Waker:
                                 for i, m in enumerate(msgs))
         bot = self._bot_turn(sess, msgs)
         self._run(role, "spawn", prompt, bot=bot)
-        why = f"the {bots[0]} bot called {role}" if bot else f"founder called {role}"
+        why = note or (f"the {bots[0]} bot called {role}" if bot
+                       else f"founder called {role}")
         return self._decide(role, "spawn", f"{why}; no live session",
                             msgs[-1], session_id=sid, model=AGENT["models"][role],
                             cwd=self.cwd.get(role, AGENT["cwd"]), history=count,
