@@ -2080,3 +2080,153 @@ def test_bot_wildcard_wakes_nobody(wake, tmp_path):
                                     stream="All hands"), ["mentioned"])
         assert d["action"] == "skip"
     assert w.spawner.started == []
+
+
+# -- issue #146: meeting rooms, every member role reads every message ---------
+
+MEETING_IDS = {"COO": 101, "CTO": 102, "PM": 103, "CMO": 104, "CPSO": 105, "PA": 106}
+MEETING_ROLES = ("COO", "CTO", "CMO", "CPSO", "PM")
+
+
+def all_hands(role, room):
+    """All hands as setup_streams.py makes it: the founder and every role bot."""
+    if room != "All hands":
+        return real(role, room)
+    return [user(FOUNDER, "Founder", bot=False)] + [
+        user(uid, r) for r, uid in MEETING_IDS.items()]
+
+
+def meeting(wake, tmp_path, bots=False):
+    w = make(wake, tmp_path, members=all_hands)
+    w.meeting_rooms = {"all hands"}
+    if bots:
+        w.bot_wakes = True
+        w.bot_ids = {uid: r for r, uid in MEETING_IDS.items()}
+    return w
+
+
+def open_sessions(w, spawner, roles, mid=10):
+    """One founder line opens a session for every role it reaches."""
+    for role in roles:
+        w.on_message(role, msg(mid, "good morning", stream="All hands"), [])
+    spawner.finish_all()  # every turn has ended: the sessions are open, idle
+
+
+def test_146_meeting_rooms_come_from_bot_env_with_all_hands_by_default(wake, tmp_path,
+                                                                       monkeypatch):
+    monkeypatch.delenv("MEETING_STREAMS", raising=False)
+    env = tmp_path / ".env"
+    base = "FOUNDER_ZULIP_ID=8\nZULIP_CTO_EMAIL=c@x\nZULIP_CTO_API_KEY=k\n"
+    env.write_text(base, encoding="utf-8")
+    assert wake.load_config(env)["meeting_rooms"] == ("All hands",)
+    env.write_text(base + "MEETING_STREAMS=All hands, standup\n", encoding="utf-8")
+    assert wake.load_config(env)["meeting_rooms"] == ("All hands", "standup")
+
+
+def test_146_untagged_founder_line_in_all_hands_reaches_all_four_open_sessions(
+        wake, tmp_path):
+    sp = FakeSpawner()
+    w = meeting(wake, tmp_path)
+    w.spawner = sp
+    four = ("COO", "CTO", "CMO", "CPSO")
+    for role in four:  # a closed role is spawned, untagged or not
+        d = w.on_message(role, msg(10, "good morning", stream="All hands"), [])
+        assert d["action"] == "spawn" and d["reason"].startswith("deliver (meeting room)")
+    sp.finish_all()
+    assert len(sp.started) == 4
+    for role in four:
+        d = w.on_message(role, msg(11, "the plan for the week?", stream="All hands"), [])
+        assert d["action"] == "resume" and d["meeting"] is True
+        assert d["reason"].startswith("deliver (meeting room)")
+    resumed = sp.started[4:]
+    assert sorted(r for _, _, r in resumed) == sorted(four)
+    for argv, prompt, _ in resumed:
+        assert "the plan for the week?" in prompt and "the plan" not in " ".join(argv)
+        assert "--resume" in argv and "--max-turns" not in argv
+
+
+def test_146_the_pa_never_reads_all_hands(wake, tmp_path):
+    w = meeting(wake, tmp_path)
+    d = w.on_message("PA", msg(10, "good morning", stream="All hands"), [])
+    assert d["action"] == "skip" and d["reason"] == wake.PA_ONLY_HOME
+
+
+def test_146_untagged_pm_bot_post_reaches_every_other_open_session_marked(wake, tmp_path):
+    sp = FakeSpawner()
+    w = meeting(wake, tmp_path, bots=True)
+    w.spawner = sp
+    open_sessions(w, sp, MEETING_ROLES)
+    n = len(sp.started)
+    post = msg(20, "draft roadmap is up", sender=MEETING_IDS["PM"], stream="All hands")
+    post["sender_full_name"] = "PM"
+    got = {r: w.on_message(r, post, []) for r in MEETING_ROLES}
+    assert got["PM"]["action"] == "skip"  # never its own role
+    for role in ("CTO", "CMO", "CPSO", "COO"):
+        assert got[role]["action"] == "resume", got[role]
+        assert got[role]["origin"] == "bot:PM"
+    turns = sp.started[n:]
+    assert sorted(r for _, _, r in turns) == ["CMO", "COO", "CPSO", "CTO"]
+    for _, prompt, _ in turns:
+        assert prompt.startswith(wake.BOT_MARKER.format(src="PM"))
+        assert "draft roadmap is up" in prompt
+    # a bot message never moves the founder's idle timer
+    assert all(w.role(r)["session"]["last_founder_at"] == w.clock() for r in MEETING_ROLES)
+
+
+def test_146_a_bot_post_in_a_meeting_room_never_spawns_and_caps_still_apply(wake, tmp_path):
+    sp = FakeSpawner()
+    w = meeting(wake, tmp_path, bots=True)
+    w.spawner = sp
+    open_sessions(w, sp, ("COO", "CTO", "CMO", "CPSO"))
+    post = msg(20, "no session for me", sender=MEETING_IDS["CTO"], stream="All hands")
+    n = len(sp.started)
+    w.role("CMO")["session"] = None  # CMO has no open session
+    d = w.on_message("CMO", post, [])
+    assert d["action"] == "skip" and "never opens one" in d["reason"]
+    assert len(sp.started) == n
+    # 6 bot turns per room per hour: the 7th delivery is stopped
+    actions = []
+    for i, text in enumerate(("one", "two", "three")):
+        p = msg(30 + i, text, sender=MEETING_IDS["PM"], stream="All hands")
+        for role in ("COO", "CTO", "CPSO"):
+            actions.append(w.on_message(role, p, [])["action"])
+        sp.finish_all()
+    assert actions.count("resume") == wake.BOT_TOPIC_TURNS_PER_HOUR
+    assert actions[wake.BOT_TOPIC_TURNS_PER_HOUR:] == ["skip"] * 3
+
+
+def test_146_bot_posts_need_bot_wakes_on(wake, tmp_path):
+    sp = FakeSpawner()
+    w = meeting(wake, tmp_path)  # BOT_WAKES off
+    w.spawner = sp
+    open_sessions(w, sp, ("CTO",))
+    n = len(sp.started)
+    d = w.on_message("CTO", msg(20, "hi", sender=MEETING_IDS["PM"], stream="All hands"), [])
+    assert d["action"] == "skip" and "not the founder" in d["reason"]
+    assert len(sp.started) == n
+
+
+def test_146_a_bots_mention_in_a_meeting_room_still_wakes_a_closed_role(wake, tmp_path):
+    w = meeting(wake, tmp_path, bots=True)
+    m = msg(20, "@**CTO** can you check?", sender=MEETING_IDS["PM"], stream="All hands")
+    d = w.on_message("CTO", m, ["mentioned"])
+    assert d["action"] == "spawn" and d["origin"] == "bot:PM"
+    assert "meeting" not in d
+
+
+def test_146_outside_a_meeting_room_the_old_rules_hold(wake, tmp_path):
+    sp = FakeSpawner()
+    w = meeting(wake, tmp_path, bots=True)
+    w.spawner = sp
+    # #PM has the PM, COO and CTO: an untagged founder line wakes its owner only
+    assert w.on_message("PM", msg(10, "status?", stream="PM"), [])["action"] == "spawn"
+    d = w.on_message("CTO", msg(10, "status?", stream="PM"), [])
+    assert d["action"] == "skip" and "meeting" not in d["reason"]
+    assert w.role("CTO").get("session") is None
+    # and the PM bot's untagged post there reaches nobody
+    w.on_message("CTO", msg(11, "@**CTO** look", stream="PM"), ["mentioned"])
+    sp.finish_all()
+    n = len(sp.started)
+    d = w.on_message("CTO", msg(12, "an untagged note", sender=MEETING_IDS["PM"], stream="PM"), [])
+    assert d["action"] == "skip" and d["reason"] == "no @**CTO** in a bot's message"
+    assert len(sp.started) == n

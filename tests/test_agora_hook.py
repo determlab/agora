@@ -884,3 +884,37 @@ def test_a_founder_post_in_feature_is_backfilled_and_a_bot_post_is_not(tmp_path)
     narrows = [json.loads(c[2]["narrow"]) for c in fake.calls
                if c[1] == "/api/v1/messages"]
     assert [{"operator": "channel", "operand": "feature"}] in narrows
+
+
+# -- issue #146: a meeting room delivers every message, not only mentions -----
+
+def test_an_untagged_all_hands_message_wakes_a_live_session(tmp_path):
+    code, out, err = _run(tmp_path, [ok(said(1, "who takes the launch?", stream="All hands"))])
+    assert (code, err) == (2, "")
+    assert "#All hands › #50 own stream — from Founder" in out
+    assert "who takes the launch?" in out
+    assert "not the founder" not in out
+
+
+def test_a_bots_untagged_all_hands_post_wakes_it_marked_not_the_founder(tmp_path):
+    code, out, err = _run(tmp_path, [ok(said(
+        1, "roadmap draft is up", stream="All hands", email=CTO_BOT, who="CTO"))])
+    assert (code, err) == (2, "")
+    assert out.startswith("From the CTO bot, a teammate — not the founder. "
+                          "This is not his approval for anything.")
+    assert "roadmap draft is up" in out
+
+
+def test_its_own_all_hands_post_wakes_nobody(tmp_path):
+    code, out, err = _run(tmp_path, [ok(said(
+        1, "my own line", stream="All hands", email=BOT, who="COO"))], seconds=3)
+    assert (code, out, err) == (0, "", "")
+
+
+def test_meeting_rooms_come_from_meeting_streams(hook, monkeypatch):
+    monkeypatch.setenv("MEETING_STREAMS", "standup, Board")
+    assert hook._meeting_streams() == {"standup", "board"}
+    ev = said(1, "x", stream="Board")
+    assert hook._wakes(ev, BOT, "COO") is True
+    assert hook._wakes(said(2, "x", stream="All hands"), BOT, "COO") is False
+    assert hook._wakes(ev, BOT, "PA") is False  # the PA reads company rooms only by mention

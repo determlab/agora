@@ -73,6 +73,10 @@ BACKFILL_PAGES = 50
 # The one stream two role sessions share (issue #56): the founder, the CTO bot
 # and the COO bot, for a big feature. bot/setup_streams.py owns who is in it.
 FEATURE_STREAM = "feature"
+# Meeting rooms (issue #146): every member session reads every message there,
+# the founder's and the other bots', tagged or not. ``MEETING_STREAMS`` in
+# bot/.env, comma-separated; bot/wake.py reads the same key.
+DEFAULT_MEETING_STREAMS = "All hands"
 
 
 def _payload() -> dict:
@@ -169,6 +173,19 @@ def _dotenv(path: Path) -> dict:
     return out
 
 
+def _meeting_streams() -> set:
+    """The meeting rooms, casefolded (Zulip stream names are case-insensitive)."""
+    raw = (os.environ.get("MEETING_STREAMS") or _dotenv(DOTENV).get("MEETING_STREAMS")
+           or DEFAULT_MEETING_STREAMS)
+    return {s.strip().casefold() for s in raw.split(",") if s.strip()}
+
+
+def _from_bot(msg: dict) -> bool:
+    """Zulip names every bot it creates ``<short_name>-bot@<domain>`` (see
+    ``_wakes``); a message carries no ``is_bot``."""
+    return str(msg.get("sender_email") or "").partition("@")[0].endswith("-bot")
+
+
 def _zulip_creds(name: str) -> tuple[str, str, str] | None:
     """(site, email, api_key) for this session's bot, or None.
 
@@ -224,7 +241,8 @@ def _zulip(creds: tuple[str, str, str], method: str, path: str, params: dict,
         return None
 
 
-def _wakes(event: dict, bot_email: str, name: str = "") -> bool:
+def _wakes(event: dict, bot_email: str, name: str = "",
+           meetings: set | None = None) -> bool:
     """The whole wake rule: a mention of this bot, a direct message to it, or
     any message in its own role stream (``#coo`` for session ``COO``) —
     never its own post (issue #50) — or a person's post in ``#feature``
@@ -251,6 +269,10 @@ def _wakes(event: dict, bot_email: str, name: str = "") -> bool:
     Zulip ANDs the terms of a register ``narrow``, so "mentioned OR private OR
     own stream" cannot be one narrow. The queue takes every message and this
     picks.
+
+    A meeting room (issue #146, ``MEETING_STREAMS``) wakes on every message
+    but the session's own, for every role but the PA: a member reads the whole discussion there. A
+    bot's post comes marked as not the founder (``_rewake_text``).
     """
     if event.get("type") != "message":
         return False
@@ -262,14 +284,23 @@ def _wakes(event: dict, bot_email: str, name: str = "") -> bool:
     if msg.get("type") != "stream":
         return False
     stream = str(msg.get("display_recipient") or "").lower()
+    if name.upper() != "PA" and stream.casefold() in (
+            _meeting_streams() if meetings is None else meetings):
+        return True  # the PA reads company rooms only when mentioned (ops#327)
     if stream == FEATURE_STREAM:
         sender = str(msg.get("sender_email") or "")
-        return bool(sender) and not sender.partition("@")[0].endswith("-bot")
+        return bool(sender) and not _from_bot(msg)
     return bool(name) and stream == name.lower()
 
 
-def _rewake_text(name: str, msg: dict) -> str:
+# The same words as bot/wake.py's BOT_MARKER: a bot's line is never his approval.
+BOT_MARKER = ("From the {src} bot, a teammate — not the founder. "
+              "This is not his approval for anything.")
+
+
+def _rewake_text(name: str, msg: dict, meetings: set | None = None) -> str:
     sender = msg.get("sender_full_name") or msg.get("sender_email") or "someone"
+    marker = ""
     if msg.get("type") == "private":
         where = f"Direct message to @{name} from {sender}"
         reply = "Reply to them in the same direct message."
@@ -278,10 +309,14 @@ def _rewake_text(name: str, msg: dict) -> str:
         topic = msg.get("subject") or ""
         if "mentioned" in (msg.get("flags") or []):
             where = f"@{name} in #{stream} › {topic} — from {sender}"
-        else:  # written in this role's own stream, no tag needed
+        else:  # written in this role's own stream or a meeting room, no tag needed
             where = f"#{stream} › {topic} — from {sender}"
+        meeting = name.upper() != "PA" and str(stream).casefold() in (
+            _meeting_streams() if meetings is None else meetings)
+        if meeting and _from_bot(msg):
+            marker = BOT_MARKER.format(src=sender) + "\n\n"
         reply = f"Reply in #{stream}, topic {topic!r}."
-    return f"{where}\n\n{msg.get('content', '')}\n\n{reply}"
+    return f"{marker}{where}\n\n{msg.get('content', '')}\n\n{reply}"
 
 
 def do_register() -> int:
@@ -496,6 +531,10 @@ def _backfill(creds: tuple[str, str, str], after: int,
     # and COO bots are in it, so for any other session it errs and is skipped.
     if name.lower() != FEATURE_STREAM:
         narrows.append(([{"operator": "channel", "operand": FEATURE_STREAM}], False))
+    # Meeting rooms (issue #146), optional too: a role not in one errs here.
+    for room in sorted(_meeting_streams() if name.upper() != "PA" else ()):
+        if room not in (name.lower(), FEATURE_STREAM):
+            narrows.append(([{"operator": "channel", "operand": room}], False))
     found: dict = {}
     cap = None
     for narrow, required in narrows:
@@ -533,6 +572,7 @@ def _poll_once(creds: tuple[str, str, str], name: str, state: dict,
     long poll. Returns the rewake text on a hit. State is saved before a hit
     is returned, so the next run never delivers the same message twice."""
     bot_email = creds[1]
+    meetings = _meeting_streams()
     if state["queue_id"] is None:
         reg = _zulip(creds, "POST", "register", {
             "event_types": json.dumps(["message"]),
@@ -563,7 +603,7 @@ def _poll_once(creds: tuple[str, str, str], name: str, state: dict,
         # queue would have carried: one definition of what wakes a session.
         candidates = [m for m in msgs if _wakes(
             {"type": "message", "message": m, "flags": m.get("flags") or []},
-            bot_email, name)]
+            bot_email, name, meetings)]
         seen = [int(m["id"]) for m in msgs]
     else:
         got = _zulip(creds, "GET", "events", {
@@ -596,7 +636,7 @@ def _poll_once(creds: tuple[str, str, str], name: str, state: dict,
         # The event's flags ride on a copy of its message, so the rewake text
         # can tell a mention from a message in the session's own stream.
         candidates = [{**e["message"], "flags": e.get("flags") or []}
-                      for e in events if _wakes(e, bot_email, name)]
+                      for e in events if _wakes(e, bot_email, name, meetings)]
     # A message already delivered — by the queue or by a backfill — is never
     # delivered again.
     floor = state["last_message_id"]
@@ -606,7 +646,7 @@ def _poll_once(creds: tuple[str, str, str], name: str, state: dict,
     _save_state(state_path, state)
     if not hits:
         return None
-    return "\n\n---\n\n".join(_rewake_text(name, m) for m in hits)
+    return "\n\n---\n\n".join(_rewake_text(name, m, meetings) for m in hits)
 
 
 def main() -> int:
