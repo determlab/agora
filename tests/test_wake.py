@@ -452,6 +452,7 @@ def test_dry_run_json_prints_one_line_per_message_and_spawns_nothing(wake, tmp_p
     monkeypatch.delenv("FOUNDER_ZULIP_ID", raising=False)
     monkeypatch.setattr(wake, "DOTENV", env)
     monkeypatch.setattr(wake, "STATE_DIR", tmp_path / ".wake")
+    monkeypatch.setattr(wake, "DUTY_DIR", tmp_path / "duty")
     monkeypatch.setattr(wake.load_config, "__defaults__", (env,))
     client = FakeClient(history=[msg(10), msg(11, sender=99)])
     monkeypatch.setattr(wake.ZulipClient, "_request",
@@ -459,7 +460,9 @@ def test_dry_run_json_prints_one_line_per_message_and_spawns_nothing(wake, tmp_p
     monkeypatch.setattr(wake.subprocess, "Popen", lambda *a, **k: pytest.fail("spawned"))
     assert wake.main(["--dry-run", "--json"]) == 0
     lines = [json.loads(x) for x in capsys.readouterr().out.splitlines()]
-    assert [(d["role"], d["action"]) for d in lines] == [("CTO", "spawn"), ("CTO", "skip")]
+    # Then the duty decision (ops#338): no duty file here, a skip.
+    assert [(d["role"], d["action"]) for d in lines] == [("CTO", "spawn"), ("CTO", "skip"),
+                                                         ("CTO", "duty-skip")]
     assert not (tmp_path / ".wake" / "state.json").exists()
 
 
@@ -1858,6 +1861,7 @@ def test_dry_run_reads_bot_ids_from_zulip_when_on(wake, tmp_path, monkeypatch, c
                                       "ZULIP_COO_API_KEY=k\nBOT_WAKES=on\n")
     monkeypatch.delenv("BOT_WAKES", raising=False)
     monkeypatch.setattr(wake, "STATE_DIR", tmp_path / ".wake")
+    monkeypatch.setattr(wake, "DUTY_DIR", tmp_path / "duty")
     monkeypatch.setattr(wake.load_config, "__defaults__", (env,))
     ids = {wake.ZulipClient._basic_auth_header(e, "k"): uid
            for e, uid in (("cto-bot@x", 102), ("coo-bot@x", 101))}
@@ -1871,7 +1875,7 @@ def test_dry_run_reads_bot_ids_from_zulip_when_on(wake, tmp_path, monkeypatch, c
     monkeypatch.setattr(wake.subprocess, "Popen", lambda *a, **k: pytest.fail("spawned"))
     assert wake.main(["--dry-run", "--json"]) == 0
     lines = [json.loads(x) for x in capsys.readouterr().out.splitlines()]
-    by_role = {d["role"]: d for d in lines}
+    by_role = {d["role"]: d for d in lines if not d["action"].startswith("duty-")}
     assert by_role["CTO"]["action"] == "spawn" and by_role["CTO"]["origin"] == "bot:COO"
     assert by_role["COO"]["action"] == "skip" and "own role" in by_role["COO"]["reason"]
 

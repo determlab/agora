@@ -67,6 +67,21 @@ How it works:
     a bot message never moves ``last_founder_at``. The prompt's first line
     says it came from a bot, not the founder. A founder message bypasses
     every cap.
+  - Duty wakes (ops#338, with the CTO's binding changes): the watchdog (ops
+    ``tools/watchdog-check.py``, a fixed script, no model) writes
+    ``$WAKE_OPS_DIR/duty/<ROLE>.json``. At most once a minute the loop reads
+    it for COO, CTO and PM (``DUTY_ROLES``; never the PA). A file older than
+    2 h, or with any item that fails the checks, is skipped whole. A role
+    with an unseen item key, or a key woken 4 h ago and still listed (one
+    re-wake, then never again), gets one batched duty session: origin
+    ``duty``, its home room, ``--max-turns 15``, closed 10 min after its
+    last message. The prompt lists only ``- <kind> <url> (<age_h>h)``, never
+    a title. A role with a session already open is skipped and its keys stay
+    unseen. Caps: one duty wake per role per 30 min, 6 a day for COO and
+    CTO (12 for PM), 25 a day in all, none while ``usage-limit.json`` holds
+    a reset ahead. Each decision is a ``duty <ROLE> wake|rewake|skip
+    <reason>`` line in ``bot/.wake/<ROLE>.log``; ``--dry-run --json`` prints
+    them. No message is sent and no bot wakes anyone.
   - Multi-bot rooms are meetings (issue #146): in every room with two or more
     role bots (All hands, a shared project room, ...) every member role but
     the PA reads every message. Room membership decides; there is no list.
@@ -87,7 +102,7 @@ repo's own settings.
 
 Usage:
   python bot/wake.py                    # run: long-poll forever (up.cmd starts it)
-  python bot/wake.py --dry-run [--json] # what it would do with the waiting messages; spawns nothing
+  python bot/wake.py --dry-run [--json] # what it would do with the waiting messages and duty files; spawns nothing
   python bot/wake.py --json             # status: which role sessions are live, last event ids
 
 Stdlib only (D2).
@@ -98,6 +113,7 @@ import argparse
 import glob
 import importlib.util
 import json
+import math
 import os
 import queue
 import re
@@ -108,6 +124,7 @@ import threading
 import time
 import uuid
 from collections.abc import Callable
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -193,6 +210,25 @@ BOT_STOP_LINE = "bot loop stopped; @**Hemi|{founder_id}**, @-mention a role to c
 BOT_MARKER = ("From the {src} bot, a teammate — not the founder. "
               "This is not his approval for anything.")
 
+# Duty wakes (ops#338): the files the watchdog writes, one per role. Module
+# constants, read at call time, so the tests point them at a tmp folder. The
+# one env var is shared with ops tools/watchdog-check.py (CTO review).
+OPS_DIR = Path(os.environ.get("WAKE_OPS_DIR", r"C:\PlayGround\pool"))
+DUTY_DIR = OPS_DIR / "duty"
+USAGE_LIMIT = OPS_DIR / "usage-limit.json"  # {"until": iso}, written by worker.ps1 (ops#86)
+DUTY_ROLES = ("COO", "CTO", "PM")
+# The kinds the watchdog writes (its DUTY_KINDS); any other drops the file.
+DUTY_KINDS = ("needs-human", "working-no-run", "go-no-run", "cto-changes", "coo-process",
+              "cto-recommend", "cto-unsure", "cto-no-verdict")
+DUTY_URL = re.compile(r"https://github\.com/determlab/[A-Za-z0-9_.-]+/(pull|issues)/\d+")
+DUTY_KEY = re.compile(r"[A-Za-z0-9:#/._-]{1,120}")
+DUTY_CHECK_SECONDS = 60
+DUTY_STALE_SECONDS = 2 * HOUR
+DUTY_GAP_SECONDS = 30 * 60
+DUTY_REWAKE_SECONDS = 4 * HOUR
+DUTY_WAKES_PER_DAY = {"COO": 6, "CTO": 6, "PM": 12}  # Opus roles 6
+DUTY_WAKES_TOTAL_PER_DAY = 25
+DUTY_SEEN_KEEP = 500
 
 def _hook():
     """hooks/agora_hook.py by path: the pid check, the session registry and
@@ -579,6 +615,75 @@ def mentions(role: str, content: str) -> bool:
                      re.IGNORECASE) is not None
 
 
+def read_duty(path: Path, now: float) -> list[dict[str, Any]] | None:
+    """One role's duty file (ops#338): ``{"generated": iso, "items": [{key,
+    kind, url, age_h, first_seen}]}``. Every item is checked (kind in
+    DUTY_KINDS, a determlab PR or issue url, a float age_h, a short key from
+    a fixed charset); one bad item and the whole file is refused: ValueError
+    or TypeError saying what is wrong (FileNotFoundError: no file yet). None
+    when ``generated`` is more than 2 h old. Only key, kind, url and age_h are
+    kept: a title or any other field is never read."""
+    data = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(data, dict) or not isinstance(data.get("items"), list):
+        raise TypeError("no \"items\" list")
+    try:
+        generated = datetime.fromisoformat(str(data["generated"]).replace("Z", "+00:00"))
+    except (KeyError, ValueError) as exc:
+        raise ValueError("no ISO \"generated\" time") from exc
+    if generated.tzinfo is None:
+        generated = generated.replace(tzinfo=timezone.utc)
+    if now - generated.timestamp() > DUTY_STALE_SECONDS:
+        return None
+    items: list[dict[str, Any]] = []
+    keys: set[str] = set()
+    for i, it in enumerate(data["items"]):
+        if not isinstance(it, dict):
+            raise TypeError(f"item {i} is not an object")
+        key, kind, url, age = it.get("key"), it.get("kind"), it.get("url"), it.get("age_h")
+        if not (isinstance(key, str) and DUTY_KEY.fullmatch(key)):
+            raise ValueError(f"item {i}: bad key")
+        if kind not in DUTY_KINDS:
+            raise ValueError(f"item {i}: unknown kind")
+        if not (isinstance(url, str) and DUTY_URL.fullmatch(url)):
+            raise ValueError(f"item {i}: url is not a determlab PR or issue")
+        if not isinstance(age, float) or not math.isfinite(age) or age < 0:
+            raise ValueError(f"item {i}: bad age_h")
+        if key not in keys:
+            keys.add(key)
+            items.append({"key": key, "kind": kind, "url": url, "age_h": age})
+    return items
+
+
+def usage_limit_until(path: Path, now: float) -> datetime | None:
+    """The reset in ``usage-limit.json`` while it is still ahead, else None,
+    read as ops tools/review_run.py ``limit_ahead`` reads it: ``until`` as
+    ISO (``Z`` allowed, naive is UTC); a missing or unreadable file is no
+    limit."""
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))["until"]
+        until = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+    if until.tzinfo is None:
+        until = until.replace(tzinfo=timezone.utc)
+    return until if until.timestamp() > now else None
+
+
+def duty_prompt(role: str, items: list[dict[str, Any]]) -> str:
+    """The fixed duty prompt (ops#338): fixed text and the items as
+    ``- <kind> <url> (<age_h>h)``, every part checked by read_duty. No title."""
+    room = own_stream(role)
+    lines = "\n".join(f"- {it['kind']} {it['url']} ({it['age_h']:.1f}h)" for it in items)
+    return (f"You are the {role} (read agents/{role.lower()}.md). The watchdog found "
+            f"these items waiting on your role; this session was opened for them (a duty "
+            f"wake, ops#338), not by the founder, and closes 10 minutes after its last "
+            f"message. A duty wake never stands in for a founder decision.\n\n"
+            f"{SKILL_LINE}\n\n"
+            f"Act on each item per your charter:\n\n{lines}\n\n"
+            f"Then post exactly one line in the room #{room} saying what you did, with:\n"
+            f"  {_send_hint(role, room)}\n")
+
+
 def wildcard(content: str) -> bool:
     """A Zulip wildcard mention (``@**all**``, ``@**everyone**``, ``@**channel**``,
     ``@**stream**``, ``@**topic**``). Only a founder's counts, as a mention of
@@ -607,8 +712,13 @@ class Waker:
                  history: History | None = None, cwd: dict[str, str] | None = None,
                  members: Members | None = None,
                  bot_wakes: bool = False, bot_ids: dict[int, str] | None = None,
-                 post: Callable[[str, str, str], None] | None = None):
+                 post: Callable[[str, str, str], None] | None = None,
+                 log_dir: Path | None = None):
         self.founder_id = founder_id
+        # Where duty decisions are appended as <ROLE>.log lines (None: emit only).
+        self.log_dir = log_dir
+        self._duty_checked: float | None = None
+        self._duty_said: dict[str, str] = {}  # role -> last duty line, said once
         self._meeting_turn = False  # a delivery under the meeting-room rule
         self.bot_wakes = bot_wakes
         # {sender_id: role} of our own role bots, read from Zulip (ops#321).
@@ -1233,6 +1343,122 @@ class Waker:
             self.save()
         return out
 
+    # -- duty wakes (ops#338) --
+
+    def _duty(self, role: str) -> dict[str, Any]:
+        duty = self.state.get("duty")
+        if not isinstance(duty, dict):
+            duty = self.state["duty"] = {}
+        ds = duty.get(role)
+        if not isinstance(ds, dict):
+            ds = duty[role] = {}
+        if not isinstance(ds.get("wakes"), list):
+            ds["wakes"] = []
+        # seen: {key: {"at": when it woke, "rewoken": bool}}, oldest first.
+        if not isinstance(ds.get("seen"), dict):
+            ds["seen"] = {}
+        return ds
+
+    def _duty_decide(self, role: str, action: str, reason: str) -> dict[str, Any] | None:
+        """One ``duty <ROLE> wake|rewake|skip <reason>`` line, emitted and
+        appended to bot/.wake/<ROLE>.log. A skip that repeats the role's last
+        line is said once, not every minute."""
+        line = f"duty {role} {action} {reason}"
+        if action == "skip" and self._duty_said.get(role) == line:
+            return None
+        self._duty_said[role] = line
+        if self.log_dir is not None and not self.dry_run:
+            stamp = datetime.fromtimestamp(self.clock(), timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+            try:
+                self.log_dir.mkdir(parents=True, exist_ok=True)
+                with open(self.log_dir / f"{role}.log", "a", encoding="utf-8") as log:
+                    log.write(f"{stamp} {line}\n")
+            except OSError as exc:
+                print(f"wake: {role}: cannot write the duty log ({exc})", file=sys.stderr)
+        d = {"role": role, "action": f"duty-{action}", "reason": reason, "line": line}
+        self.emit(d)
+        return d
+
+    def _duty_cap(self, role: str, ds: dict[str, Any], now: float) -> str | None:
+        ds["wakes"] = [t for t in ds["wakes"] if isinstance(t, (int, float)) and now - t < DAY]
+        until = usage_limit_until(USAGE_LIMIT, now)
+        if until is not None:
+            return f"usage limit until {until.strftime('%Y-%m-%dT%H:%MZ')} ({USAGE_LIMIT})"
+        if ds["wakes"] and now - ds["wakes"][-1] < DUTY_GAP_SECONDS:
+            return "one duty wake per role per 30 min; retried at a later check"
+        cap = DUTY_WAKES_PER_DAY[role]
+        if len(ds["wakes"]) >= cap:
+            return f"{cap} duty wakes today, the {role} cap"
+        total = sum(1 for r in DUTY_ROLES for t in self._duty(r)["wakes"]
+                    if isinstance(t, (int, float)) and now - t < DAY)
+        if total >= DUTY_WAKES_TOTAL_PER_DAY:
+            return f"{DUTY_WAKES_TOTAL_PER_DAY} duty wakes today in all, the cap"
+        return None
+
+    def duty_tick(self, roles: Any) -> list[dict[str, Any]]:
+        """At most once per DUTY_CHECK_SECONDS: the duty file of each of
+        DUTY_ROLES that has a bot, and one batched wake for a role with a key
+        due. Never the PA. A bad file is a skip and a log line, never a crash."""
+        now = self.clock()
+        if self._duty_checked is not None and now - self._duty_checked < DUTY_CHECK_SECONDS:
+            return []
+        self._duty_checked = now
+        out = []
+        for role in DUTY_ROLES:
+            if role not in roles:
+                continue
+            d = self._duty_role(role, now)
+            if d:
+                out.append(d)
+        return out
+
+    def _duty_role(self, role: str, now: float) -> dict[str, Any] | None:
+        path = DUTY_DIR / f"{role}.json"
+        try:
+            items = read_duty(path, now)
+        except FileNotFoundError:
+            return self._duty_decide(role, "skip", f"no duty file at {path}")
+        except (OSError, ValueError, TypeError) as exc:
+            return self._duty_decide(role, "skip", f"malformed duty file {path}: {exc}")
+        if items is None:
+            return self._duty_decide(role, "skip", f"stale duty file {path} (generated over 2 h ago)")
+        ds = self._duty(role)
+        seen = ds["seen"]
+        new = [it for it in items if it["key"] not in seen]
+        again = [it for it in items if it["key"] in seen and not seen[it["key"]].get("rewoken")
+                 and now - float(seen[it["key"]].get("at") or 0) >= DUTY_REWAKE_SECONDS]
+        if not new and not again:
+            return self._duty_decide(role, "skip", "no new items")
+        capped = self._duty_cap(role, ds, now)
+        if capped:
+            return self._duty_decide(role, "skip", capped)
+        self._drop_stale(role)
+        # Its keys stay unseen: the role wakes on them once the session is gone.
+        if registry_live(role, _any_pid_alive) or self.role(role).get("session"):
+            return self._duty_decide(role, "skip", "session open")
+        due = new + again
+        ds["wakes"].append(now)  # a failed spawn counts too: no retry every minute
+        self.role(role)["session"] = {
+            "id": str(uuid.uuid4()), "stream": own_stream(role), "started_at": now,
+            "last_founder_at": None, "pid": None, "origin": "duty"}
+        try:
+            self._run(role, "spawn", duty_prompt(role, due), bot=True)
+        except SpawnError as exc:
+            self.role(role)["session"] = None
+            self.save()
+            return self._duty_decide(role, "skip", f"spawn failed: {exc}")
+        for it in new:
+            seen[it["key"]] = {"at": now, "rewoken": False}
+        for it in again:
+            seen[it["key"]]["rewoken"] = True
+        for old in list(seen)[:-DUTY_SEEN_KEEP]:
+            del seen[old]
+        self.save()
+        urls = ", ".join(it["url"] for it in due)
+        return self._duty_decide(role, "wake" if new else "rewake",
+                                 f"spawn session {self.role(role)['session']['id']} for "
+                                 f"{len(new)} new and {len(again)} re-woken item(s): {urls}")
+
     def status(self) -> dict[str, Any]:
         roles = {}
         for role in ROLES:
@@ -1412,6 +1638,7 @@ def run(cfg: dict[str, Any], waker: Waker) -> int:
     def wait() -> None:
         hook._hold_lock(lock)
         waker.tick()
+        waker.duty_tick(cfg["bots"])
 
     def start_until_up(role: str) -> None:
         # Zulip down (it boots beside us in up.cmd, or restarted): keep trying.
@@ -1441,6 +1668,7 @@ def run(cfg: dict[str, Any], waker: Waker) -> int:
                 elif qid == waker.role(role).get("queue_id"):
                     process_batch(waker, role, item)
             waker.tick()
+            waker.duty_tick(cfg["bots"])
     except KeyboardInterrupt:
         return 0
     finally:
@@ -1449,8 +1677,8 @@ def run(cfg: dict[str, Any], waker: Waker) -> int:
 
 def dry_run(cfg: dict[str, Any], waker: Waker) -> int:
     """What the waiting messages would do, from history after each role's
-    ``last_message_id`` (the last 20 mentions and DMs on a first run).
-    Registers nothing, saves nothing, spawns nothing."""
+    ``last_message_id`` (the last 20 mentions and DMs on a first run), then
+    the duty decisions (ops#338). Registers nothing, saves nothing, spawns nothing."""
     announce_skipped(cfg, waker)
     clients = {r: ZulipClient(cfg["site"], e, k, timeout=30.0) for r, (e, k) in cfg["bots"].items()}
     if waker.bot_wakes:
@@ -1463,13 +1691,15 @@ def dry_run(cfg: dict[str, Any], waker: Waker) -> int:
         for msg, flags in pairs:
             waker.on_message(role, msg, flags)
     waker.tick()
+    waker.duty_tick(cfg["bots"])  # the duty decisions, as duty-* lines
     return 0
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="wake.py", description=__doc__.split("\n")[0])
     parser.add_argument("--dry-run", action="store_true",
-                        help="print what it would do with the waiting messages; spawns nothing")
+                        help="print what it would do with the waiting messages and the duty "
+                             "files; spawns nothing")
     parser.add_argument("--json", action="store_true",
                         help="JSON lines; alone, print status (live sessions, last event ids) "
                              "and exit")
@@ -1495,7 +1725,7 @@ def main(argv: list[str] | None = None) -> int:
         print(caps_line(cfg["caps"]), flush=True)
     waker = Waker(cfg["founder_id"], STATE_DIR / "state.json", Spawner(),
                   dry_run=args.dry_run, emit=emit, cwd=cfg["cwd"],
-                  bot_wakes=cfg["bot_wakes"])
+                  bot_wakes=cfg["bot_wakes"], log_dir=STATE_DIR)
     try:
         if args.dry_run:
             return dry_run(cfg, waker)
