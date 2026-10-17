@@ -4,7 +4,14 @@ A small CLI rather than an MCP server (CTO ruling, 2026-09-10, issue #42): a
 tool added to a running MCP server is invisible to every session already
 connected (D1). A script is read fresh on every call.
 
+Rooms (ops#322): a room is a stream whose messages all go to one fixed topic,
+``chat``. ``--room`` is the way to name one; ``--stream``/``--topic`` still work.
+
 Usage:
+  python bot/zulip.py send --room coo --text "..."
+  python bot/zulip.py read --room coo [--since ID] [--json]     # the whole room, every old topic too
+  python bot/zulip.py wait --room coo [--seconds N] [--json]    # exit 2 with the next message there
+  python bot/zulip.py invite --room coo --who CTO --json        # refused: the founder invites from the page
   python bot/zulip.py send --stream coo --topic "#141 record shape" --text "..."
   python bot/zulip.py send --stream coo --topic "#141 record shape" --text "..." --reply-to ID
   python bot/zulip.py read --stream coo --topic "#141 record shape" [--since ID]
@@ -47,6 +54,11 @@ from zulip_client import ZulipClient, ZulipError
 
 DOTENV = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
 READ_LIMIT = 100  # newest N when there is no --since
+ROOM_TOPIC = "chat"  # ops#322: every message in a room goes to this one topic
+# The role bots `invite` would take (setup_streams.py makes them). Never a person.
+INVITE_ROLES = ("COO", "CTO", "PM", "CMO", "CPSO", "PA")
+INVITE_OFF = ("a role session cannot invite: the founder invites {who} with the Invite "
+              "button in the room #{room} on the chat page. Ask him to.")
 
 
 def _dotenv(path: str) -> dict[str, str]:
@@ -147,7 +159,60 @@ def cmd_send(client: ZulipClient, stream: str, topic: str, text: str,
         print(f"refused: Zulip answered without a message id: {sent}",
               file=sys.stderr)
         return 1
-    print(f"sent #{stream} › {topic} id={msg_id}")
+    where = f"#{stream}" if topic == ROOM_TOPIC else f"#{stream} › {topic}"
+    print(f"sent {where} id={msg_id}")
+    return 0
+
+
+def cmd_invite(room: str, who: str, as_json: bool = False) -> int:
+    """``invite --room X --who ROLE`` (ops#322). Role bots only, never a
+    person, and refused outright: an invite is the founder's, from the page's
+    Invite button. Exit 2, nothing changed."""
+    room = room.lstrip("#")
+    if who.upper() not in INVITE_ROLES:
+        error = (f"{who!r} is not a role bot: invite takes one of "
+                 f"{', '.join(INVITE_ROLES)}, never a person.")
+        code = "NOT_A_ROLE"
+    else:
+        error = INVITE_OFF.format(who=who.upper(), room=room)
+        code = "INVITE_OFF"
+    if as_json:
+        print(json.dumps({"ok": False, "code": code, "room": room, "who": who,
+                          "error": error}, ensure_ascii=False))
+    print(f"refused: {error} Nothing was changed.", file=sys.stderr)
+    return 2
+
+
+def cmd_wait_room(client: ZulipClient, room: str, seconds: float | None,
+                  as_json: bool = False, clock=None, sleep=None) -> int:
+    """Park until a message from someone else lands in ``room`` (any topic).
+    Exit 2 with it printed, 0 when ``--seconds`` runs out. The queue is
+    this call's own and is deleted on the way out. It polls once a second
+    without blocking, so ``--seconds`` holds whatever the server's long-poll
+    timeout is."""
+    import time
+    clock, sleep = clock or time.monotonic, sleep or time.sleep
+    room = room.lstrip("#")
+    if room not in _subscribed(client):
+        print(f"refused: {client.email} is not in the room #{room}.", file=sys.stderr)
+        return 2
+    reg = client.register(event_types=["message"], narrow=[["stream", room]])
+    qid, last = reg["queue_id"], reg["last_event_id"]
+    deadline = None if seconds is None else clock() + seconds
+    try:
+        while deadline is None or clock() < deadline:
+            for e in client.get_events(qid, last, dont_block=True):
+                last = max(last, int(e.get("id", last)))
+                m = e.get("message") if e.get("type") == "message" else None
+                if m and m.get("sender_email", "").lower() != client.email.lower():
+                    print(_json_line(m) if as_json else _line(m))
+                    return 2
+            sleep(1.0)
+    finally:
+        try:
+            client._request("DELETE", "events", {"queue_id": qid})
+        except (ZulipError, OSError, ValueError):
+            pass
     return 0
 
 
@@ -331,15 +396,18 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--as", dest="as_name",
                         help="bot to act as, e.g. COO -> ZULIP_COO_EMAIL / _API_KEY")
     sub = parser.add_subparsers(dest="cmd", required=True)
-    send = sub.add_parser("send", help="post to a stream and topic")
-    send.add_argument("--stream", required=True)
-    send.add_argument("--topic", required=True)
+    send = sub.add_parser("send", help="post to a room (or a stream and topic)")
+    to = send.add_mutually_exclusive_group(required=True)
+    to.add_argument("--room", help="the room; the message goes to its one topic")
+    to.add_argument("--stream")
+    send.add_argument("--topic", help="with --stream only")
     send.add_argument("--text", required=True)
     send.add_argument("--reply-to", type=int, metavar="ID",
                       help="quote this message above the text (ops#249), same as the "
                            "page's own quote button")
     read = sub.add_parser("read", help="print messages, oldest first")
     where = read.add_mutually_exclusive_group(required=True)
+    where.add_argument("--room", help="the whole room: every message, old topics too")
     where.add_argument("--stream")
     where.add_argument("--mentions", action="store_true",
                        help="everything that mentioned this bot, across streams")
@@ -347,9 +415,18 @@ def main(argv: list[str] | None = None) -> int:
     read.add_argument("--since", type=int, help="only messages after this id")
     read.add_argument("--json", action="store_true",
                       help="one JSON object per message per line (JSON Lines)")
-    wait = sub.add_parser("wait", help="park until this bot is mentioned or DMed")
+    wait = sub.add_parser("wait", help="park until this bot is mentioned or DMed, or with "
+                                       "--room until anyone else writes in that room")
+    wait.add_argument("--room", help="wait for the next message in this room")
     wait.add_argument("--session", help="lock and queue key (default: cli-<bot>)")
     wait.add_argument("--seconds", type=float, help="give up after this long")
+    wait.add_argument("--json", action="store_true", help="the message as one JSON line")
+    invite = sub.add_parser("invite", help="invite a role bot into a room (refused: the "
+                                           "founder invites from the page's Invite button)")
+    invite.add_argument("--room", required=True)
+    invite.add_argument("--who", required=True, metavar="ROLE",
+                        help="one of " + ", ".join(INVITE_ROLES))
+    invite.add_argument("--json", action="store_true", help="one JSON object on stdout")
     for name, what in (("archive", "hide a stream, or one topic with --topic, from the "
                                    "lists (messages are kept)"),
                        ("unarchive", "bring an archived stream or topic back")):
@@ -366,8 +443,10 @@ def main(argv: list[str] | None = None) -> int:
                         help="Zulip's emoji_name, e.g. thumbs_up")
         rc.add_argument("--json", action="store_true", help="one JSON object on stdout")
     typing_p = sub.add_parser("typing", help="set the typing/working indicator (ops#249)")
-    typing_p.add_argument("--stream", required=True)
-    typing_p.add_argument("--topic", required=True)
+    typing_to = typing_p.add_mutually_exclusive_group(required=True)
+    typing_to.add_argument("--room")
+    typing_to.add_argument("--stream")
+    typing_p.add_argument("--topic", help="with --stream only")
     typing_p.add_argument("--status", choices=("typing", "working"), default="working",
                           help="shown to readers as '<name> is typing/working on it' "
                                "(default: working, the agent case)")
@@ -379,6 +458,13 @@ def main(argv: list[str] | None = None) -> int:
     mark.add_argument("--topic", help="only this topic; every topic in the stream without it")
     mark.add_argument("--json", action="store_true", help="one JSON object on stdout")
     args = parser.parse_args(argv)
+    if args.cmd == "invite":  # refused before any credential or network is needed
+        return cmd_invite(args.room, args.who, args.json)
+    if getattr(args, "room", None):
+        args.stream, args.topic = args.room, (ROOM_TOPIC if args.cmd in ("send", "typing")
+                                              else None)
+    elif args.cmd in ("send", "typing") and not args.topic:
+        parser.error(f"{args.cmd} --stream needs --topic (or use --room)")
 
     client = load_client(args.as_name)
     try:
@@ -393,6 +479,8 @@ def main(argv: list[str] | None = None) -> int:
         if args.cmd == "send":
             return cmd_send(client, args.stream, args.topic, args.text, args.reply_to)
         if args.cmd == "wait":
+            if args.room:
+                return cmd_wait_room(client, args.room, args.seconds, args.json)
             return cmd_wait(client, args.as_name, args.session, args.seconds)
         if args.cmd == "unread":
             return cmd_unread(client, args.json)

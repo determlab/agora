@@ -187,6 +187,25 @@ def test_an_archived_topics_messages_never_count_toward_the_stream_bubble(arc):
     assert admin("GET", "unread")[1]["streams"][0]["unread"] == 3
 
 
+
+def test_322_an_archived_topics_messages_show_in_the_room_but_never_count_as_unread(arc):
+    """Rooms (ops#322) read a stream across its old topics: a topic archived
+    before rooms reappears in the room view, its rows unchanged, and its
+    messages still stay out of the unread count."""
+    admin, cto, sid, store = arc["admin"], arc["cto"], arc["sid"], arc["store"]
+    assert _send(cto, "old", "from an archived topic")[0] == 200
+    assert admin("POST", f"streams/{sid}/archived_topics", topic="old")[0] == 200
+    assert _send(cto, "chat", "in the room")[0] == 200
+    before = store.q("SELECT id, subject, content FROM messages ORDER BY id")
+    status, body = admin("GET", "messages", anchor="newest", num_before=10, num_after=0,
+                         narrow=json.dumps([{"operator": "channel", "operand": "feature"}]))
+    assert status == 200, body
+    assert [m["content"] for m in body["messages"]] == ["from an archived topic", "in the room"]
+    [feature] = admin("GET", "unread")[1]["streams"]
+    assert feature["unread"] == 1 and [t["name"] for t in feature["topics"]] == ["chat"]
+    assert [tuple(r) for r in store.q("SELECT id, subject, content FROM messages ORDER BY id")] \
+        == [tuple(r) for r in before]
+
 def test_mark_stream_as_read_clears_every_topics_bubble_at_once(arc):
     admin, cto, sid = arc["admin"], arc["cto"], arc["sid"]
     _send(cto, "t1", "one")
@@ -348,32 +367,21 @@ def test_cli_refusal_is_json_and_a_nonzero_exit(arc, cli, capsys):
 
 
 def test_the_pages_archive_calls_reach_the_server_as_it_sends_them(world):
+    # ops#322: the page archives rooms only; topics have no control there
+    # (the server's topic archive stays for agents, tested above).
     run, human = world["run"], world["human"]
     store = run.store
     sid = store.stream_by_ref("feature")["stream_id"]
-    assert page_api(run, human, "POST", "messages", type="stream", to="feature",
-                    topic="old", content="x")[0] == 200
-    got = _js(("archiveTopic", "restoreTopic", "setStreamArchived"), f"""
-      await archiveTopic({sid}, "old");
-      await restoreTopic({sid}, "old");
+    got = _js(("setStreamArchived",), f"""
       await setStreamArchived({sid}, true);
       await setStreamArchived({sid}, false);
       out.calls = calls;
     """, prelude=API_STUB)
     assert got["calls"] == [
-        ["POST", f"streams/{sid}/archived_topics", {"topic": "old"}],
-        ["DELETE", f"streams/{sid}/archived_topics", {"topic": "old"}],
         ["PATCH", f"streams/{sid}", {"is_archived": "true"}],
         ["PATCH", f"streams/{sid}", {"is_archived": "false"}]]
     # Replayed against the real server, each one does what it says.
-    expect = [{"old": True}, {"old": False}]
-    for (method, path, params), want in zip(got["calls"][:2], expect):
-        status, body = page_api(run, human, method, path, **params)
-        assert status == 200, body
-        status, body = page_api(run, human, "GET", f"users/me/{sid}/topics",
-                                include_archived="true")
-        assert {t["name"]: t["is_archived"] for t in body["topics"]} == want
-    for (method, path, params), want in zip(got["calls"][2:], (True, False)):
+    for (method, path, params), want in zip(got["calls"], (True, False)):
         status, body = page_api(run, human, method, path, **params)
         assert status == 200, body
         status, body = page_api(run, human, "GET", "users/me/subscriptions",
@@ -381,41 +389,24 @@ def test_the_pages_archive_calls_reach_the_server_as_it_sends_them(world):
         assert {s["name"]: s["is_archived"] for s in body["subscriptions"]}["feature"] is want
 
 
-def test_the_sidebar_archives_a_topic_and_the_archive_list_restores():
+def test_the_archive_list_shows_archived_rooms_and_restores_them():
     prelude = FAKE_DOM + API_STUB + """
-      const CARET = "c", GEAR = "g", SVG = "http://www.w3.org/2000/svg";
-      const opened = [];
       let loads = 0;
-      function openTopic(...a) { opened.push(a); }
-      function openMembers() {}
       async function loadStreams() { loads += 1; }
-      const S = {streams: [{stream_id: 1, name: "feature", invite_only: true}],
-                 topics: new Map([["feature", new Map([["live", 9]])]]),
-                 archivedStreams: [{stream_id: 2, name: "old-room", invite_only: false}],
-                 archivedTopics: new Map([["feature", ["done"]]]),
-                 collapsed: new Set(), open: null, adding: null};
+      const S = {streams: [{stream_id: 1, name: "feature"}],
+                 archivedStreams: [{stream_id: 2, name: "old-room"}], open: null};
     """
-    got = _js(("svgIcon", "renderStreams", "newTopicItem", "renderArchive", "archiveAction",
-               "archiveTopic", "restoreTopic", "setStreamArchived"), """
-      renderStreams();
+    got = _js(("renderArchive", "archiveAction", "setStreamArchived"), """
       renderArchive();
-      const arc = $("streams").querySelectorAll("button.topic-archive");
-      out.buttons = arc.map((b) => b.textContent);
-      await arc[0].on.click();
       const rows = $("archived").querySelectorAll("li.archived-row");
       out.rows = rows.map((r) => r.querySelector(".archived-name").textContent);
       out.label = $("archive-btn").textContent;
       await rows[0].querySelector("button.icon").on.click();
-      await rows[1].querySelector("button.icon").on.click();
-      rows[1].querySelector("button.archived-name").on.click();
-      out.calls = calls; out.opened = opened; out.loads = loads; out.toasts = toasts;
+      out.calls = calls; out.loads = loads; out.toasts = toasts;
     """, prelude=prelude)
-    assert got["buttons"] == ["ארכב"]
-    assert got["rows"] == ["#old-room", "#feature › done"]
-    assert got["label"] == "ארכיון · 2"
-    assert got["calls"] == [["POST", "streams/1/archived_topics", {"topic": "live"}],
-                            ["PATCH", "streams/2", {"is_archived": "false"}],
-                            ["DELETE", "streams/1/archived_topics", {"topic": "done"}]]
-    # Each action reads the lists back from the server; an archived topic still opens.
-    assert got["loads"] == 3 and got["opened"] == [[1, "feature", "done"]]
-    assert all(not bad for _, bad in got["toasts"])
+    assert got["rows"] == ["#old-room"]
+    assert got["label"] == "ארכיון · 1"
+    assert got["calls"] == [["PATCH", "streams/2", {"is_archived": "false"}]]
+    # The action reads the lists back from the server.
+    assert got["loads"] == 1
+    assert got["toasts"] == [["#old-room שוחזר", False]]

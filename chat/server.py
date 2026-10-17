@@ -104,6 +104,11 @@ NO_ALLOW_HOST = ("no --allow-host configured: set AGORA_ALLOW_HOST and run "
 # ops#249 batch 1: a "start" with no renewal and no "stop" clears itself out
 # after this long — no sweep thread, a reader just ignores a stale row.
 TYPING_TTL = 15.0
+# ops#322: a room is a stream whose new messages all go to this one topic.
+# Old topics stay in the database; the page shows a room as all its messages.
+ROOM_TOPIC = "chat"
+ROOM_NAME_MAX = 60
+ROOM_NAME_CHARS = " -_."
 
 
 def default_dashboard_cmd() -> str:
@@ -190,6 +195,28 @@ def _no_stream(name) -> ApiError:
     return ApiError(f"unknown stream '{name}', or it is invite_only and you are not "
                     f"subscribed: create it, or be subscribed to it, with "
                     f"POST /users/me/subscriptions", "STREAM_DOES_NOT_EXIST")
+
+
+def room_name_error(name) -> str | None:
+    """Why ``name`` cannot be a room name, or None (ops#322). A room name
+    reaches the hint a woken session copies into a shell command, so it is
+    letters (any script), digits, space and ``-_.`` only, at most 60."""
+    if not isinstance(name, str) or not name.strip():
+        return "A room needs a name"
+    if len(name) > ROOM_NAME_MAX:
+        return f"Room name too long: {len(name)} characters, the limit is {ROOM_NAME_MAX}"
+    bad = sorted({c for c in name if not (c.isalnum() or c in ROOM_NAME_CHARS)})
+    if bad or name != name.strip():
+        shown = " ".join(repr(c) for c in bad) or "a space at either end"
+        return (f"Room name {name!r} has {shown}: use letters, digits, spaces and "
+                f"- _ . only")
+    return None
+
+
+def _check_room_name(name) -> None:
+    why = room_name_error(name)
+    if why:
+        raise ApiError(why, "BAD_ROOM_NAME")
 
 
 def _new_key() -> str:
@@ -943,9 +970,8 @@ class Chat:
                 if len(refs) != 1:
                     raise ApiError("'to' must name exactly one stream")
                 stream = self.s.visible_stream(me, refs[0])
-                topic = p.get("topic", p.get("subject"))
-                if topic is None:
-                    raise ApiError("Missing topic: send 'topic'", "REQUEST_VARIABLE_MISSING")
+                # ops#322: a room has one fixed topic; an old caller's topic is kept.
+                topic = p.get("topic", p.get("subject")) or ROOM_TOPIC
                 if stream["is_archived"]:
                     raise ApiError(f"Stream #{stream['name']} is archived: restore it first "
                                    f"with PATCH /streams/{stream['stream_id']} "
@@ -1343,8 +1369,39 @@ class Chat:
             return [me]
         users = [self.s.user_by_ref(r) for r in _json_list(p["principals"])]
         if any(u["id"] != me["id"] for u in users):
+            # ops#322: only a person invites into or removes from a room; a
+            # role session's CLI invite stays refused. No bot ever invites the PA.
+            if me["is_bot"]:
+                raise ApiError("A bot cannot add or remove others in a room: the founder "
+                               "does it with the page's Invite button", "INVITE_NOT_ALLOWED")
             self._admin(me, "subscribe or unsubscribe other users")
         return users
+
+    def _subscription_events(self, row, user: dict, op: str) -> None:
+        """ops#322: ``subscription`` events, Zulip's shape, inside the caller's
+        transaction: ``add``/``remove`` to the user whose membership changed,
+        ``peer_add``/``peer_remove`` to the room's other members. Only a queue
+        that asked for ``subscription`` gets them; an invite wakes nobody."""
+        sid = row["stream_id"]
+        own = {"type": "subscription", "op": op,
+               "subscriptions": [stream_json(row)] if op == "add"
+               else [{"name": row["name"], "stream_id": sid}]}
+        peer = {"type": "subscription", "op": "peer_" + op,
+                "stream_ids": [sid], "user_ids": [user["id"]]}
+        peers = {r[0] for r in self.s.q("SELECT user_id FROM subscriptions WHERE stream_id=?",
+                                        (sid,))} - {user["id"]}
+        for q in self.s.q("SELECT queue_id, user_id, event_types FROM queues"):
+            types = json.loads(q["event_types"]) if q["event_types"] else None
+            if types is None or "subscription" not in types:
+                continue
+            if q["user_id"] == user["id"]:
+                body = own
+            elif q["user_id"] in peers:
+                body = peer
+            else:
+                continue
+            self.s.x("INSERT INTO events (queue_id, body) VALUES (?,?)",
+                     (q["queue_id"], json.dumps(body)))
 
     @staticmethod
     def _names(p: dict) -> list[str]:
@@ -1366,15 +1423,23 @@ class Chat:
                 row = self.s.stream_by_ref(name)
                 if row is None:
                     self._admin(me, f"create stream #{name}")
-                    if len(name) > 60:
-                        raise ApiError(f"Stream name too long: '{name}' (60 characters max)")
+                    _check_room_name(name)
                     row = self.s.one("SELECT * FROM streams WHERE stream_id=?",
                                      (self.s.create_stream(name, invite_only),))
                 elif row["invite_only"] and me["role"] > ROLE_ADMIN \
                         and row["stream_id"] not in self.s.subscribed(me["id"]):
                     raise _no_stream(name)
+                elif me["is_bot"] and row["stream_id"] not in self.s.subscribed(me["id"]):
+                    # ops#322: a bot joining a public room by itself would change
+                    # that room's bot count; only the founder invites.
+                    raise ApiError(f"A bot cannot join #{row['name']} by itself: the founder "
+                                   "invites it with the page's Invite button",
+                                   "INVITE_NOT_ALLOWED")
                 for u in users:
-                    into = done if self.s.subscribe(u["id"], row["stream_id"]) else already
+                    new = self.s.subscribe(u["id"], row["stream_id"])
+                    if new:
+                        self._subscription_events(row, u, "add")
+                    into = done if new else already
                     into.setdefault(u["email"], []).append(row["name"])
         return {"subscribed": done, "already_subscribed": already, "unauthorized": []}
 
@@ -1389,8 +1454,11 @@ class Chat:
                     raise _no_stream(name)
                 n = 0
                 for u in users:
-                    n += self.s.db.execute("DELETE FROM subscriptions WHERE user_id=? AND "
-                                           "stream_id=?", (u["id"], row["stream_id"])).rowcount
+                    gone = self.s.db.execute("DELETE FROM subscriptions WHERE user_id=? AND "
+                                             "stream_id=?", (u["id"], row["stream_id"])).rowcount
+                    if gone:
+                        self._subscription_events(row, u, "remove")
+                    n += gone
                 (removed if n else not_removed).append(row["name"])
         return {"removed": removed, "not_removed": not_removed}
 
@@ -1414,6 +1482,7 @@ class Chat:
                 self.s.x("UPDATE streams SET description=? WHERE stream_id=?",
                          (p["description"], sid))
             if p.get("new_name"):
+                _check_room_name(p["new_name"])
                 self.s.x("UPDATE streams SET name=? WHERE stream_id=?", (p["new_name"], sid))
             if p.get("is_archived") is not None:
                 self.archive_stream(me, sid, _bool(p["is_archived"], False))
