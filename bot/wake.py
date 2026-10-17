@@ -67,6 +67,15 @@ How it works:
     a bot message never moves ``last_founder_at``. The prompt's first line
     says it came from a bot, not the founder. A founder message bypasses
     every cap.
+  - Multi-bot rooms are meetings (issue #146): in every room with two or more
+    role bots (All hands, a shared project room, ...) every member role but
+    the PA reads every message. Room membership decides; there is no list.
+    A founder message, tagged or not, goes to every member role: resumed or
+    queued on an open session, or a fresh one spawned. A role bot's untagged
+    message goes to every other member role with an open session there
+    (never a spawn), marked as a bot's, under the bot caps; its ``@**ROLE**``
+    wakes as above. A hand-opened session's hook reads the whole room
+    itself. Everywhere else the room rules above hold.
 
 Security (type B — this starts processes from chat input): only the founder's
 user id triggers, and with BOT_WAKES=on the user ids of our own role bots;
@@ -148,6 +157,8 @@ TICK_SECONDS = 30.0
 BACKFILL_LIMIT = 1000
 ROOM_NAME_MAX = 60
 ROOM_TOPIC = "chat"  # a room's one fixed topic, as in bot/zulip.py (ops#322)
+# Multi-bot rooms (issue #146); hooks/agora_hook.py applies the same rule.
+MEETING = "deliver (meeting room)"
 
 
 def safe_room(name: Any) -> bool:
@@ -598,6 +609,7 @@ class Waker:
                  bot_wakes: bool = False, bot_ids: dict[int, str] | None = None,
                  post: Callable[[str, str, str], None] | None = None):
         self.founder_id = founder_id
+        self._meeting_turn = False  # a delivery under the meeting-room rule
         self.bot_wakes = bot_wakes
         # {sender_id: role} of our own role bots, read from Zulip (ops#321).
         self.bot_ids: dict[int, str] = dict(bot_ids or {})
@@ -627,6 +639,8 @@ class Waker:
 
     def _decide(self, role: str, action: str, reason: str, msg: dict[str, Any] | None,
                 **extra: Any) -> dict[str, Any]:
+        if self._meeting_turn and action in ("spawn", "resume", "queue"):
+            reason, extra = f"{MEETING}: {reason}", {"meeting": True, **extra}
         d = {"role": role, "action": action, "reason": reason, **extra}
         if msg is not None:
             src = self._bot_of(msg)
@@ -749,6 +763,10 @@ class Waker:
         return self.bot_ids.get(sender)
 
     def _route(self, role: str, msg: dict[str, Any], flags: list[str]) -> dict[str, Any]:
+        if self._in_meeting(role, msg):
+            d = self._route_meeting(role, msg, flags)
+            if d is not None:
+                return d
         if msg.get("sender_id") == self.founder_id:
             return self._route_founder(role, msg, flags)
         src = self._bot_of(msg)
@@ -758,6 +776,57 @@ class Waker:
         off = "" if self.bot_wakes else \
             "; bot wakes are off (BOT_WAKES=on in bot/.env turns them on)"
         return self._decide(role, "skip", f"sender {who} is not the founder{off}", msg)
+
+    # -- multi-bot rooms are meetings (issue #146) --
+
+    def _in_meeting(self, role: str, msg: dict[str, Any]) -> bool:
+        """A stream message, for a role other than the PA (it never joins a
+        company room, ops#327). ``_route_meeting`` checks the room's members."""
+        return role != "PA" and msg.get("type") == "stream"
+
+    def _route_meeting(self, role: str, msg: dict[str, Any],
+                       flags: list[str]) -> dict[str, Any] | None:
+        """Every member role reads every message of a multi-bot room. None: the
+        usual rules decide (not a member, members unknown, one role bot in the
+        room, a sender that is neither the founder nor another role's bot, or a
+        bot's @**ROLE**)."""
+        room = _where(msg, role)
+        if not safe_room(room):
+            return None
+        members = self._room_members(role, room)
+        if members is None:
+            return None
+        bots = role_bots(members) - {"PA"}  # the PA never makes a room multi-bot
+        if role not in bots or len(bots) < 2:
+            return None
+        content = str(msg.get("content") or "")
+        if msg.get("sender_id") == self.founder_id:
+            self._founder_resets(msg)
+            src = None
+        else:
+            src = self._bot_of(msg)
+            if (src is None or src == role or role not in AGENT["bot_wakes"].get(src, ())
+                    or ("mentioned" in flags and mentions(role, content))):
+                return None
+        self._drop_stale(role)
+        hand = registry_live(role, _any_pid_alive)
+        if hand:
+            return self._decide(role, "skip", f"live {role} session (pid {hand}); its hook "
+                                "delivers every message of a multi-bot room", msg)
+        if src is not None:
+            sess = self.role(role).get("session")
+            if not sess or sess.get("closing") or sess.get("stream") != room:
+                return self._decide(role, "skip", f"meeting room #{room}: a bot's message "
+                                    f"reaches only an open {role} session here, never "
+                                    "opens one", msg)
+            capped = self._bot_cap(role, src, msg, spawn=False)
+            if capped:
+                return capped
+        self._meeting_turn = True
+        try:
+            return self._deliver(role, msg, founder=src is None)
+        finally:
+            self._meeting_turn = False
 
     # -- bot wakes (ops#321) --
 

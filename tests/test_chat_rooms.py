@@ -301,7 +301,7 @@ class _Spawner:
         return True
 
 
-def test_wake_against_the_server_one_bot_room_wakes_multi_bot_room_needs_the_tag(
+def test_wake_against_the_server_one_bot_room_wakes_multi_bot_room_reaches_every_member(
         run, tmp_path, monkeypatch):
     wake = _load("wake")
     monkeypatch.setattr(wake, "registry_live", lambda role, alive: None)
@@ -321,9 +321,10 @@ def test_wake_against_the_server_one_bot_room_wakes_multi_bot_room_needs_the_tag
 
     # #pa: the founder and the PA only — no tag needed
     assert w.on_message("PA", say("pa", "remind me at 5"), [])["action"] == "spawn"
-    # All hands: four role bots — only the tagged one wakes
+    # All hands: four role bots — a meeting (issue #146): every member reads
+    # the line, tagged or not, and the PA never does
     m = say("All hands", "@**CTO** is the design done?")
-    got = {r: w.on_message(r, m, ["mentioned"])["action"] for r in ("COO", "CTO", "PM")}
-    assert got == {"COO": "skip", "CTO": "spawn", "PM": "skip"}
+    got = {r: w.on_message(r, m, ["mentioned"])["action"] for r in ("COO", "CTO", "PM", "PA")}
+    assert got == {"COO": "spawn", "CTO": "spawn", "PM": "spawn", "PA": "skip"}
     prompt = dict(sp.started)["CTO"]
     assert '--room "All hands"' in prompt and "--topic" not in prompt
