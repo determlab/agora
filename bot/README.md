@@ -57,6 +57,11 @@ two cannot wake each other in a loop. `--check` counts every member of
 founder missing, or on it being public. Both bots post there as usual:
 `python bot/zulip.py --as CTO send --stream feature --topic "ops#44 routes" --text "..."`.
 
+**Direct message to the founder (issue #150):** `python bot/zulip.py --as PM send --dm founder --text "..." [--json]`
+sends one private message from the role bot to the founder, addressed by the existing
+`FOUNDER_ZULIP_ID` (no new key). It prints the message id. `founder` is the only value
+`--dm` accepts: any other recipient is refused, exit 2, nothing sent.
+
 The **Watchdog** bot (issue #49) is the ops watchdog's own bot user, not the
 COO bot: it also posts to `#coo` to wake the COO, and a bot's own posts never
 wake its own session (#50). It is subscribed to `#status` and `#coo` and

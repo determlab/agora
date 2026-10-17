@@ -9,6 +9,7 @@ Rooms (ops#322): a room is a stream whose messages all go to one fixed topic,
 
 Usage:
   python bot/zulip.py send --room coo --text "..."
+  python bot/zulip.py --as PM send --dm founder --text "..." [--json]   # sends one private message to the founder
   python bot/zulip.py read --room coo [--since ID] [--json]     # the whole room, every old topic too
   python bot/zulip.py wait --room coo [--seconds N] [--json]    # exit 2 with the next message there
   python bot/zulip.py invite --room coo --who CTO --json        # refused: the founder invites from the page
@@ -161,6 +162,30 @@ def cmd_send(client: ZulipClient, stream: str, topic: str, text: str,
         return 1
     where = f"#{stream}" if topic == ROOM_TOPIC else f"#{stream} › {topic}"
     print(f"sent {where} id={msg_id}")
+    return 0
+
+
+def cmd_send_dm(client: ZulipClient, who: str, text: str, as_json: bool = False) -> int:
+    """``send --dm founder`` (issue #150): one private message to the founder,
+    addressed by ``FOUNDER_ZULIP_ID``. Any other recipient is refused."""
+    if who != "founder":
+        print(f"refused: --dm takes only 'founder', not {who!r}. Nothing was sent.",
+              file=sys.stderr)
+        return 2
+    raw = os.environ.get("FOUNDER_ZULIP_ID") or _dotenv(DOTENV).get("FOUNDER_ZULIP_ID", "")
+    if not raw.isdigit():
+        print("refused: FOUNDER_ZULIP_ID is not set to a number (environment or bot/.env). "
+              "Nothing was sent.", file=sys.stderr)
+        return 2
+    sent = client.send_message([int(raw)], text, type_="private")
+    msg_id = sent.get("id")
+    if not msg_id:
+        print(f"refused: Zulip answered without a message id: {sent}", file=sys.stderr)
+        return 1
+    if as_json:
+        print(json.dumps({"ok": True, "id": msg_id, "dm": "founder"}, ensure_ascii=False))
+    else:
+        print(f"sent direct message to the founder id={msg_id}")
     return 0
 
 
@@ -396,12 +421,15 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--as", dest="as_name",
                         help="bot to act as, e.g. COO -> ZULIP_COO_EMAIL / _API_KEY")
     sub = parser.add_subparsers(dest="cmd", required=True)
-    send = sub.add_parser("send", help="post to a room (or a stream and topic)")
+    send = sub.add_parser("send", help="post to a room (or a stream and topic); --dm founder sends one private message to the founder")
     to = send.add_mutually_exclusive_group(required=True)
+    to.add_argument("--dm", metavar="WHO",
+                    help="'founder' only: sends one private message to the founder")
     to.add_argument("--room", help="the room; the message goes to its one topic")
     to.add_argument("--stream")
     send.add_argument("--topic", help="with --stream only")
     send.add_argument("--text", required=True)
+    send.add_argument("--json", action="store_true", help="with --dm: one JSON object on stdout")
     send.add_argument("--reply-to", type=int, metavar="ID",
                       help="quote this message above the text (ops#249), same as the "
                            "page's own quote button")
@@ -463,7 +491,7 @@ def main(argv: list[str] | None = None) -> int:
     if getattr(args, "room", None):
         args.stream, args.topic = args.room, (ROOM_TOPIC if args.cmd in ("send", "typing")
                                               else None)
-    elif args.cmd in ("send", "typing") and not args.topic:
+    elif args.cmd in ("send", "typing") and not args.topic and not getattr(args, "dm", None):
         parser.error(f"{args.cmd} --stream needs --topic (or use --room)")
 
     client = load_client(args.as_name)
@@ -476,6 +504,8 @@ def main(argv: list[str] | None = None) -> int:
                 if args.json:
                     print(json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False))
                 raise
+        if args.cmd == "send" and args.dm:
+            return cmd_send_dm(client, args.dm, args.text, args.json)
         if args.cmd == "send":
             return cmd_send(client, args.stream, args.topic, args.text, args.reply_to)
         if args.cmd == "wait":
