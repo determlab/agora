@@ -406,6 +406,33 @@ def test_missing_founder_id_says_what_to_add(wake, tmp_path, monkeypatch):
         wake.load_config(env)
 
 
+def test_caps_default_and_env_override(wake, tmp_path, monkeypatch):
+    for key in wake.CAP_KEYS:
+        monkeypatch.delenv(key, raising=False)
+    env = tmp_path / ".env"
+    base = "FOUNDER_ZULIP_ID=8\nZULIP_CTO_EMAIL=a\nZULIP_CTO_API_KEY=k\n"
+    env.write_text(base)
+    assert wake.load_config(env)["caps"] == {
+        "BOT_TOPIC_TURNS_PER_HOUR": 6, "BOT_ROLE_SPAWNS_PER_HOUR": 3,
+        "BOT_ROLE_SPAWNS_PER_DAY": 2000, "BOT_TURNS_PER_DAY": 10000}
+    env.write_text(base + "BOT_TOPIC_TURNS_PER_HOUR=7\nBOT_ROLE_SPAWNS_PER_HOUR=8\n"
+                   "BOT_ROLE_SPAWNS_PER_DAY=9\nBOT_TURNS_PER_DAY=10\n")
+    caps = wake.load_config(env)["caps"]
+    assert list(caps.values()) == [7, 8, 9, 10]
+    assert "BOT_TURNS_PER_DAY=10" in wake.caps_line(caps)
+
+
+@pytest.mark.parametrize("bad", ["0", "-5", "abc", "1.5", "1e3"])
+def test_bad_cap_names_the_key(wake, tmp_path, monkeypatch, bad):
+    for key in wake.CAP_KEYS:
+        monkeypatch.delenv(key, raising=False)
+    env = tmp_path / ".env"
+    env.write_text(f"FOUNDER_ZULIP_ID=8\nZULIP_CTO_EMAIL=a\nZULIP_CTO_API_KEY=k\n"
+                   f"BOT_TURNS_PER_DAY={bad}\n")
+    with pytest.raises(wake.ConfigError, match="BOT_TURNS_PER_DAY.*positive whole number"):
+        wake.load_config(env)
+
+
 def test_command_takes_only_our_uuid(wake):
     with pytest.raises(ValueError):
         wake.build_command("spawn", "CTO", "x; rm -rf /")
