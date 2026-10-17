@@ -1696,7 +1696,8 @@ def test_founder_bypasses_the_daily_and_role_caps(wake, tmp_path):
     assert w.on_message("CTO", msg(11), ["mentioned"])["action"] == "spawn"
 
 
-def test_role_spawn_cap_per_hour_and_per_day(wake, tmp_path):
+def test_role_spawn_cap_per_hour_and_per_day(wake, tmp_path, monkeypatch):
+    monkeypatch.setattr(wake, "BOT_ROLE_SPAWNS_PER_DAY", 10)  # production cap is higher
     clock = Clock()
     w = make_bots(wake, tmp_path, clock=clock)
 
@@ -1716,7 +1717,8 @@ def test_role_spawn_cap_per_hour_and_per_day(wake, tmp_path):
     assert "today" in w.emitted[-1]["reason"]
 
 
-def test_global_daily_cap(wake, tmp_path):
+def test_global_daily_cap(wake, tmp_path, monkeypatch):
+    monkeypatch.setattr(wake, "BOT_TURNS_PER_DAY", 25)  # production cap is higher
     clock = Clock()
     w = make_bots(wake, tmp_path, clock=clock)
     actions = []
