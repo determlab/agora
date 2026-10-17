@@ -105,8 +105,11 @@ AGENT: dict[str, Any] = {
     # The PA (ops#293 item 7) runs in PA_DIR from bot/.env, on Sonnet.
     "models": {"COO": "opus", "CTO": "opus", "PM": "sonnet", "CMO": "sonnet", "CPSO": "sonnet",
                "PA": "sonnet"},
-    # A founder message in this stream calls the role without a mention.
-    "home_streams": {"PA": "pa"},
+    # A founder message in this stream calls the role without a mention: the
+    # role's own room is a conversation with it, a tag is not needed there.
+    # Names as setup_streams.py makes them (#PM is upper case).
+    "home_streams": {"PA": "pa", "COO": "coo", "CTO": "cto", "PM": "PM",
+                     "CMO": "cmo", "CPSO": "cpso"},
     # Where a conversation the agent made is kept, to tell a session that
     # exists from an id that never got one (ops#318). None: do not check.
     "conversations": str(Path(os.environ.get("CLAUDE_CONFIG_DIR")
@@ -395,7 +398,7 @@ def _where(msg: dict[str, Any], role: str) -> tuple[str, str]:
     if msg.get("type") == "stream":
         return str(msg.get("display_recipient") or ""), str(msg.get("subject") or "")
     # zulip.py sends to streams only: a DM is answered in the role's own stream.
-    return role.lower(), "direct message"
+    return own_stream(role), "direct message"
 
 
 def own_stream(role: str) -> str:

@@ -157,8 +157,9 @@ def test_sender_id_is_compared_not_the_name(wake, tmp_path):
 
 
 def test_founder_without_mention_in_a_stream_is_skipped(wake, tmp_path):
+    # outside the role's own stream: the PM reads #coo, but #coo is not the PM's
     w = make(wake, tmp_path)
-    assert w.on_message("CTO", msg(10), [])["action"] == "skip"
+    assert w.on_message("PM", msg(10, stream="coo"), [])["action"] == "skip"
     assert w.spawner.started == []
 
 
@@ -167,7 +168,7 @@ def test_founder_dm_spawns_and_is_answered_in_the_role_stream(wake, tmp_path):
     d = w.on_message("PM", msg(10, stream=None), [])
     assert d["action"] == "spawn" and d["model"] == "sonnet"
     prompt = w.spawner.started[0][1]
-    assert "#pm › direct message" in prompt
+    assert "#PM › direct message" in prompt
 
 
 def test_a_session_opened_by_hand_is_left_to_its_hook(wake, tmp_path, monkeypatch):
@@ -618,11 +619,11 @@ def test_founder_follow_up_in_the_topic_extends_the_idle_timer(wake, tmp_path):
     assert len(w.spawner.started) == 2  # the spawn and the close turn; nothing delivered
     # another topic, or another sender, does not count
     w2 = make(wake, tmp_path / "b", clock=clock)
-    w2.on_message("CTO", msg(20), ["mentioned"])
+    w2.on_message("CTO", msg(20, stream="coo"), ["mentioned"])
     t0 = w2.role("CTO")["session"]["last_founder_at"]
     clock.t += 60
-    w2.on_message("CTO", msg(21, topic="other"), [])
-    w2.on_message("CTO", msg(22, sender=99), [])
+    w2.on_message("CTO", msg(21, stream="coo", topic="other"), [])
+    w2.on_message("CTO", msg(22, stream="coo", sender=99), [])
     assert w2.role("CTO")["session"]["last_founder_at"] == t0
 
 
@@ -863,16 +864,47 @@ def test_untagged_follow_up_in_own_stream_topic_goes_to_the_open_session(wake, t
     assert len(w.spawner.started) == 3
 
 
-def test_untagged_never_opens_a_session_nor_reaches_another_topic(wake, tmp_path):
+def test_untagged_outside_the_own_stream_never_opens_a_session(wake, tmp_path):
     w = make(wake, tmp_path)
-    assert w.on_message("CTO", msg(10), [])["action"] == "skip"  # no session: needs a mention
+    assert w.on_message("CTO", msg(10, stream="feature"), [])["action"] == "skip"
     assert w.spawner.started == []
-    w.on_message("CTO", msg(11), ["mentioned"])
+    w.on_message("CTO", msg(11, stream="feature"), ["mentioned"])
     w.spawner.finish_all()
-    assert w.on_message("CTO", msg(12, topic="other"), [])["action"] == "skip"
+    assert w.on_message("CTO", msg(12, stream="feature", topic="other"), [])["action"] == "skip"
     assert w.on_message("CTO", msg(13, sender=99), [])["action"] == "skip"
-    assert w.on_message("PM", msg(14, stream="pm"), [])["action"] == "skip"  # PM has no session
+    assert w.on_message("PM", msg(14, stream="feature"), [])["action"] == "skip"
     assert len(w.spawner.started) == 1
+
+
+@pytest.mark.parametrize("role,stream", [("PM", "PM"), ("CTO", "cto"), ("CMO", "cmo"),
+                                         ("CPSO", "cpso"), ("COO", "coo")])
+def test_founder_untagged_in_the_role_own_stream_wakes_it(wake, tmp_path, role, stream):
+    # founder 2026-10-17: in #PM the PM answered only when he tagged it
+    w = make(wake, tmp_path)
+    assert wake.own_stream(role) == stream
+    assert w.on_message(role, msg(10, "hi", stream=stream), [])["action"] == "spawn"
+
+
+def test_founder_untagged_in_a_shared_room_wakes_only_its_owner(wake, tmp_path):
+    # the real shared rooms (setup_streams.py): PM reads #coo; COO and CTO read #PM.
+    # One untagged founder line wakes the room's owner and no other bot.
+    w = make(wake, tmp_path)
+    assert w.on_message("PM", msg(10, "hi", stream="coo"), [])["action"] == "skip"
+    assert w.on_message("COO", msg(11, "hi", stream="PM"), [])["action"] == "skip"
+    assert w.on_message("CTO", msg(12, "hi", stream="PM"), [])["action"] == "skip"
+    assert w.spawner.started == []
+    assert w.on_message("COO", msg(13, "hi", stream="coo"), [])["action"] == "spawn"
+    assert len(w.spawner.started) == 1
+
+
+def test_every_home_stream_is_a_stream_setup_streams_makes(wake):
+    sys.path.insert(0, str(BOT_DIR))
+    try:
+        import setup_streams
+    finally:
+        sys.path.remove(str(BOT_DIR))
+    homes = set(wake.AGENT["home_streams"].values())
+    assert homes <= set(setup_streams.STREAMS), sorted(homes - set(setup_streams.STREAMS))
 
 
 def test_backfill_reads_the_role_own_stream(wake, tmp_path, monkeypatch):
@@ -946,13 +978,17 @@ def test_session_whose_conversation_does_not_exist_starts_fresh(wake, tmp_path):
     argv = w.spawner.started[-1][0]
     assert argv[4] == "--session-id" and argv[5] != sid
     assert [a[0][4] for a in w.spawner.started] == ["--session-id", "--session-id"]
-    # an untagged follow-up to a stale session is not resumed either
+    # an untagged follow-up in #cmo to a stale session is not resumed either:
+    # the own stream needs no tag, so it opens a fresh session
     w2 = make(wake, tmp_path / "b")
     w2.on_message("CMO", msg(20, stream="cmo"), ["mentioned"])
     w2.spawner.finish_all()
-    w2.spawner.missing.add(w2.spawner.started[0][0][5])
-    assert w2.on_message("CMO", msg(21, stream="cmo"), [])["action"] == "skip"
-    assert len(w2.spawner.started) == 1 and w2.role("CMO")["session"] is None
+    stale = w2.spawner.started[0][0][5]
+    w2.spawner.missing.add(stale)
+    assert w2.on_message("CMO", msg(21, stream="cmo"), [])["action"] == "spawn"
+    argv = w2.spawner.started[-1][0]
+    assert argv[4] == "--session-id" and argv[5] != stale
+    assert not any("--resume" in a[0] for a in w2.spawner.started)
 
 
 def test_founder_message_to_a_closing_session_with_nothing_running_starts_fresh(wake, tmp_path):
