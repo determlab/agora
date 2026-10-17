@@ -1686,6 +1686,18 @@ def load_page(path: str = PAGE) -> tuple[bytes, str]:
     return html.encode("utf-8"), csp
 
 
+# A client that hangs up before its reply (a phone tab sleeps, a long-poll
+# is cancelled): a normal disconnect, not a server error (ops#324).
+DISCONNECT = (ConnectionAbortedError, ConnectionResetError, BrokenPipeError)
+
+
+class Server(ThreadingHTTPServer):
+    def handle_error(self, request, client_address) -> None:
+        if isinstance(sys.exc_info()[1], DISCONNECT):
+            return  # quiet: no traceback for a client that went away
+        super().handle_error(request, client_address)
+
+
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     server_version = "AgoraChat/0.1"
@@ -1808,6 +1820,8 @@ class Handler(BaseHTTPRequestHandler):
             self._reply(200, {"result": "success", "msg": "", **out})
         except ApiError as e:
             self._reply(e.status, {"result": "error", "msg": e.msg, "code": e.code, **e.extra})
+        except DISCONNECT:
+            self.close_connection = True  # the socket is gone: no 500 to send on it
         except Exception as e:  # a crash still answers in Zulip's shape, never a dropped socket
             self._reply(500, {"result": "error", "msg": f"server error: {e!r}",
                               "code": "INTERNAL_SERVER_ERROR"})
@@ -1844,7 +1858,7 @@ def make_server(db: str, port: int = 8095, poll_seconds: float = POLL_SECONDS,
     handler = type("ChatHandler", (Handler,), {
         "chat": Chat(store, poll_seconds, dashboard, allow_hosts=hosts),
         "allow_hosts": hosts})
-    server = ThreadingHTTPServer((HOST, port), handler)
+    server = Server((HOST, port), handler)
     server.daemon_threads = True
     dashboard.start()
     return server
