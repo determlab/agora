@@ -301,6 +301,10 @@ no credentials is not listened for, and says so at start. For the PA also
 folder) the PA is skipped and the start line says what to add.
 `BOT_WAKES=on` turns bot wakes on (below; an environment variable of the same name
 wins over `bot/.env`); missing or anything else is off.
+The bot-wake caps can be set the same way (positive whole numbers; anything else is an
+error naming the key): `BOT_TOPIC_TURNS_PER_HOUR` (6), `BOT_ROLE_SPAWNS_PER_HOUR` (3),
+`BOT_ROLE_SPAWNS_PER_DAY` (2000), `BOT_TURNS_PER_DAY` (10000). Edit the line, restart
+wake.py; its first line, `wake: caps ...`, shows the values in force.
 
 **What it does with a founder mention or DM:**
 

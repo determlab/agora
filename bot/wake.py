@@ -184,8 +184,10 @@ BOT_IDLE_SECONDS = 10 * 60
 # founder 2026-10-17: daily caps set high on purpose, lower when a problem shows
 BOT_TOPIC_TURNS_PER_HOUR = 6
 BOT_ROLE_SPAWNS_PER_HOUR = 3
-BOT_ROLE_SPAWNS_PER_DAY = 100
-BOT_TURNS_PER_DAY = 500
+BOT_ROLE_SPAWNS_PER_DAY = 2000
+BOT_TURNS_PER_DAY = 10000
+CAP_KEYS = ("BOT_TOPIC_TURNS_PER_HOUR", "BOT_ROLE_SPAWNS_PER_HOUR",
+            "BOT_ROLE_SPAWNS_PER_DAY", "BOT_TURNS_PER_DAY")
 # Pinned to his id, so a display-name change cannot lose the ping.
 BOT_STOP_LINE = "bot loop stopped; @**Hemi|{founder_id}**, @-mention a role to continue"
 BOT_MARKER = ("From the {src} bot, a teammate — not the founder. "
@@ -261,8 +263,23 @@ def load_config(env_path: Path = DOTENV) -> dict[str, Any]:
     if not bots:
         raise ConfigError("no role bot credentials in bot/.env — add ZULIP_<ROLE>_EMAIL and "
                           "ZULIP_<ROLE>_API_KEY for at least one of " + ", ".join(ROLES) + ".")
+    caps = {}
+    for key in CAP_KEYS:
+        value = get(key).strip()
+        if not value:
+            caps[key] = globals()[key]
+        elif value.isascii() and value.isdigit() and int(value) > 0:
+            caps[key] = int(value)
+        else:
+            raise ConfigError(f"{key} in bot/.env is {value!r}, not a positive whole number — "
+                              f"set it to one (e.g. {key}={globals()[key]}) or delete the line "
+                              "to use the default.")
     return {"founder_id": int(raw), "site": site, "bots": bots, "missing": missing,
-            "skipped": skipped, "cwd": cwd, "bot_wakes": bot_wakes}
+            "skipped": skipped, "cwd": cwd, "bot_wakes": bot_wakes, "caps": caps}
+
+
+def caps_line(caps: dict[str, int]) -> str:
+    return "wake: caps " + ", ".join(f"{k}={v}" for k, v in caps.items())
 
 
 # -- state -------------------------------------------------------------------
@@ -1473,6 +1490,9 @@ def main(argv: list[str] | None = None) -> int:
         else:
             print(f"error: {exc}", file=sys.stderr)
         return 2
+    globals().update(cfg["caps"])
+    if not args.json:
+        print(caps_line(cfg["caps"]), flush=True)
     waker = Waker(cfg["founder_id"], STATE_DIR / "state.json", Spawner(),
                   dry_run=args.dry_run, emit=emit, cwd=cfg["cwd"],
                   bot_wakes=cfg["bot_wakes"])
