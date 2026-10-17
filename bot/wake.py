@@ -544,8 +544,17 @@ def close_prompt(role: str, room: str) -> str:
 
 def mentions(role: str, content: str) -> bool:
     """An explicit ``@**ROLE**`` (or ``@**ROLE|id**``) in the text. A silent
-    ``@_**ROLE**`` or a wildcard does not count."""
+    ``@_**ROLE**`` or a wildcard does not count here (a bot's message is
+    judged by this alone); see ``wildcard`` for the founder's."""
     return re.search(rf"(?<!_)@\*\*{re.escape(role)}(\|\d+)?\*\*", content,
+                     re.IGNORECASE) is not None
+
+
+def wildcard(content: str) -> bool:
+    """A Zulip wildcard mention (``@**all**``, ``@**everyone**``, ``@**channel**``,
+    ``@**stream**``, ``@**topic**``). Only a founder's counts, as a mention of
+    every role bot in the room (ops#336); the silent ``@_**all**`` does not."""
+    return re.search(r"(?<!_)@\*\*(all|everyone|channel|stream|topic)\*\*", content,
                      re.IGNORECASE) is not None
 
 
@@ -688,7 +697,9 @@ class Waker:
         if not safe_room(room):
             return "no", (f"room name {room!r} is not safe text (letters, digits, space, "
                           "-_. only); no hint is built for it")
-        mentioned = mentions(role, str(msg.get("content") or ""))
+        mentioned = (mentions(role, str(msg.get("content") or ""))
+                     or (msg.get("sender_id") == self.founder_id
+                         and wildcard(str(msg.get("content") or ""))))
         members = self._room_members(role, room)
         if members is None:
             return ("yes" if mentioned else "no"), \
