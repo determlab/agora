@@ -170,10 +170,11 @@ def role_bots(members: list[dict[str, Any]]) -> set[str]:
 # (a spawn, a resume or a queued turn), rolling windows.
 HOUR, DAY = 60 * 60, 24 * 60 * 60
 BOT_IDLE_SECONDS = 10 * 60
+# founder 2026-10-17: daily caps set high on purpose, lower when a problem shows
 BOT_TOPIC_TURNS_PER_HOUR = 6
 BOT_ROLE_SPAWNS_PER_HOUR = 3
-BOT_ROLE_SPAWNS_PER_DAY = 10
-BOT_TURNS_PER_DAY = 25
+BOT_ROLE_SPAWNS_PER_DAY = 100
+BOT_TURNS_PER_DAY = 500
 # Pinned to his id, so a display-name change cannot lose the ping.
 BOT_STOP_LINE = "bot loop stopped; @**Hemi|{founder_id}**, @-mention a role to continue"
 BOT_MARKER = ("From the {src} bot, a teammate — not the founder. "
