@@ -88,47 +88,37 @@ code, pre { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
 #streams-head { display: flex; align-items: center; justify-content: space-between;
   font-size: 11px; font-weight: 700; letter-spacing: .08em; color: var(--muted); padding: .25rem; }
 #side ul { list-style: none; margin: 0; padding: 0; }
-.stream-row { display: flex; align-items: center; border-radius: 6px; }
-.stream-row.open { background: var(--accent-soft); }
-.stream-name { flex: 1; min-width: 0; display: flex; align-items: center; gap: .3rem; text-align: start;
-  border: 0; background: none; padding: .3rem .4rem; font-weight: 600; }
-.stream-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: right; }
-.caret { transition: transform .15s; color: var(--muted); }
-.stream-row.folded .caret { transform: rotate(90deg); }
+/* ops#322: one row per room, nothing nested under it. */
+.room-row { display: flex; align-items: center; border-radius: 8px; margin-block: 1px; }
+.room-row:hover { background: var(--accent-soft); }
+.room-row.open { background: var(--accent); color: var(--accent-text); }
+.room-name { flex: 1; min-width: 0; display: flex; align-items: center; gap: .45rem; text-align: start;
+  border: 0; background: none; color: inherit; padding: .4rem .5rem; font-weight: 500; }
+.room-row.unread .room-name { font-weight: 700; }
+.room-hash { color: var(--muted); font-weight: 400; }
+.room-row.open .room-hash { color: inherit; opacity: .75; }
+.room-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: right; }
+.room-row.open .icon { color: inherit; }
 .gear { opacity: 0; transition: opacity .15s; }
-.stream-row:hover .gear, .stream-row.open .gear, .gear:focus { opacity: 1; }
+.room-row:hover .gear, .room-row.open .gear, .gear:focus { opacity: 1; }
 .mark-read { opacity: 0; transition: opacity .15s; }
-.stream-row:hover .mark-read, .mark-read:focus { opacity: 1; }
+.room-row:hover .mark-read, .mark-read:focus { opacity: 1; }
 .badge { flex: none; min-width: 1.1rem; height: 1.1rem; margin-inline-start: .3rem;
   padding: 0 .3rem; border-radius: 999px; background: var(--accent); color: var(--accent-text);
   font-size: 10px; font-weight: 700; line-height: 1.1rem; text-align: center; }
-.topic-row .badge { margin-inline-start: 0; margin-inline-end: .3rem; }
-.topic { display: block; width: 100%; text-align: right; border: 0; background: none;
-  padding-block: .2rem; padding-inline: 1.4rem .5rem; border-radius: 6px; color: var(--muted);
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.topic:hover { color: var(--text); }
-.topic.open { background: var(--accent); color: var(--accent-text); }
-.topic-row { display: flex; align-items: center; }
-.topic-row .topic { flex: 1; min-width: 0; }
-.topic-archive { opacity: 0; transition: opacity .15s; font-size: 11px; }
-.topic-row:hover .topic-archive, .topic-archive:focus { opacity: 1; }
+.room-row.open .badge { background: var(--accent-text); color: var(--accent); }
+#rooms-empty { padding: .4rem .5rem; }
 #archive { border-top: 1px solid var(--line); margin-top: .5rem; padding-top: .35rem; }
 .archive-head { font-size: 11px; font-weight: 700; letter-spacing: .08em; color: var(--muted); padding: .25rem; }
 .archived-row { display: flex; align-items: center; gap: .25rem; font-size: 12px; }
 .archived-name { flex: 1; min-width: 0; text-align: start; border: 0; background: none; color: var(--muted);
   padding: .2rem .4rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 button.archived-name:hover { color: var(--text); }
-.new-topic { border: 0; background: none; font-size: 12px; color: var(--accent);
-  padding-block: .15rem; padding-inline: 1.4rem .5rem; }
-.new-topic:hover { text-decoration: underline; }
-.new-topic-form { display: flex; gap: .25rem; padding-block: .15rem; padding-inline: 1.2rem .25rem; }
-.new-topic-form input { flex: 1; min-width: 0; font-size: 12px; padding: .2rem .4rem; }
-.new-topic-form button { font-size: 12px; padding: .15rem .45rem; }
 #main { display: flex; flex-direction: column; min-width: 0; min-height: 0; height: 100%; position: relative; }
 #top { display: flex; align-items: center; gap: .5rem; padding: .5rem 1rem;
   border-bottom: 1px solid var(--line); background: var(--panel); }
 #menu-btn { display: none; }
-#topic-title { font-weight: 600; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#room-title { font-weight: 600; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* Live status: a green dot when the event queue answers, amber and blinking
    while it reconnects, red when it is down. */
 #live { display: inline-flex; align-items: center; gap: .35rem; font-size: 12px; color: var(--muted);
@@ -236,6 +226,10 @@ dialog .buttons { display: flex; justify-content: flex-end; gap: .5rem; margin-t
 #members-name { flex: 1; min-width: 0; }
 #members-list { list-style: none; margin: 0; padding: 0; }
 #members-list li { display: flex; align-items: center; gap: .5rem; padding: .3rem 0; }
+#members-who { flex: 1; min-width: 0; }
+.drawer h3 { margin: 1rem 0 .25rem; font-size: 13px; color: var(--muted); }
+.wake-rule { margin: .5rem 0 0; line-height: 1.5; }
+#picker .tag { margin-inline-start: auto; }
 .member-name { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 .member-name .muted { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .api-box { margin-top: 1rem; }
@@ -257,7 +251,7 @@ dialog .buttons { display: flex; justify-content: flex-end; gap: .5rem; margin-t
   #app.side-open #side { transform: none; }
   #menu-btn { display: inline-block; }
   /* ops#325: one top bar row — menu, the room name, the live dot (its text
-     is the dot's title); members, bell and theme sit in the side menu
+     is the dot's title); invite, members, bell and theme sit in the side menu
      (placeTools), and the chat / board switch sits at the bar's end.
      --top-h and --switch-w (set on #app above) tie the bar, the switch and the board heading
      together: change them here, not the rules below. */
@@ -515,15 +509,15 @@ a.ref:hover { text-decoration: underline; }
 /* ops#325: a phone has no hover, so nothing may wait for one: the row and
    message actions are always shown, and "+" only on the tapped bubble. */
 @media (hover: none) {
-  .gear, .mark-read, .topic-archive, .quote-btn { opacity: 1; }
+  .gear, .mark-read, .quote-btn { opacity: 1; }
   .msg:not(.tapped) .react-btn { display: none; }
 }
 /* ops#325: a finger needs 44px targets, and iOS zooms into any field under 16px. */
 @media (pointer: coarse) {
-  .btn, .icon, .topic, .stream-name, .new-topic, .archived-name, .reaction-chip, .react-picker button,
+  .btn, .icon, .room-name, .archived-name, .reaction-chip, .react-picker button,
   .more-btn { min-height: 44px; }
   .icon, .react-btn, .reaction-chip { min-width: 44px; }
-  #top, #me-row, #side-tools, .stream-row, .topic-row, .line, .reactions { gap: 8px; }
+  #top, #me-row, #side-tools, .room-row, .line, .reactions { gap: 8px; }
   input, select, textarea, #compose, .appr-note { font-size: 16px; }
   #hint { display: none; }
 }
@@ -563,10 +557,10 @@ a.ref:hover { text-decoration: underline; }
       <button type="button" id="forget" class="icon" title="מוחק את ה-API key מהדפדפן הזה">שכח מפתח</button>
     </div>
     <div id="side-tools"></div>
-    <div id="streams-head"><span>ערוצים</span>
-      <span><button type="button" id="archive-btn" class="icon" title="ערוצים ונושאים בארכיון" aria-expanded="false">ארכיון</button>
-      <button type="button" id="new-stream-btn" class="icon" title="ערוץ חדש" aria-label="ערוץ חדש">+</button></span></div>
-    <ul id="streams"></ul>
+    <div id="streams-head"><span>חדרים</span>
+      <span><button type="button" id="archive-btn" class="icon" title="חדרים בארכיון" aria-expanded="false">ארכיון</button>
+      <button type="button" id="new-stream-btn" class="icon" title="חדר חדש" aria-label="חדר חדש">+</button></span></div>
+    <ul id="streams" aria-label="חדרים"></ul>
     <div id="archive" hidden>
       <div class="archive-head">ארכיון (ההודעות נשמרות)</div>
       <ul id="archived"></ul>
@@ -574,9 +568,10 @@ a.ref:hover { text-decoration: underline; }
   </nav>
   <main id="main">
     <div id="top">
-      <button type="button" id="menu-btn" class="icon" aria-label="ערוצים">&#9776;</button>
-      <span id="topic-title" dir="auto">בחרו נושא</span>
+      <button type="button" id="menu-btn" class="icon" aria-label="חדרים">&#9776;</button>
+      <span id="room-title" dir="auto">בחרו חדר</span>
       <span id="live" class="down" role="status"><span class="dot" aria-hidden="true"></span><span id="live-text">לא מחובר</span></span>
+      <button type="button" id="invite-btn" class="btn" disabled title="הזמנה מצרפת לחדר ולא מעירה אף אחד">הזמנה</button>
       <button type="button" id="members-btn" class="btn" disabled>חברים</button>
       <button type="button" id="notify-btn" class="icon" title="הפעלו התראות בטלפון"
               aria-label="התראות" aria-pressed="false">&#128276;</button>
@@ -634,22 +629,25 @@ a.ref:hover { text-decoration: underline; }
   </aside>
   <aside id="members-panel" class="drawer" aria-labelledby="members-head">
     <div class="drawer-head">
-      <h2 id="members-head">חברים ב-<span id="members-title" dir="auto"></span></h2>
+      <h2 id="members-head">החדר <span id="members-title" dir="auto"></span></h2>
       <button type="button" id="members-close" class="icon" aria-label="סגור">&#10005;</button>
     </div>
     <form id="members-rename" class="row">
-      <label for="members-name">שם הערוץ</label>
-      <input id="members-name" type="text" dir="auto">
+      <label for="members-name">שם החדר</label>
+      <input id="members-name" type="text" dir="auto" maxlength="60">
       <button type="submit" class="btn">שנה שם</button>
     </form>
-    <div class="row"><input id="members-private" type="checkbox">
-      <label for="members-private">פרטי (רק חברים יכולים לקרוא)</label></div>
+    <h3>מי בחדר</h3>
     <ul id="members-list"></ul>
+    <h3>הזמנה</h3>
     <form id="members-add" class="row">
-      <select id="members-who" aria-label="מי להוסיף"></select>
-      <button type="submit" class="btn">הוסף</button>
+      <select id="members-who" aria-label="את מי להזמין"></select>
+      <button type="submit" class="btn primary">הזמן</button>
     </form>
-    <div class="row"><button type="button" id="members-archive" class="btn">העבר את הערוץ לארכיון</button></div>
+    <p class="muted wake-rule">כל מי שבחדר רואה הכל. הזמנה לא מעירה אף אחד.
+      בחדר עם בוט אחד, כל הודעה שלך מעירה אותו. בחדר עם כמה בוטים, הודעה בלי @ מעירה את בעל החדר
+      (התפקיד שזה החדר שלו), ושאר הבוטים מתעוררים רק כשהזכרת אותם עם @.</p>
+    <div class="row"><button type="button" id="members-archive" class="btn">העבר את החדר לארכיון</button></div>
     <p id="members-status" class="muted"></p>
     <div class="api-box">
       <div class="muted">מה הדף שולח</div>
@@ -662,12 +660,11 @@ a.ref:hover { text-decoration: underline; }
 
 <dialog id="create-dlg">
   <form id="create-form">
-    <h2>ערוץ חדש</h2>
+    <h2>חדר חדש</h2>
     <label for="create-name">שם</label>
     <input id="create-name" dir="auto" maxlength="60" required>
-    <div class="row"><input id="create-private" type="checkbox" checked>
-      <label for="create-private">פרטי (רק חברים יכולים לקרוא)</label></div>
-    <div>חברים (את/ה תמיד חבר/ה)</div>
+    <p class="muted">אותיות, ספרות, רווח ו- <code dir="ltr">- _ .</code> בלבד.</p>
+    <div>את מי להזמין (את/ה תמיד בחדר)</div>
     <div id="create-people" class="people"></div>
     <p id="create-status" class="muted"></p>
     <div class="buttons">
@@ -728,7 +725,6 @@ function el(tag, cls, text) {
 const STORE = "agora-chat-credentials";
 const THEME = "agora-chat-theme";
 const SVG = "http://www.w3.org/2000/svg";
-const CARET = "M4 6l4 4 4-4";
 const GEAR = "M8 5.6a2.4 2.4 0 1 0 0 4.8 2.4 2.4 0 0 0 0-4.8zM8 1.5v2M8 12.5v2M1.5 8h2M12.5 8h2"
            + "M3.4 3.4l1.4 1.4M11.2 11.2l1.4 1.4M3.4 12.6l1.4-1.4M11.2 4.8l1.4-1.4";
 const CHECK = "M3 8.5l3 3 7-7";
@@ -1040,19 +1036,17 @@ function renderQr(container, text) {
 
 const S = {
   creds: null, gen: 0, queue: null, lastEvent: -1, me: null, sending: false, dashboard: null,
-  streams: [],          // [{stream_id, name, invite_only}]
-  topics: new Map(),    // stream name -> Map(topic -> newest message id)
-  archivedStreams: [],  // [{stream_id, name, invite_only}]: hidden from the list
-  archivedTopics: new Map(), // stream name -> [topic]: hidden from the list
-  collapsed: new Set(), // stream ids whose topics are folded away
-  seenStreams: new Set(), // stream ids already given their starts-collapsed default
-  unread: new Map(),    // stream id -> {unread, topics: Map(topic.toLowerCase() -> count)}
+  // ops#322: a room is a stream on the server; its old topics are history,
+  // shown as one conversation, and every new message goes to ROOM_TOPIC.
+  streams: [],          // the rooms: [{stream_id, name}]
+  archivedStreams: [],  // [{stream_id, name}]: hidden from the list
+  unread: new Map(),    // stream id -> unread count
   users: new Map(),     // user id -> user
-  open: null,           // {stream_id, stream, topic}
-  shown: new Set(),     // message ids in the open topic
-  msgs: [],             // the open topic's messages, oldest first
-  panel: null,          // the stream the members panel is about
-  adding: null,         // {stream_id, text}: the "+ new topic" field being typed in
+  members: new Map(),   // stream id -> Set(user id), as the server last listed it
+  open: null,           // the open room: {stream_id, stream}
+  shown: new Set(),     // message ids in the open room
+  msgs: [],             // the open room's messages, oldest first
+  panel: null,          // the room the members panel is about
   pick: null,           // the @ picker: {items, index, start}
   unfolded: new Set(),  // message ids opened with "הצג עוד": a re-render keeps them open
   tapped: null,         // the message id whose bubble was tapped: it shows "+"
@@ -1211,12 +1205,28 @@ function membersLabel(n) {
   return typeof n === "number" ? "חברים · " + n : "חברים";
 }
 
-// -- the calls the stream panels make. A human needs the admin role for
-// principals other than themselves; the server's own refusal is shown.
+// ops#322: every message in a room goes to this one topic (chat/server.py's
+// ROOM_TOPIC). There is no topic anywhere on the page.
+const ROOM_TOPIC = "chat";
 
-function createStream(name, isPrivate, emails) {
+// The server's room-name rule, said before the server is asked: letters of
+// any script, digits, space and - _ . only, at most 60. "" when it is fine.
+// The server checks it again (a name reaches a shell hint in bot/wake.py).
+function roomNameError(name) {
+  const n = String(name);
+  if (!n.trim()) return "צריך שם לחדר.";
+  if ([...n].length > 60) return "השם ארוך מדי: עד 60 תווים.";
+  if (n !== n.trim()) return "בלי רווח בתחילת השם או בסופו.";
+  const bad = [...new Set([...n].filter((c) => !/[\p{L}\p{N} ._-]/u.test(c)))];
+  return bad.length ? "תווים שאסור בשם חדר: " + bad.join(" ") + " (רק אותיות, ספרות, רווח ו- _ . -)" : "";
+}
+
+// -- the calls the room panels make. Only a person invites (the server
+// refuses a bot); the server's own refusal is shown.
+
+function createStream(name, emails) {
   return api("POST", "users/me/subscriptions",
-             {subscriptions: [{name: name}], invite_only: isPrivate, principals: emails});
+             {subscriptions: [{name: name}], invite_only: true, principals: emails});
 }
 
 function addMember(stream, email) {
@@ -1228,59 +1238,30 @@ function removeMember(stream, email) {
   return api("DELETE", "users/me/subscriptions", {subscriptions: [stream], principals: [email]});
 }
 
-function setPrivate(streamId, isPrivate) {
-  return api("PATCH", "streams/" + streamId, {is_private: isPrivate});
-}
-
 // Empty is refused before this is ever called: the server's own rule is
 // `if p.get("new_name")`, so an empty string is silently ignored there and
 // would report success for a rename that did not happen (the honest-reporting
-// rule this whole page follows for is_private too).
+// rule this whole page follows).
 function renameStream(streamId, newName) {
   return api("PATCH", "streams/" + streamId, {new_name: newName});
 }
 
-// Archive hides a stream or a topic from the list; its messages stay on the
-// server. A new message to an archived topic brings it back by itself.
+// Archive hides a room from the list; its messages stay on the server.
 function setStreamArchived(streamId, archived) {
   return api("PATCH", "streams/" + streamId, {is_archived: archived});
 }
 
-function archiveTopic(streamId, topic) {
-  const path = "streams/" + streamId + "/archived_topics";
-  return api("POST", path, {topic: topic});
-}
-
-function restoreTopic(streamId, topic) {
-  const path = "streams/" + streamId + "/archived_topics";
-  return api("DELETE", path, {topic: topic});
-}
-
-function privacy(s) { return s.invite_only ? "פרטי" : "ציבורי"; }
-
-// What the create dialog says. `s` is the stream as the server lists it after
-// the call (undefined if the page could not read it back). The server applies
-// invite_only only when it creates the stream, so an existing one keeps its own.
-function createReport(name, wantPrivate, r, s) {
-  const added = Object.keys(r.subscribed || {});
-  const already = Object.keys(r.already_subscribed || {});
-  let msg = "#" + name + (s ? " (" + privacy(s) + ")" : "") + ": נוספו " + added.length
-      + (already.length ? ", " + already.length + " כבר חברים (הערוץ היה קיים)" : "");
-  if (!s) msg += "; הדף לא הצליח לקרוא בחזרה אם הוא פרטי";
-  else if (!!s.invite_only !== !!wantPrivate) {
-    msg += "; הוא כבר היה קיים כ" + privacy(s) + ", לכן " + (wantPrivate ? "פרטי" : "ציבורי")
-        + " לא הוחל";
-  }
+// What the create dialog says, from what the server answered: who it added,
+// and whether the room was there already (then nobody new is "created").
+// `s` is the room as the server lists it after the call (undefined if the
+// page could not read it back).
+function createReport(name, r, s) {
+  const added = Object.keys(r.subscribed || {}).length;
+  const already = Object.keys(r.already_subscribed || {}).length;
+  let msg = "#" + name + ": " + (already ? "החדר כבר היה קיים; " : "")
+      + (added === 1 ? "נוסף אחד" : "נוספו " + added) + (already ? ", " + already + " כבר בפנים" : "");
+  if (!s) msg += " (הדף לא הצליח לקרוא את החדר בחזרה)";
   return msg;
-}
-
-// What the private toggle says: the state read back from the server, or, when
-// the page cannot read it (no longer a member, or the reload failed), only
-// what the server accepted.
-function privateReport(name, want, now) {
-  if (now) return "#" + name + " עכשיו " + privacy(now);
-  return "#" + name + " הוגדר " + (want ? "פרטי" : "ציבורי")
-      + " (השרת קיבל; הדף לא יכול לקרוא את זה בחזרה: אינך חבר בו, או שהטעינה נכשלה)";
 }
 
 // Same shape as privateReport: what the server now holds wins over what was
@@ -1395,44 +1376,30 @@ async function start() {
 // and the id set keeps it from showing twice.
 async function connect(gen) {
   const reg = await api("POST", "register",
-    {event_types: ["message", "dashboard", "reaction", "typing"]});
+    {event_types: ["message", "dashboard", "reaction", "typing", "subscription"]});
   if (gen !== S.gen) return;
   S.queue = reg.queue_id;
   S.lastEvent = reg.last_event_id;
   await loadStreams();
   await loadUnread();
-  if (S.open) await openTopic(S.open.stream_id, S.open.stream, S.open.topic);
+  if (S.open) await openRoom(S.open.stream_id, S.open.stream);
   await loadDashboard();  // once on load, and again on every reconnect through here
   setLive("live", "מחובר");
 }
 
+// The rooms are the streams this person is in; that is the whole list. An
+// old stream shows as a room with all its history (ops#322).
 async function loadStreams() {
   const subs = (await api("GET", "users/me/subscriptions", {include_archived: true})).subscriptions;
-  const short = (s) => ({stream_id: s.stream_id, name: s.name, invite_only: s.invite_only});
+  const short = (s) => ({stream_id: s.stream_id, name: s.name});
   S.streams = subs.filter((s) => !s.is_archived).map(short);
   S.archivedStreams = subs.filter((s) => s.is_archived).map(short);
-  S.topics = new Map();
-  S.archivedTopics = new Map();
-  for (const s of S.streams) {
-    // A stream's topic list starts collapsed the first time it is seen (page
-    // load, or a fresh subscription); a fold the human already chose survives
-    // a reconnect.
-    if (!S.seenStreams.has(s.stream_id)) { S.seenStreams.add(s.stream_id); S.collapsed.add(s.stream_id); }
-    const got = await api("GET", "users/me/" + s.stream_id + "/topics", {include_archived: true});
-    const topics = new Map(), archived = [];
-    for (const t of got.topics) {
-      if (t.is_archived) archived.push(t.name); else topics.set(t.name, t.max_id);
-    }
-    S.topics.set(s.name, topics);
-    S.archivedTopics.set(s.name, archived);
-  }
-  if (S.open && !S.streams.some((s) => s.stream_id === S.open.stream_id)) closeTopic();
+  if (S.open && !S.streams.some((s) => s.stream_id === S.open.stream_id)) closeRoom();
   renderStreams();
   renderArchive();
 }
 
-// The "ארכיון" section: archived streams and topics, each with a restore
-// button. An archived topic still opens, to read its history.
+// The "ארכיון" section: archived rooms, each with a restore button.
 function renderArchive() {
   const list = $("archived");
   list.replaceChildren();
@@ -1457,13 +1424,6 @@ function renderArchive() {
   for (const s of S.archivedStreams) {
     row("#" + s.name, null, () => archiveAction("#" + s.name + " שוחזר",
                                                 () => setStreamArchived(s.stream_id, false)));
-  }
-  for (const s of S.streams) {
-    for (const topic of S.archivedTopics.get(s.name) || []) {
-      row("#" + s.name + " › " + topic, () => openTopic(s.stream_id, s.name, topic),
-          () => archiveAction("#" + s.name + " › " + topic + " שוחזר",
-                              () => restoreTopic(s.stream_id, topic)));
-    }
   }
   if (!n) {
     const li = document.createElement("li");
@@ -1507,6 +1467,7 @@ async function poll(gen) {
       if (ev.type === "message") onMessage(ev.message);
       else if (ev.type === "reaction") onReaction(ev);
       else if (ev.type === "typing") onTyping(ev);
+      else if (ev.type === "subscription") onSubscription(ev);
       // Not awaited: a dashboard refresh must never hold up the message poll
       // loop, and loadDashboard() only ever replaces S.dashboard wholesale.
       else if (ev.type === "dashboard") loadDashboard();
@@ -2412,52 +2373,30 @@ async function loadDashboard() {
   renderDashboard(S.dashboard);
 }
 
-// -- unread bubbles (issue #168): per-stream, per-topic counts kept in
-// S.unread and pushed to the tab title. A user's own messages are never
-// unread for them (the server excludes them; nothing to do here either).
+// -- unread bubbles (issue #168), one per room (ops#322): the server still
+// counts per topic, so a room's bubble is the sum of its topics. A user's
+// own messages are never unread for them (the server excludes them).
 
 function updateTitle() {
   let total = 0;
-  for (const entry of S.unread.values()) total += entry.unread;
+  for (const n of S.unread.values()) total += n;
   document.title = total ? "(" + total + ") Agora" : "agora · צ'אט";
 }
 
 async function loadUnread() {
   const data = await api("GET", "unread");
-  const map = new Map();
-  for (const s of data.streams) {
-    const topics = new Map();
-    for (const t of s.topics) topics.set(t.name.toLowerCase(), t.unread);
-    map.set(s.stream_id, {unread: s.unread, topics});
-  }
-  S.unread = map;
+  S.unread = new Map(data.streams.map((s) => [s.stream_id, s.unread]));
   renderStreams();
   updateTitle();
 }
 
-// Opening a topic marks it read, and so does a message that arrives while
-// it is already open (onMessage below): either way the server and S.unread
-// agree, so a reconnect's loadUnread() never contradicts what is on screen.
-async function markTopicRead(streamId, topic) {
-  const entry = S.unread.get(streamId);
-  const had = entry ? entry.topics.get(topic.toLowerCase()) || 0 : 0;
-  if (entry && had) {
-    entry.topics.delete(topic.toLowerCase());
-    entry.unread = Math.max(0, entry.unread - had);
-    renderStreams();
-    updateTitle();
-  }
-  try { await api("POST", "mark_topic_as_read", {stream_id: streamId, topic_name: topic}); }
-  catch (e) { /* the next loadUnread() (reconnect) reconciles */ }
-}
-
-// The sidebar's "mark all as read" next to a stream: every topic in it at
-// once, the same way markTopicRead clears one.
-async function markStreamRead(streamId) {
-  const entry = S.unread.get(streamId);
-  if (entry) {
-    entry.topics.clear();
-    entry.unread = 0;
+// Opening a room marks it read, and so does a message that arrives while it
+// is open (onMessage below): either way the server and S.unread agree, so a
+// reconnect's loadUnread() never contradicts what is on screen. Also the
+// sidebar's "mark all as read" next to a room.
+async function markRoomRead(streamId) {
+  if (S.unread.get(streamId)) {
+    S.unread.delete(streamId);
     renderStreams();
     updateTitle();
   }
@@ -2465,53 +2404,48 @@ async function markStreamRead(streamId) {
   catch (e) { /* the next loadUnread() (reconnect) reconciles */ }
 }
 
-function bumpUnread(streamId, topic) {
-  let entry = S.unread.get(streamId);
-  if (!entry) { entry = {unread: 0, topics: new Map()}; S.unread.set(streamId, entry); }
-  const key = topic.toLowerCase();
-  entry.topics.set(key, (entry.topics.get(key) || 0) + 1);
-  entry.unread += 1;
+function bumpUnread(streamId) {
+  S.unread.set(streamId, (S.unread.get(streamId) || 0) + 1);
 }
 
 function onMessage(m) {
   if (m.type !== "stream") return;
-  const topics = S.topics.get(m.display_recipient);
-  if (!topics) return;
-  topics.set(m.subject, Math.max(topics.get(m.subject) || 0, m.id));
-  // The server un-archived this topic when the message arrived.
-  const archived = (S.archivedTopics && S.archivedTopics.get(m.display_recipient)) || [];
-  const at = archived.findIndex((t) => t.toLowerCase() === m.subject.toLowerCase());
-  if (at >= 0) { archived.splice(at, 1); renderArchive(); }
+  if (!S.streams.some((s) => s.stream_id === m.stream_id)) return;
   const mine = S.me && m.sender_id === S.me.user_id;
-  const isOpen = S.open && S.open.stream_id === m.stream_id
-      && S.open.topic.toLowerCase() === m.subject.toLowerCase();
+  const isOpen = !!S.open && S.open.stream_id === m.stream_id;
   if (!mine) {
-    if (isOpen) markTopicRead(m.stream_id, m.subject); else bumpUnread(m.stream_id, m.subject);
-    clearTyping(m.stream_id, m.subject, m.sender_id);  // a sent message ends any "typing" for its sender
+    if (isOpen) markRoomRead(m.stream_id); else bumpUnread(m.stream_id);
+    clearTyping(m.stream_id, m.sender_id);  // a sent message ends any "typing" for its sender
   }
   renderStreams();
   updateTitle();
-  if (isOpen) {
-    addMessages([m], false);
-  }
+  if (isOpen) addMessages([m], false);
   notifyMessage(m, isOpen);
 }
 
-// -- typing / working indicators (ops#249 batch 1), per stream+topic ("room").
-// S.typing: "streamId:topic-lower" -> Map(userId -> {name, status, until}).
-// `until` is set client-side from when the event (or the GET /typing seed)
-// arrived, not read from the server: the server's own TTL already decides
-// whether a row is live, so the client only needs to know when to stop
-// trusting an event it already has, without a second round trip.
+// An invite or a removal (ops#322). This person joined or left a room: the
+// list is read again. Someone else did, in the open room: its count is.
+function onSubscription(ev) {
+  if (!String(ev.op).startsWith("peer_")) {
+    loadStreams().catch(() => { /* the next reconnect reloads */ });
+  } else if (S.open && (ev.stream_ids || []).includes(S.open.stream_id)) {
+    refreshCount(S.open.stream_id);
+  }
+}
+
+// -- typing / working indicators (ops#249 batch 1), one per room (ops#322).
+// S.typing: streamId -> Map(userId -> {name, status, until}). An indicator
+// sent to any topic of the room counts for the room. `until` is set
+// client-side from when the event (or the GET /typing seed) arrived: the
+// server's own TTL already decides whether a row is live, so the client only
+// needs to know when to stop trusting an event it already has.
 const TYPING_TTL_MS = 15000;
 S.typing = new Map();
-
-function typingKey(streamId, topic) { return streamId + ":" + topic.toLowerCase(); }
 
 function renderTyping() {
   const box = $("typing");
   if (!S.open) { box.textContent = ""; return; }
-  const entry = S.typing.get(typingKey(S.open.stream_id, S.open.topic));
+  const entry = S.typing.get(S.open.stream_id);
   if (!entry || entry.size === 0) { box.textContent = ""; return; }
   const parts = [...entry.values()].map((t) =>
     t.name + " " + (t.status === "working" ? "עובד/ת על זה…" : "מקליד/ה…"));
@@ -2519,10 +2453,9 @@ function renderTyping() {
 }
 
 function onTyping(ev) {
-  const key = typingKey(ev.stream_id, ev.topic);
-  let entry = S.typing.get(key);
+  let entry = S.typing.get(ev.stream_id);
   if (ev.op === "start") {
-    if (!entry) { entry = new Map(); S.typing.set(key, entry); }
+    if (!entry) { entry = new Map(); S.typing.set(ev.stream_id, entry); }
     entry.set(ev.sender.user_id, {name: ev.sender.full_name, status: ev.status,
                                   until: Date.now() + TYPING_TTL_MS});
   } else if (entry) {
@@ -2531,8 +2464,8 @@ function onTyping(ev) {
   renderTyping();
 }
 
-function clearTyping(streamId, topic, userId) {
-  const entry = S.typing.get(typingKey(streamId, topic));
+function clearTyping(streamId, userId) {
+  const entry = S.typing.get(streamId);
   if (entry && entry.delete(userId)) renderTyping();
 }
 
@@ -2548,14 +2481,14 @@ setInterval(() => {
   if (changed) renderTyping();
 }, 3000);
 
-async function seedTyping(streamId, topic) {
+async function seedTyping(streamId) {
   try {
-    const got = await api("GET", "typing", {stream: streamId, topic});
+    const got = await api("GET", "typing", {stream: streamId, topic: ROOM_TOPIC});
     const entry = new Map();
     for (const t of got.typing) {
       entry.set(t.user_id, {name: t.full_name, status: t.status, until: Date.now() + TYPING_TTL_MS});
     }
-    S.typing.set(typingKey(streamId, topic), entry);
+    S.typing.set(streamId, entry);
     renderTyping();
   } catch (e) { /* best-effort: an empty indicator is never wrong, only late */ }
 }
@@ -2567,148 +2500,68 @@ let lastTypingSent = 0;
 async function sendTyping(op, status) {
   if (!S.open) return;
   try {
-    await api("POST", "typing", {type: "stream", to: S.open.stream_id, topic: S.open.topic,
+    await api("POST", "typing", {type: "stream", to: S.open.stream_id, topic: ROOM_TOPIC,
                                  op, status: status || "typing"});
   } catch (e) { /* best-effort */ }
 }
 
+// The sidebar: one row per room — its name, the unread bubble, "mark all as
+// read" and the gear for its members. Nothing is nested under a room.
 function renderStreams() {
   const list = $("streams");
-  // A live message re-renders the list: keep the "+ new topic" field focused.
-  const typing = !!(document.activeElement && document.activeElement.closest
-                    && document.activeElement.closest(".new-topic-form"));
   list.replaceChildren();
+  const unread = S.unread instanceof Map ? S.unread : new Map();
   for (const s of S.streams) {
     const li = document.createElement("li");
     const row = document.createElement("div");
-    row.className = "stream-row";
-    if (S.open && S.open.stream_id === s.stream_id) row.classList.add("open");
-    const folded = S.collapsed.has(s.stream_id);
-    if (folded) row.classList.add("folded");
+    row.className = "room-row";
+    const isOpen = !!S.open && S.open.stream_id === s.stream_id;
+    if (isOpen) row.classList.add("open");
+    const n = unread.get(s.stream_id) || 0;
+    if (n > 0) row.classList.add("unread");
     const name = document.createElement("button");
     name.type = "button";
-    name.className = "stream-name";
-    name.setAttribute("aria-expanded", String(!folded));
-    name.title = s.invite_only ? "ערוץ פרטי" : "ערוץ ציבורי";
-    const label = document.createElement("span");
-    label.className = "stream-label";
+    name.className = "room-name";
+    if (isOpen) name.setAttribute("aria-current", "true");
+    const hash = el("span", "room-hash", "#");
+    hash.setAttribute("aria-hidden", "true");
+    const label = el("span", "room-label", s.name);
     label.dir = "auto";
-    label.textContent = "#" + s.name;
-    name.append(svgIcon(CARET, "caret"), label);
-    // Most channels are private: only the exception gets a chip (ops#325).
-    if (!s.invite_only) {
-      const tag = document.createElement("span");
-      tag.className = "tag";
-      tag.textContent = "ציבורי";
-      name.append(tag);
-    }
-    name.addEventListener("click", () => {
-      if (folded) S.collapsed.delete(s.stream_id); else S.collapsed.add(s.stream_id);
-      renderStreams();
-    });
-    const gear = document.createElement("button");
-    gear.type = "button";
-    gear.className = "icon gear";
-    gear.title = "חברים והגדרות";
-    gear.setAttribute("aria-label", "חברים והגדרות");
-    gear.append(svgIcon(GEAR, "gear-ico"));
-    gear.addEventListener("click", () => openMembers(s));
+    name.append(hash, label);
+    // Most rooms are private: only the exception gets a chip (ops#325).
+    if (s.invite_only === false) name.append(el("span", "tag", "ציבורי"));
+    name.addEventListener("click", () => openRoom(s.stream_id, s.name));
     row.append(name);
-    const unread = (S.unread instanceof Map ? S.unread : new Map()).get(s.stream_id);
-    if (unread && unread.unread > 0) {
-      row.append(el("span", "badge", String(unread.unread)));
+    if (n > 0) {
+      row.append(el("span", "badge", String(n)));
       const markRead = document.createElement("button");
       markRead.type = "button";
       markRead.className = "icon mark-read";
       markRead.title = "סמן הכל כנקרא";
       markRead.setAttribute("aria-label", "סמן הכל כנקרא");
       markRead.append(svgIcon(CHECK, "check-ico"));
-      markRead.addEventListener("click", () => markStreamRead(s.stream_id));
+      markRead.addEventListener("click", () => markRoomRead(s.stream_id));
       row.append(markRead);
     }
+    const gear = document.createElement("button");
+    gear.type = "button";
+    gear.className = "icon gear";
+    gear.title = "מי בחדר, הזמנה ושם";
+    gear.setAttribute("aria-label", "מי בחדר, הזמנה ושם");
+    gear.append(svgIcon(GEAR, "gear-ico"));
+    gear.addEventListener("click", () => openMembers(s));
     row.append(gear);
     li.append(row);
-    const ul = document.createElement("ul");
-    ul.hidden = folded;
-    const topics = [...(S.topics.get(s.name) || new Map()).entries()].sort((a, b) => b[1] - a[1]);
-    for (const [topic] of topics) {
-      const item = document.createElement("li");
-      const btn = document.createElement("button");
-      btn.type = "button";
-      btn.className = "topic";
-      btn.dir = "auto";
-      btn.textContent = topic;
-      if (S.open && S.open.stream_id === s.stream_id && S.open.topic === topic) btn.classList.add("open");
-      btn.addEventListener("click", () => openTopic(s.stream_id, s.name, topic));
-      const arc = document.createElement("button");
-      arc.type = "button";
-      arc.className = "icon topic-archive";
-      arc.title = "העבר את הנושא לארכיון (ההודעות נשמרות)";
-      arc.textContent = "ארכב";
-      arc.addEventListener("click", () => archiveAction(
-        "#" + s.name + " › " + topic + " הועבר לארכיון", () => archiveTopic(s.stream_id, topic),
-        () => archiveAction("#" + s.name + " › " + topic + " שוחזר", () => restoreTopic(s.stream_id, topic))));
-      item.className = "topic-row";
-      item.append(btn);
-      const topicUnread = unread ? unread.topics.get(topic.toLowerCase()) || 0 : 0;
-      if (topicUnread > 0) item.append(el("span", "badge", String(topicUnread)));
-      item.append(arc);
-      ul.append(item);
-    }
-    ul.append(newTopicItem(s));
-    li.append(ul);
     list.append(li);
   }
-  const field = list.querySelector(".new-topic-form input");
-  if (field && typing) field.focus();
-}
-
-// "+ new topic" under each stream opens a field in place; the topic itself
-// exists on the server only once its first message is sent.
-function newTopicItem(s) {
-  const item = document.createElement("li");
-  if (!S.adding || S.adding.stream_id !== s.stream_id) {
-    const btn = document.createElement("button");
-    btn.type = "button";
-    btn.className = "new-topic";
-    btn.textContent = "+ נושא חדש";
-    btn.addEventListener("click", () => {
-      S.adding = {stream_id: s.stream_id, text: ""};
-      renderStreams();
-      $("streams").querySelector(".new-topic-form input").focus();
-    });
-    item.append(btn);
-    return item;
+  if (!S.streams.length) {
+    const li = el("li", "muted", "אין עדיין חדרים. + פותח חדר חדש.");
+    li.id = "rooms-empty";
+    list.append(li);
   }
-  const form = document.createElement("form");
-  form.className = "new-topic-form";
-  const input = document.createElement("input");
-  input.dir = "auto";
-  input.placeholder = "שם הנושא";
-  input.setAttribute("aria-label", "נושא חדש ב-#" + s.name);
-  input.value = S.adding.text;
-  input.addEventListener("input", () => { S.adding.text = input.value; });
-  input.addEventListener("keydown", (e) => {
-    if (e.key === "Escape") { e.preventDefault(); S.adding = null; renderStreams(); }
-  });
-  const ok = document.createElement("button");
-  ok.type = "submit";
-  ok.className = "btn";
-  ok.textContent = "פתח";
-  form.append(input, ok);
-  form.addEventListener("submit", (e) => {
-    e.preventDefault();
-    const topic = input.value.trim();
-    if (!topic) { toast("כתבו שם לנושא.", true); return; }
-    S.adding = null;
-    openTopic(s.stream_id, s.name, topic);
-    toast("#" + s.name + " › " + topic + ": הנושא ייווצר בשרת עם ההודעה הראשונה");
-  });
-  item.append(form);
-  return item;
 }
 
-function closeTopic() {
+function closeRoom() {
   clearTimeout(typingIdle);
   lastTypingSent = 0;  // same state the idle-stop resets (ops#249 review)
   sendTyping("stop");
@@ -2718,54 +2571,60 @@ function closeTopic() {
   S.newFrom = null;
   S.unfolded.clear();
   $("messages").replaceChildren();
-  $("topic-title").textContent = "בחרו נושא";
+  $("room-title").textContent = "בחרו חדר";
   $("members-btn").disabled = true;
+  $("invite-btn").disabled = true;
   $("members-btn").textContent = membersLabel(null);
   renderTyping();
 }
 
+// The open room's members, as the server lists them: the count on the
+// button, and who the @ picker marks as not in the room.
 async function refreshCount(streamId) {
   let n = null;
   try {
-    n = (await api("GET", "streams/" + streamId + "/members")).subscribers.length;
+    const ids = (await api("GET", "streams/" + streamId + "/members")).subscribers;
+    S.members.set(streamId, new Set(ids));
+    n = ids.length;
   } catch (e) { n = null; }
   if (S.open && S.open.stream_id === streamId) $("members-btn").textContent = membersLabel(n);
 }
 
-async function openTopic(streamId, stream, topic) {
+// A room is one conversation: every message in it, old topics included, in
+// time order (ops#322). Nothing on the page names a topic.
+async function openRoom(streamId, stream) {
   const prev = S.open;
-  if (prev && (prev.stream_id !== streamId || prev.topic !== topic)) {
-    api("POST", "typing", {type: "stream", to: prev.stream_id, topic: prev.topic, op: "stop"})
+  if (prev && prev.stream_id !== streamId) {
+    api("POST", "typing", {type: "stream", to: prev.stream_id, topic: ROOM_TOPIC, op: "stop"})
       .catch(() => {});
   }
-  S.open = {stream_id: streamId, stream, topic};
+  S.open = {stream_id: streamId, stream};
   S.shown = new Set();
   S.msgs = [];
   S.newFrom = null;
   $("messages").replaceChildren();
   $("new-pill").hidden = true;
-  $("topic-title").textContent = "#" + stream + " › " + topic;
+  $("room-title").textContent = "#" + stream;
   $("members-btn").disabled = false;
+  $("invite-btn").disabled = false;
   $("members-btn").textContent = membersLabel(null);
   refreshCount(streamId);
-  // Read before markTopicRead clears it: where the "חדש" line goes (ops#325).
-  const entry = S.unread.get(streamId);
-  const unreadN = entry ? entry.topics.get(topic.toLowerCase()) || 0 : 0;
-  markTopicRead(streamId, topic);
+  // Read before markRoomRead clears it: where the "חדש" line goes (ops#325).
+  const unreadN = S.unread instanceof Map ? S.unread.get(streamId) || 0 : 0;
+  markRoomRead(streamId);
   $("app").classList.remove("side-open");
-  S.collapsed.delete(streamId);
   renderStreams();
-  seedTyping(streamId, topic);
+  seedTyping(streamId);
   let got;
   try {
     got = await api("GET", "messages", {
-      narrow: [{operator: "channel", operand: stream}, {operator: "topic", operand: topic}],
+      narrow: [{operator: "channel", operand: stream}],
       anchor: "newest", num_before: 1000, num_after: 0});
   } catch (e) {
-    if (e.status !== 401) toast("לא ניתן לטעון את הנושא: " + e.message, true);
+    if (e.status !== 401) toast("לא ניתן לטעון את החדר: " + e.message, true);
     return;
   }
-  if (!S.open || S.open.stream_id !== streamId || S.open.topic !== topic) return;
+  if (!S.open || S.open.stream_id !== streamId) return;
   S.newFrom = firstNewId(got.messages, unreadN, S.me ? S.me.user_id : null);
   addMessages(got.messages, true);
   scrollToNew();
@@ -2970,7 +2829,7 @@ function tapMessage(node, id) {
 }
 
 // The quote block's own id (parseQuote's "[said](#near/ID)") is not always
-// in the currently loaded window — a topic loads at most 1000 messages — so
+// in the currently loaded window — a room loads at most 1000 messages — so
 // a miss asks the server directly rather than reporting "not found" for
 // "not fetched yet" (D3's shape).
 async function jumpToQuote(id) {
@@ -2979,14 +2838,13 @@ async function jumpToQuote(id) {
     try {
       const got = await api("GET", "messages/" + id);
       const msg = got.message;
-      if (S.open && msg.display_recipient === S.open.stream
-          && msg.subject.toLowerCase() === S.open.topic.toLowerCase()) {
+      if (S.open && msg.stream_id === S.open.stream_id) {
         addMessages([msg], false);
         node = $("messages").querySelector('[data-id="' + id + '"]');
       }
     } catch (e) { /* falls through to the "not found" toast below */ }
   }
-  if (!node) { toast("ההודעה המקורית לא נמצאה בנושא הזה.", true); return; }
+  if (!node) { toast("ההודעה המקורית לא נמצאה בחדר הזה.", true); return; }
   node.scrollIntoView({block: "center", behavior: "smooth"});
   node.classList.add("jump-flash");
   setTimeout(() => node.classList.remove("jump-flash"), 1500);
@@ -3061,7 +2919,7 @@ async function toggleReaction(m, name) {
 }
 
 // Live reaction events from other readers (ops#176's shape: patch the one
-// message this changed, never a full re-render of the open topic).
+// message this changed, never a full re-render of the open room).
 function onReaction(ev) {
   const m = S.msgs.find((x) => x.id === ev.message_id);
   if (!m) return;
@@ -3146,8 +3004,8 @@ async function send() {
   const text = box.value;
   if (!text.trim()) return;
   if (!S.open) {
-    sendError("פתחו נושא קודם, או התחילו אחד עם \"+ נושא חדש\" בסרגל הצד.");
-    toast("לא נשלח: אין נושא פתוח", true);
+    sendError("פתחו חדר קודם, או פתחו חדר חדש עם + בסרגל הצד.");
+    toast("לא נשלח: אין חדר פתוח", true);
     return;
   }
   sendError("");
@@ -3156,7 +3014,7 @@ async function send() {
   $("send-btn").disabled = true;
   try {
     const sent = await api("POST", "messages", {
-      type: "stream", to: S.open.stream_id, topic: S.open.topic, content: text});
+      type: "stream", to: S.open.stream_id, topic: ROOM_TOPIC, content: text});
     // Cleared, and reported sent, only once the server returned the new id.
     if (box.value === text) box.value = "";
     lastTypingSent = 0;  // same state the idle-stop resets (ops#249 review)
@@ -3177,6 +3035,9 @@ async function send() {
 
 // -- the @ picker: the role bots, @all, and everyone the server lists.
 // (ops#277 removed the row of mention buttons; the picker keeps their names.)
+// ops#322: someone not in the open room is marked so, and choosing them
+// invites them first ("invite by @name"). An invite wakes nobody; the
+// message, once sent, is what calls them.
 
 function mentionNames() {
   const names = ["COO", "CTO", "CMO", "CPSO", "PM", "PA", "Watchdog", "all"];
@@ -3184,7 +3045,18 @@ function mentionNames() {
     if (S.me && u.user_id === S.me.user_id) continue;
     if (!names.includes(u.full_name)) names.push(u.full_name);
   }
-  return names;
+  // The PA wakes only in #pa (ops#327): elsewhere an @**PA** would call nobody.
+  return S.open && S.open.stream === "pa" ? names : names.filter((n) => n !== "PA");
+}
+
+// The user a picker name stands for, if they are someone the open room does
+// not have (by the server's last member list; unknown counts as a member).
+function outsider(name) {
+  if (!S.open) return null;
+  const ids = S.members.get(S.open.stream_id);
+  if (!ids) return null;
+  const u = [...S.users.values()].find((x) => x.full_name === name);
+  return u && !ids.has(u.user_id) ? u : null;
 }
 
 function closePick() {
@@ -3206,6 +3078,11 @@ function renderPick() {
     label.dir = "auto";
     label.textContent = name;
     li.append(avatar(name, u ? u.is_bot : false, true), label);
+    if (outsider(name)) {
+      const tag = el("span", "tag", "לא בחדר · יוזמן");
+      li.title = name + " לא בחדר: בחירה מזמינה אותו/ה לחדר";
+      li.append(tag);
+    }
     // mousedown, not click: the compose box must keep the focus and caret.
     li.addEventListener("mousedown", (e) => { e.preventDefault(); choosePick(i); });
     list.append(li);
@@ -3226,10 +3103,24 @@ function updatePick() {
 function choosePick(i) {
   const box = $("compose");
   const name = S.pick.items[i];
+  const guest = outsider(name);
   box.setRangeText("@**" + name + "** ", S.pick.start, box.selectionStart, "end");
   closePick();
   fitCompose();
   box.focus();
+  if (guest) inviteByName(guest, S.open);
+}
+
+// "Invite by @name": the same call as the panel's Invite button, and the
+// same honest report of what the server did.
+async function inviteByName(u, room) {
+  try {
+    const r = await addMember(room.stream, u.email);
+    toast("#" + room.stream + ": " + subscribeReport(r, u.email));
+  } catch (e) {
+    toast("לא הוזמן: " + e.message, true);
+  }
+  await refreshCount(room.stream_id);
 }
 
 $("compose").addEventListener("keydown", (e) => {
@@ -3327,7 +3218,7 @@ function setupDictation() {
 }
 setupDictation();
 
-// -- streams: create, members, private
+// -- rooms: create, members, invite
 
 async function loadUsers() {
   const got = await api("GET", "users");
@@ -3336,6 +3227,12 @@ async function loadUsers() {
 
 function userLabel(u) {
   return u.full_name + (u.is_bot ? " (בוט)" : "") + " <" + u.email + ">";
+}
+
+// The invite list: the name and what it is, no address (names are unique
+// on the page: the @ picker already goes by them).
+function inviteLabel(u) {
+  return u.full_name + " · " + (u.is_bot ? "בוט" : "אדם");
 }
 
 function say(id, text, bad) {
@@ -3352,8 +3249,8 @@ function report(id, text, bad) {
 // What the server says it did, not what was asked: "already a member" and
 // "was not a member" are not reported as done.
 function subscribeReport(r, email) {
-  if ((r.subscribed[email] || []).length) return "נוסף " + email;
-  if ((r.already_subscribed[email] || []).length) return email + " כבר חבר";
+  if ((r.subscribed[email] || []).length) return "הוזמן " + email;
+  if ((r.already_subscribed[email] || []).length) return email + " כבר בחדר";
   return "השרת לא הוסיף אף אחד";
 }
 
@@ -3382,21 +3279,21 @@ $("create-cancel").addEventListener("click", () => $("create-dlg").close());
 $("create-form").addEventListener("submit", async (e) => {
   e.preventDefault();
   const name = $("create-name").value.trim().replace(/^#/, "");
-  if (!name) { say("create-status", "כתבו שם.", true); return; }
+  const bad = roomNameError(name);
+  if (bad) { say("create-status", bad, true); return; }
   const emails = [S.me.email, ...[...$("create-people").querySelectorAll("input:checked")].map((b) => b.value)];
   $("create-ok").disabled = true;
   say("create-status", "יוצר…");
   try {
-    const wantPrivate = $("create-private").checked;
-    const r = await createStream(name, wantPrivate, emails);
-    // Report the privacy the server holds, not the box: a reload failure
-    // must not turn a created stream into "not created".
+    const r = await createStream(name, emails);
+    // A reload failure must not turn a created room into "not created".
     let s;
     try {
       await loadStreams();
       s = S.streams.find((x) => x.name === name);
     } catch (err) { s = undefined; }
-    report("create-status", createReport(name, wantPrivate, r, s));
+    report("create-status", createReport(name, r, s));
+    if (s) { $("create-dlg").close(); openRoom(s.stream_id, s.name); }
   } catch (err) {
     report("create-status", "לא נוצר: " + err.message, true);
   } finally {
@@ -3445,7 +3342,6 @@ async function openMembers(s) {
   S.panel = s;
   $("members-title").textContent = "#" + s.name;
   $("members-name").value = s.name;
-  $("members-private").checked = !!s.invite_only;
   say("members-status", "");
   $("members-list").replaceChildren();
   if (!$("members-panel").classList.contains("open")) {
@@ -3468,6 +3364,7 @@ async function listMembers() {
     report("members-status", "לא ניתן לטעון את החברים: " + e.message, true);
     return;
   }
+  S.members.set(s.stream_id, ids);
   if (S.open && S.open.stream_id === s.stream_id) $("members-btn").textContent = membersLabel(ids.size);
   const list = $("members-list");
   list.replaceChildren();
@@ -3493,6 +3390,7 @@ async function listMembers() {
       rm.type = "button";
       rm.className = "icon";
       rm.textContent = "הסר";
+      rm.title = "מוציא את " + u.full_name + " מהחדר" + (u.is_bot ? "; השיחה הפתוחה שלו כאן נסגרת" : "");
       rm.addEventListener("click", async () => {
         try {
           const r = await removeMember(s.name, u.email);
@@ -3506,9 +3404,14 @@ async function listMembers() {
     } else {
       const opt = document.createElement("option");
       opt.value = u.email;
-      opt.textContent = userLabel(u);
+      opt.textContent = inviteLabel(u);
       who.append(opt);
     }
+  }
+  if (!who.children.length) {
+    const opt = el("option", "", "כולם כבר בחדר");
+    opt.value = "";
+    who.append(opt);
   }
 }
 
@@ -3518,7 +3421,7 @@ $("members-add").addEventListener("submit", async (e) => {
   if (!email || !S.panel) return;
   try {
     report("members-status", subscribeReport(await addMember(S.panel.name, email), email));
-  } catch (err) { report("members-status", "לא נוסף: " + err.message, true); }
+  } catch (err) { report("members-status", "לא הוזמן: " + err.message, true); }
   await listMembers();
   await loadStreams();
 });
@@ -3528,8 +3431,9 @@ $("members-rename").addEventListener("submit", async (e) => {
   if (!S.panel) return;
   const oldName = S.panel.name;
   const want = $("members-name").value.trim();
-  if (!want) {
-    report("members-status", "צריך שם לערוץ.", true);
+  const bad = roomNameError(want);
+  if (bad) {
+    report("members-status", bad, true);
     return;
   }
   try {
@@ -3551,32 +3455,13 @@ $("members-rename").addEventListener("submit", async (e) => {
   report("members-status", renameReport(oldName, want, now));
 });
 
-$("members-private").addEventListener("change", async () => {
-  const want = $("members-private").checked;
-  if (!S.panel) return;
-  try {
-    await setPrivate(S.panel.stream_id, want);
-  } catch (err) {
-    $("members-private").checked = !want;
-    report("members-status", "לא שונה: " + err.message, true);
-    return;
-  }
-  // Show what the server now has, not what the box was set to. After you
-  // remove yourself the stream is no longer listed: say only what was accepted.
-  let now;
-  try {
-    await loadStreams();
-    now = S.streams.find((x) => x.stream_id === S.panel.stream_id);
-  } catch (err) { now = undefined; }
-  if (now) { S.panel = now; $("members-private").checked = !!now.invite_only; }
-  report("members-status", privateReport(S.panel.name, want, now));
-});
-
 $("members-archive").addEventListener("click", async () => {
   if (!S.panel) return;
   const s = S.panel;
   if (await archiveAction("#" + s.name + " הועבר לארכיון",
-                          () => setStreamArchived(s.stream_id, true))) closeMembers();
+                          () => setStreamArchived(s.stream_id, true),
+                          () => archiveAction("#" + s.name + " שוחזר",
+                                              () => setStreamArchived(s.stream_id, false)))) closeMembers();
 });
 
 $("archive-btn").addEventListener("click", () => {
@@ -3589,6 +3474,13 @@ $("members-close").addEventListener("click", closeMembers);
 $("members-btn").addEventListener("click", () => {
   const s = S.open && S.streams.find((x) => x.stream_id === S.open.stream_id);
   if (s) openMembers(s);
+});
+// The top bar's Invite: the same panel, with the invite list in focus.
+$("invite-btn").addEventListener("click", async () => {
+  const s = S.open && S.streams.find((x) => x.stream_id === S.open.stream_id);
+  if (!s) return;
+  await openMembers(s);
+  $("members-who").focus();
 });
 document.addEventListener("keydown", (e) => {
   if (e.key === "Escape" && !e.defaultPrevented && $("members-panel").classList.contains("open")) closeMembers();
@@ -3689,10 +3581,10 @@ function toggleTheme() {
 $("theme-btn").addEventListener("click", toggleTheme);
 
 // ops#325: under 700 px the top bar has room only for where you are, so
-// members, bell and theme move into the side menu, and back when it widens.
+// invite, members, bell and theme move into the side menu, and back when it widens.
 const SMALL = matchMedia("(max-width: 700px)");
 function placeTools() {
-  (SMALL.matches ? $("side-tools") : $("top")).append($("members-btn"), $("notify-btn"), $("theme-btn"));
+  (SMALL.matches ? $("side-tools") : $("top")).append($("invite-btn"), $("members-btn"), $("notify-btn"), $("theme-btn"));
 }
 SMALL.addEventListener("change", placeTools);
 placeTools();
@@ -3743,11 +3635,10 @@ function notifyMessage(m, isOpen) {
   if (S.me && m.sender_id === S.me.user_id) return;
   if (isOpen && document.hasFocus() && document.visibilityState === "visible") return;
   const strong = (m.flags || []).includes("mentioned");
-  const title = (strong ? "@" : "") + m.sender_full_name + " · #" + m.display_recipient
-      + " › " + m.subject;
+  const title = (strong ? "@" : "") + m.sender_full_name + " · #" + m.display_recipient;
   const body = String(m.content).slice(0, 180);
   const options = {
-    body, tag: "agora-" + m.stream_id + "-" + m.subject.toLowerCase(),
+    body, tag: "agora-" + m.stream_id,
     renotify: strong, requireInteraction: strong,
     vibrate: strong ? [200, 100, 200, 100, 200] : [80],
     silent: !strong && document.visibilityState === "visible",
@@ -3773,7 +3664,7 @@ $("forget").addEventListener("click", () => {
   if (queue && S.creds) api("DELETE", "events", {queue_id: queue}).catch(() => {});
   localStorage.removeItem(STORE);
   S.creds = null;
-  closeTopic();
+  closeRoom();
   closeMembers();
   $("key-email").value = "";
   showKeys("");

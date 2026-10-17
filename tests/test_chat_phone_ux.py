@@ -1,6 +1,6 @@
 """ops#325: the chat on a phone — long messages fold, every action is visible
 without hover, the compose row stays above the browser bar and the keyboard,
-no zoom on focus, a topic opens at its first unread message, a one-row top
+no zoom on focus, a room opens at its first unread message, a one-row top
 bar, 44px tap targets, and "+" (not "👍+") only on the tapped message.
 
 Checked the way test_chat_page checks the page: its CSS rules, its markup,
@@ -186,39 +186,61 @@ def test_325_folding_measures_every_body_before_it_unfolds_any():
 
 def test_325_on_a_touch_screen_every_row_and_message_action_is_visible():
     hover_none = _media("(hover: none)")
-    shown = _rule(".gear, .mark-read, .topic-archive, .quote-btn", hover_none)
+    shown = _rule(".gear, .mark-read, .quote-btn", hover_none)
     assert "opacity: 1" in shown
-    # The topic name fills the row, so a tap on the row's empty end opens the
-    # topic; only the visible "ארכב" archives.
-    assert "flex: 1" in _rule(".topic-row .topic")
+    # The room name fills the row, so a tap on the row's empty end opens the room.
+    assert "flex: 1" in _rule(".room-name")
 
 
-def test_325_archiving_a_topic_from_its_row_offers_undo_that_restores_it():
-    prelude = FAKE_DOM + """
-      const CARET = "c", GEAR = "g", CHECK = "k", SVG = "http://www.w3.org/2000/svg";
-      function openTopic() {}
-      function openMembers() {}
-      function markStreamRead() {}
-      const actions = [], server = [];
-      function archiveAction(done, call, undo) { actions.push({done, call, undo}); }
-      function archiveTopic(id, t) { server.push(["archive", id, t]); }
-      function restoreTopic(id, t) { server.push(["restore", id, t]); }
-      const S = {streams: [{stream_id: 1, name: "feature", invite_only: true}],
-                 topics: new Map([["feature", new Map([["a", 5]])]]), unread: new Map(),
-                 collapsed: new Set(), open: null, adding: null};
-    """
-    got = _js(("el", "svgIcon", "renderStreams", "newTopicItem"), """
-      renderStreams();
-      $("streams").querySelector("button.topic-archive").on.click();
+def _members_archive_handler() -> str:
+    found = re.search(r'\$\("members-archive"\)\.addEventListener\("click", (async \(\) => \{.*?\n\})\);',
+                      _markup().script, re.DOTALL)
+    assert found
+    return found.group(1)
+
+
+def test_325_archiving_a_room_offers_undo_that_restores_it():
+    # Rooms (ops#322) are archived from the members panel; the toast's "בטל" restores.
+    got = _js((), f"""
+      const run = {_members_archive_handler()};
+      await run();
       const [first] = actions;
-      first.call();
+      await first.call();
       first.undo();
-      actions[1].call();
+      await actions[1].call();
       out.done = [first.done, actions[1].done];
       out.server = server;
+      out.closed = closed;
+    """, prelude="""
+      const actions = [], server = [];
+      let closed = 0;
+      async function archiveAction(done, call, undo) { actions.push({done, call, undo}); return true; }
+      async function setStreamArchived(id, on) { server.push([id, on]); }
+      function closeMembers() { closed++; }
+      const S = {panel: {stream_id: 1, name: "feature"}};
+    """)
+    assert got["server"] == [[1, True], [1, False]]
+    assert got["done"] == ["#feature הועבר לארכיון", "#feature שוחזר"]
+    assert got["closed"] == 1
+
+
+def test_325_only_a_public_room_gets_a_chip():
+    prelude = FAKE_DOM + """
+      const GEAR = "g", CHECK = "k", SVG = "http://www.w3.org/2000/svg";
+      function openRoom() {}
+      function openMembers() {}
+      function markRoomRead() {}
+      const S = {streams: [{stream_id: 1, name: "feature", invite_only: true},
+                           {stream_id: 2, name: "open", invite_only: false},
+                           {stream_id: 3, name: "unknown"}],
+                 unread: new Map(), open: null};
+    """
+    got = _js(("el", "svgIcon", "renderStreams"), """
+      renderStreams();
+      out.tags = $("streams").querySelectorAll(".room-row").map(
+        (r) => r.querySelectorAll(".room-name .tag").map((x) => x.textContent));
     """, prelude=prelude)
-    assert got["server"] == [["archive", 1, "a"], ["restore", 1, "a"]]
-    assert got["done"] == ["#feature › a הועבר לארכיון", "#feature › a שוחזר"]
+    assert got["tags"] == [[], ["ציבורי"], []]  # no flag read: no claim
 
 
 def test_325_the_archive_toast_has_an_undo_button_that_runs_it():
@@ -273,7 +295,7 @@ def test_325_every_field_is_16px_on_a_touch_screen_so_ios_does_not_zoom():
     assert css.rindex("@media (pointer: coarse)") > css.index(".appr-note {")
 
 
-# -- 5. a topic opens at its first unread message
+# -- 5. a room opens at its first unread message
 
 
 def test_325_the_first_new_message_is_the_nth_last_from_someone_else():
@@ -311,14 +333,16 @@ def test_325_a_topic_with_7_unread_opens_with_the_new_line_at_the_top():
     """)
     assert got["line"] == ["חדש", "rtl", "4", "msg first", 7]
     assert got["scroll"] == 1300
-    open_ = _function("openTopic")
-    # The count is read before markTopicRead clears it; the line is placed
-    # after the bottom-scroll that addMessages does.
-    assert open_.index("const unreadN") < open_.index("markTopicRead(streamId, topic)")
+    open_ = _function("openRoom")
+    # The room's count (ops#322: one count per room) is read before
+    # markRoomRead clears it; the line is placed after the bottom-scroll
+    # that addMessages does.
+    assert "S.unread.get(streamId) || 0" in open_
+    assert open_.index("const unreadN") < open_.index("markRoomRead(streamId)")
     assert open_.index("S.newFrom = firstNewId(got.messages, unreadN") < open_.index("addMessages(got.messages, true)")
     assert open_.index("addMessages(got.messages, true)") < open_.index("scrollToNew()")
-    assert "S.newFrom = null" in _function("closeTopic")
-    assert "S.unfolded.clear()" in _function("closeTopic")  # no session-long growth
+    assert "S.newFrom = null" in _function("closeRoom")
+    assert "S.unfolded.clear()" in _function("closeRoom")  # no session-long growth
     assert "var(--accent)" in _rule(".new-line")
 
 
@@ -338,15 +362,16 @@ def test_325_under_700px_the_top_bar_is_one_row_with_room_for_the_name():
     assert "var(--switch-w)" in _rule(".dhead h2", small)
     assert not re.search(r"1\.875rem|8rem|7\.5rem;", _rule("#top", small) + switch + _rule(".dhead h2", small))
     got = _js(("placeTools",), """
-      for (const id of ["top", "side-tools", "members-btn", "notify-btn", "theme-btn"]) $(id).id = id;
+      for (const id of ["top", "side-tools", "invite-btn", "members-btn", "notify-btn", "theme-btn"]) $(id).id = id;
       placeTools();
       out.small = [$("side-tools").children.map((c) => c.id), $("top").children.length];
       SMALL.matches = false;
       placeTools();
       out.wide = [$("side-tools").children.length, $("top").children.length];
     """, prelude=FAKE_DOM + "const SMALL = {matches: true};")
-    assert got["small"] == [["members-btn", "notify-btn", "theme-btn"], 0]
-    assert got["wide"] == [0, 3]
+    # #132's "הזמנה" goes too: the bar keeps only menu, room name and dot.
+    assert got["small"] == [["invite-btn", "members-btn", "notify-btn", "theme-btn"], 0]
+    assert got["wide"] == [0, 4]
     script = _markup().script
     assert 'const SMALL = matchMedia("(max-width: 700px)")' in script
     assert 'SMALL.addEventListener("change", placeTools)' in script
@@ -359,15 +384,15 @@ def test_325_under_700px_the_top_bar_is_one_row_with_room_for_the_name():
 
 def test_325_every_sidebar_top_bar_and_message_button_is_44px_on_touch():
     coarse = _media("(pointer: coarse)")
-    sel = (".btn, .icon, .topic, .stream-name, .new-topic, .archived-name, .reaction-chip, "
+    sel = (".btn, .icon, .room-name, .archived-name, .reaction-chip, "
            ".react-picker button,\n  .more-btn")
     assert "min-height: 44px" in _rule(sel, coarse)
     assert "min-width: 44px" in _rule(".icon, .react-btn, .reaction-chip", coarse)
-    assert "gap: 8px" in _rule("#top, #me-row, #side-tools, .stream-row, .topic-row, .line, .reactions", coarse)
+    assert "gap: 8px" in _rule("#top, #me-row, #side-tools, .room-row, .line, .reactions", coarse)
     # Every button in the top bar, the sidebar head and the message template
-    # carries one of those classes (the sidebar rows are built as .stream-name,
-    # .topic, .icon and .new-topic by renderStreams).
-    ids = {"menu-btn", "members-btn", "notify-btn", "theme-btn", "pair-btn", "forget",
+    # carries one of those classes (the sidebar rows are built as .room-name
+    # and .icon by renderStreams).
+    ids = {"menu-btn", "invite-btn", "members-btn", "notify-btn", "theme-btn", "pair-btn", "forget",
            "archive-btn", "new-stream-btn", "view-chat", "view-dash", "send-btn"}
     found = {}
     for tag, a in _markup().elements:
@@ -378,7 +403,7 @@ def test_325_every_sidebar_top_bar_and_message_button_is_44px_on_touch():
     for key, cls in found.items():
         assert cls & {"btn", "icon"}, key
     rows = _function("renderStreams")
-    for cls in ('"stream-name"', '"topic"', '"icon gear"', '"icon mark-read"', '"icon topic-archive"'):
+    for cls in ('"room-name"', '"icon gear"', '"icon mark-read"'):
         assert f"className = {cls}" in rows, cls
 
 
@@ -440,7 +465,6 @@ def test_325_the_hint_and_the_mic_privacy_line_both_sit_under_the_composer():
 # -- seen in the browser: RTL sidebar alignment
 
 
-def test_325_latin_and_hebrew_topic_names_start_at_the_same_right_edge():
-    assert "text-align: right" in _rule(".topic")
-    assert "text-align: right" in _rule(".stream-label")
-    assert 'btn.dir = "auto"' in _function("renderStreams")
+def test_325_latin_and_hebrew_room_names_start_at_the_same_right_edge():
+    assert "text-align: right" in _rule(".room-label")
+    assert 'label.dir = "auto"' in _function("renderStreams")

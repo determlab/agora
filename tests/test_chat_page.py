@@ -258,9 +258,9 @@ def test_255_isTouch_reflects_the_pointer_media_query():
 
 def test_255_automatic_compose_focus_is_guarded_but_a_tap_driven_one_is_not():
     # The three automatic triggers the issue names — load, reconnect and
-    # switching stream or topic all run through openTopic(); a send runs
+    # switching rooms all run through openRoom(); a send runs
     # through send()'s finally — must not focus on a touch device.
-    assert 'if (!isTouch()) $("compose").focus();' in _function("openTopic")
+    assert 'if (!isTouch()) $("compose").focus();' in _function("openRoom")
     assert 'if (!isTouch()) box.focus();' in _function("send")
     # A tap the person made meaning to type next (quoting, a mention button,
     # picking one from the "@" autocomplete) still focuses unconditionally —
@@ -575,10 +575,11 @@ def test_the_queue_delete_the_page_sends_removes_the_queue(world):
     assert body["code"] == "BAD_EVENT_QUEUE_ID", body
 
 
-def test_the_stream_dialogs_call_subscriptions_with_principals():
+def test_the_room_dialogs_call_subscriptions_with_principals():
     script = _markup().script
+    # ops#322: a room is a name and a member list; nobody outside it reads it.
     assert re.search(r'api\("POST", "users/me/subscriptions",\s*\{subscriptions: \[\{name: name\}\], '
-                     r'invite_only: isPrivate, principals: emails\}', _function("createStream"))
+                     r'invite_only: true, principals: emails\}', _function("createStream"))
     assert re.search(r'api\("POST", "users/me/subscriptions",\s*\{subscriptions: \[\{name: stream\}\], '
                      r'principals: \[email\]\}', _function("addMember"))
     assert re.search(r'api\("DELETE", "users/me/subscriptions", \{subscriptions: \[stream\], '
@@ -589,28 +590,27 @@ def test_the_stream_dialogs_call_subscriptions_with_principals():
     assert "const emails = [S.me.email, " in script
 
 
-def test_create_add_remove_and_private_reach_the_server_as_the_page_sends_them(world):
+def test_create_invite_and_remove_reach_the_server_as_the_page_sends_them(world):
     run, human, bots = world["run"], world["human"], world["bots"]
     cto, coo = bots["CTO"]["email"], bots["COO"]["email"]
-    got = _js(("createStream", "addMember", "removeMember", "setPrivate"), f"""
-      await createStream("tmp", true, {json.dumps([human["email"], cto])});
+    got = _js(("createStream", "addMember", "removeMember"), f"""
+      await createStream("tmp", {json.dumps([human["email"], cto])});
       await addMember("tmp", {json.dumps(coo)});
       await removeMember("tmp", {json.dumps(cto)});
-      await setPrivate(0, false);
       out.calls = calls;
     """, prelude=API_STUB)
-    create, add, remove, private = got["calls"]
+    create, add, remove = got["calls"]
     assert create[:2] == ["POST", "users/me/subscriptions"]
     assert json.loads(create[2]["principals"]) == [human["email"], cto]
     assert add[:2] == ["POST", "users/me/subscriptions"]
     assert json.loads(add[2]["principals"]) == [coo]
     assert remove[:2] == ["DELETE", "users/me/subscriptions"]
     assert json.loads(remove[2]["principals"]) == [cto]
-    assert private == ["PATCH", "streams/0", {"is_private": "false"}]
+    assert "topic" not in create[2]
 
     def cto_send():
         return page_api(run, bots["CTO"], "POST", "messages", type="stream", to="tmp",
-                        topic="t", content="from the CTO")
+                        content="from the CTO")
 
     status, body = page_api(run, human, create[0], create[1], **create[2])
     assert status == 200 and set(body["subscribed"]) == {human["email"], cto}, body
@@ -626,34 +626,26 @@ def test_create_add_remove_and_private_reach_the_server_as_the_page_sends_them(w
     assert status == 400 and "tmp" in body["msg"], body
     status, members = page_api(run, human, "GET", f"streams/{tmp['stream_id']}/members")
     assert set(members["subscribers"]) == {human["id"], bots["COO"]["id"]}
-    status, body = page_api(run, human, "PATCH", f"streams/{tmp['stream_id']}", **private[2])
-    assert status == 200, body
-    status, subs = page_api(run, human, "GET", "users/me/subscriptions")
-    assert [s["invite_only"] for s in subs["subscriptions"] if s["name"] == "tmp"] == [False]
 
 
-def test_the_private_toggle_never_reports_a_state_it_did_not_read_back():
-    script = _markup().script
-    assert 'report("members-status", privateReport(S.panel.name, want, now))' in script
-    got = _js(("privacy", "privateReport"), """
-      out.read = privateReport("x", false, {stream_id: 1, name: "x", invite_only: true});
-      out.gone = privateReport("x", true, undefined);
-      out.goneOff = privateReport("x", false, undefined);
-    """)
-    # The read-back wins over what was asked for.
-    assert got["read"] == "#x עכשיו פרטי"
-    # Not listed any more (you removed yourself): no "is now", only what was accepted.
-    assert "עכשיו" not in got["gone"] and "עכשיו" not in got["goneOff"]
-    assert got["gone"].startswith("#x הוגדר פרטי (השרת קיבל; הדף לא יכול לקרוא את זה בחזרה")
-    assert got["goneOff"].startswith("#x הוגדר ציבורי (")
+def test_322_there_is_no_private_toggle_and_no_topic_control_anywhere():
+    text = PAGE.read_text(encoding="utf-8")
+    for gone in ('id="members-private"', 'id="create-private"', "setPrivate", "is_private",
+                 "new-topic", "archiveTopic", "restoreTopic", "openTopic", "markTopicRead",
+                 "mark_topic_as_read", "/topics", "archived_topics", "S.open.topic", "› "):
+        assert gone not in text, gone
+    # The words for "topic" and "channel" are gone from the page; "room" is the word.
+    for word in ("נושא", "ערוץ"):
+        assert word not in text, word
 
 
-def test_create_reports_the_privacy_the_server_holds_not_the_checkbox(world):
+def test_create_reports_what_the_server_did_and_opens_the_new_room(world):
     run, human, bots = world["run"], world["human"], world["bots"]
     cto = bots["CTO"]["email"]
     script = _markup().script
-    assert 'report("create-status", createReport(name, wantPrivate, r, s))' in script
-    # The stream already exists as public and the human is not a member.
+    assert 'report("create-status", createReport(name, r, s))' in script
+    assert 'if (s) { $("create-dlg").close(); openRoom(s.stream_id, s.name); }' in script
+    # The room already exists and the human is not in it.
     status, body = page_api(run, human, "POST", "users/me/subscriptions",
                             subscriptions=json.dumps([{"name": "old"}]), principals=json.dumps([cto]))
     assert status == 200 and list(body["subscribed"]) == [cto], body
@@ -661,22 +653,19 @@ def test_create_reports_the_privacy_the_server_holds_not_the_checkbox(world):
                          subscriptions=json.dumps([{"name": "old"}]), invite_only="true",
                          principals=json.dumps([human["email"], cto]))
     assert status == 200, r
-    status, subs = page_api(run, human, "GET", "users/me/subscriptions")
-    [old] = [s for s in subs["subscriptions"] if s["name"] == "old"]
-    assert old["invite_only"] is False
-    got = _js(("privacy", "createReport"), f"""
-      const r = {json.dumps(r)}, s = {json.dumps(old)};
-      out.existed = createReport("old", true, r, s);
-      out.asked = createReport("old", false, r, s);
-      out.fresh = createReport("new", true, {{subscribed: {{"a@x": ["new"]}}, already_subscribed: {{}}}},
-                               {{name: "new", invite_only: true}});
-      out.unread = createReport("new", true, {{subscribed: {{"a@x": ["new"]}}, already_subscribed: {{}}}});
+    got = _js(("createReport",), f"""
+      const r = {json.dumps(r)};
+      out.existed = createReport("old", r, {{stream_id: 1, name: "old"}});
+      out.fresh = createReport("new", {{subscribed: {{"a@x": ["new"], "b@x": ["new"]}},
+                                        already_subscribed: {{}}}}, {{name: "new"}});
+      out.one = createReport("new", {{subscribed: {{"a@x": ["new"]}}, already_subscribed: {{}}}},
+                             {{name: "new"}});
+      out.unread = createReport("new", {{subscribed: {{"a@x": ["new"]}}, already_subscribed: {{}}}});
     """)
-    assert got["existed"].startswith("#old (ציבורי): נוספו 1, 1 כבר חברים")
-    assert got["existed"].endswith("הוא כבר היה קיים כציבורי, לכן פרטי לא הוחל")
-    assert got["asked"] == "#old (ציבורי): נוספו 1, 1 כבר חברים (הערוץ היה קיים)"
-    assert got["fresh"] == "#new (פרטי): נוספו 1"
-    assert got["unread"] == "#new: נוספו 1; הדף לא הצליח לקרוא בחזרה אם הוא פרטי"
+    assert got["existed"] == "#old: החדר כבר היה קיים; נוסף אחד, 1 כבר בפנים"
+    assert got["fresh"] == "#new: נוספו 2"
+    assert got["one"] == "#new: נוסף אחד"
+    assert got["unread"] == "#new: נוסף אחד (הדף לא הצליח לקרוא את החדר בחזרה)"
 
 
 def test_79_rename_form_prefills_the_name_and_refuses_empty_before_the_server():
@@ -687,12 +676,13 @@ def test_79_rename_form_prefills_the_name_and_refuses_empty_before_the_server():
     # The rename call, as the page sends it: PATCH with new_name, nothing else.
     assert 'api("PATCH", "streams/" + streamId, {new_name: newName})' in _function("renameStream")
     handler = script[script.index('$("members-rename").addEventListener'):
-                     script.index('$("members-private").addEventListener')]
+                     script.index('$("members-archive").addEventListener')]
     # Refused client-side, never reaching renameStream(): the server's own
     # rule for new_name (`if p.get("new_name")`) silently ignores an empty
     # string, which would report success for a rename that did not happen.
-    assert handler.index('if (!want)') < handler.index('renameStream(')
-    assert 'report("members-status", "צריך שם לערוץ.", true);\n    return;' in handler
+    # ops#322: an unsafe name is refused the same way, before the server.
+    assert handler.index('const bad = roomNameError(want);') < handler.index('renameStream(')
+    assert 'report("members-status", bad, true);\n    return;' in handler
     # The read-back wins, exactly like the private toggle (D3's shape).
     assert 'report("members-status", renameReport(oldName, want, now))' in handler
 
@@ -730,13 +720,13 @@ def test_79_rename_reaches_the_server_through_the_pages_own_call_and_the_sidebar
     # The sidebar label is exactly this render function reading exactly this
     # (now server-confirmed) name.
     prelude = FAKE_DOM + f"""
-      const CARET = "c", GEAR = "g", SVG = "http://www.w3.org/2000/svg";
-      const S = {{streams: [{{stream_id: {feature["stream_id"]}, name: "roadmap", invite_only: true}}],
-                 topics: new Map(), collapsed: new Set(), open: null, adding: null}};
+      const GEAR = "g", CHECK = "k", SVG = "http://www.w3.org/2000/svg";
+      const S = {{streams: [{{stream_id: {feature["stream_id"]}, name: "roadmap"}}],
+                 unread: new Map(), open: null}};
     """
-    got = _js(("svgIcon", "renderStreams", "newTopicItem"), """
+    got = _js(("svgIcon", "el", "renderStreams"), """
       renderStreams();
-      out.label = $("streams").querySelector(".stream-label").textContent;
+      out.label = $("streams").querySelector(".room-name").textContent;
     """, prelude=prelude)
     assert got["label"] == "#roadmap"
 
@@ -970,10 +960,11 @@ def test_77_the_ui_speaks_hebrew_right_to_left_and_keeps_technical_terms_english
         latin = set(re.findall(r"[A-Za-z_]+", chunk)) - technical
         assert not latin, (chunk, latin)
     text = " ".join(p.chunks)
-    for he in ("שלח", "חברים", "בחרו נושא", "ציטוט", "ערוצים", "שכח מפתח"):
+    for he in ("שלח", "חברים", "בחרו חדר", "ציטוט", "חדרים", "שכח מפתח", "הזמנה", "הזמן"):
         assert he in text, he
     # The labels the script writes are Hebrew too.
-    for he in ('"+ נושא חדש"', '"פרטי"', '"בוט" : "אדם"', '"נשלח · id "', '"מחובר"'):
+    for he in ('"מי בחדר, הזמנה ושם"', '"לא בחדר · יוזמן"', '"בוט" : "אדם"', '"נשלח · id "',
+               '"מחובר"'):
         assert he in m.script, he
     for en in ('"Pick a topic"', '"Members"', '"quote"', '"remove"', '"sent, id "', '"Forget key"'):
         assert en not in m.script, en
@@ -1010,9 +1001,10 @@ def test_77_the_members_button_shows_the_count_the_server_read(world):
     got = _js(("membersLabel",), "out.l = [membersLabel(3), membersLabel(0), membersLabel(null), membersLabel(undefined)];")
     assert got["l"] == ["חברים · 3", "חברים · 0", "חברים", "חברים"]
     rc = _function("refreshCount")
-    assert '(await api("GET", "streams/" + streamId + "/members")).subscribers.length' in rc
+    assert 'const ids = (await api("GET", "streams/" + streamId + "/members")).subscribers;' in rc
+    assert "S.members.set(streamId, new Set(ids));" in rc and "n = ids.length;" in rc
     assert "catch (e) { n = null; }" in rc
-    assert "refreshCount(streamId)" in _function("openTopic")
+    assert "refreshCount(streamId)" in _function("openRoom")
     run, human = world["run"], world["human"]
     status, subs = page_api(run, human, "GET", "users/me/subscriptions")
     [feature] = [s for s in subs["subscriptions"] if s["name"] == "feature"]
@@ -1020,58 +1012,49 @@ def test_77_the_members_button_shows_the_count_the_server_read(world):
     assert status == 200 and len(body["subscribers"]) == 3, body
 
 
-def test_77_new_topic_lives_under_each_stream_with_caret_private_tag_and_gear():
+def test_322_the_sidebar_is_one_row_per_room_with_nothing_nested():
     assert 'id="newtopic"' not in PAGE.read_text(encoding="utf-8")
     prelude = FAKE_DOM + """
-      const CARET = "c", GEAR = "g", SVG = "http://www.w3.org/2000/svg";
-      const opened = [], members = [];
-      function openTopic(...a) { opened.push(a); }
+      const GEAR = "g", CHECK = "k", SVG = "http://www.w3.org/2000/svg";
+      const opened = [], members = [], read = [];
+      function openRoom(...a) { opened.push(a); }
       function openMembers(s) { members.push(s.name); }
-      const S = {streams: [{stream_id: 1, name: "feature", invite_only: true},
-                           {stream_id: 2, name: "open", invite_only: false}],
-                 topics: new Map([["feature", new Map([["a", 5], ["b", 9]])]]),
-                 collapsed: new Set([2]), open: null, adding: null};
+      function markRoomRead(id) { read.push(id); }
+      const S = {streams: [{stream_id: 1, name: "coo"}, {stream_id: 2, name: "All hands"},
+                           {stream_id: 3, name: "כללי"}],
+                 unread: new Map([[2, 4]]), open: {stream_id: 1, stream: "coo"}};
     """
-    got = _js(("svgIcon", "renderStreams", "newTopicItem"), """
+    got = _js(("svgIcon", "el", "renderStreams"), """
       renderStreams();
       const list = $("streams");
-      const rows = list.querySelectorAll(".stream-row");
-      out.rows = rows.map((r) => [r.className, r.querySelector(".stream-label").textContent,
-                                  r.querySelectorAll(".tag").map((t) => t.textContent),
-                                  r.querySelector("svg.caret") !== null,
-                                  r.querySelector("button.gear svg") !== null]);
-      out.svgns = list.querySelector("svg.caret").ns;
-      out.topics = list.querySelectorAll(".topic").map((t) => t.textContent);
-      out.adders = list.querySelectorAll("button.new-topic").map((b) => b.textContent);
-      list.querySelectorAll("button.gear")[1].on.click();
-      list.querySelectorAll("button.new-topic")[0].on.click();
-      const input = $("streams").querySelector(".new-topic-form input");
-      out.focused = document.activeElement === input;
-      input.value = "  ";
-      $("streams").querySelector("form.new-topic-form").on.submit({preventDefault() {}});
-      out.empty = [opened.length, toasts.splice(0)];
-      input.value = " ops#77 ";
-      $("streams").querySelector("form.new-topic-form").on.submit({preventDefault() {}});
-      out.opened = opened; out.members = members; out.toasts = toasts; out.adding = S.adding;
+      const rows = list.querySelectorAll(".room-row");
+      out.rows = rows.map((r) => [r.className, r.querySelector(".room-label").textContent,
+                                  r.querySelector(".room-label").dir,
+                                  r.querySelectorAll(".badge").map((b) => b.textContent),
+                                  r.querySelector("button.gear svg") !== null,
+                                  r.querySelector("button.room-name").attrs["aria-current"] || null]);
+      out.nested = list.querySelectorAll("ul").length;
+      out.svgns = list.querySelector("button.gear svg").ns;
+      rows[2].querySelector("button.room-name").on.click();
+      rows[1].querySelector("button.gear").on.click();
+      rows[1].querySelector("button.mark-read").on.click();
+      out.opened = opened; out.members = members; out.read = read;
+      S.streams = [];
+      renderStreams();
+      out.empty = $("streams").textContent;
     """, prelude=prelude)
-    # ops#325: only the exception (a public channel) gets a chip.
-    assert got["rows"] == [["stream-row", "#feature", [], True, True],
-                           ["stream-row folded", "#open", ["ציבורי"], True, True]]
+    assert got["rows"] == [["room-row open", "coo", "auto", [], True, "true"],
+                           ["room-row unread", "All hands", "auto", ["4"], True, None],
+                           ["room-row", "כללי", "auto", [], True, None]]
+    assert got["nested"] == 0  # no topic list under a room, folded or not
     assert got["svgns"] == "http://www.w3.org/2000/svg"
-    assert got["topics"] == ["b", "a"]
-    assert got["adders"] == ["+ נושא חדש", "+ נושא חדש"]
-    assert got["members"] == ["open"] and got["focused"] is True
-    assert got["empty"][0] == 0 and got["empty"][1][0][1] is True
-    assert got["opened"] == [[1, "feature", "ops#77"]] and got["adding"] is None
-    # Nothing exists on the server until the first message: the toast says so.
-    [(msg, bad)] = got["toasts"]
-    assert not bad and "ops#77" in msg and "עם ההודעה הראשונה" in msg
+    assert got["opened"] == [[3, "כללי"]] and got["members"] == ["All hands"] and got["read"] == [2]
+    assert "אין עדיין חדרים" in got["empty"]
     css = _css()
-    assert "transform: rotate(90deg)" in _rule(".stream-row.folded .caret", css)
-    assert "transition: transform" in _rule(".caret", css)
     gear = _rule(".gear", css)
     assert "opacity: 0" in gear and "transition: opacity" in gear
-    assert "opacity: 1" in _rule(".stream-row:hover .gear, .stream-row.open .gear, .gear:focus", css)
+    assert "opacity: 1" in _rule(".room-row:hover .gear, .room-row.open .gear, .gear:focus", css)
+    assert "background: var(--accent)" in _rule(".room-row.open", css)
     assert "⚙" not in PAGE.read_text(encoding="utf-8") and "▸" not in PAGE.read_text(encoding="utf-8")
 
 
@@ -1142,8 +1125,8 @@ def test_77_typing_at_opens_a_picker_that_inserts_the_mention():
         [2, {user_id: 2, full_name: "CTO", is_bot: true}],
         [3, {user_id: 3, full_name: "Dana Levi", is_bot: false}]])};
     """
-    dom = _js(("roleOf", "initial", "avatar", "mentionQuery", "pickNames", "mentionNames",
-               "closePick", "renderPick", "updatePick", "choosePick"), """
+    dom = _js(("roleOf", "initial", "avatar", "el", "mentionQuery", "pickNames", "mentionNames",
+               "outsider", "closePick", "renderPick", "updatePick", "choosePick"), """
       const box = $("compose");
       box.value = "hi @d"; box.selectionStart = box.selectionEnd = 5;
       updatePick();
@@ -1158,7 +1141,8 @@ def test_77_typing_at_opens_a_picker_that_inserts_the_mention():
     """, prelude=prelude)
     assert dom["items"] == ["Dana Levi", "Watchdog"] and dom["shown"] is True
     assert dom["opts"] == [["active", "true", "DDana Levi"], ["", "false", "WWatchdog"]]
-    assert dom["names"] == ["COO", "CTO", "CMO", "CPSO", "PM", "PA", "Watchdog", "all", "Dana Levi"]
+    # no room open, so not #pa: the PA is not offered
+    assert dom["names"] == ["COO", "CTO", "CMO", "CPSO", "PM", "Watchdog", "all", "Dana Levi"]
     assert dom["value"] == "hi @**Dana Levi** " and dom["caret"] == len("hi @**Dana Levi** ")
     assert dom["closed"] is True and dom["none"] is None
     # The keys: arrows move, Enter/Tab pick (and do not send), Escape closes.
@@ -1171,6 +1155,87 @@ def test_77_typing_at_opens_a_picker_that_inserts_the_mention():
     assert '"@**" + name + "** "' in _function("choosePick")
     assert '$("compose").addEventListener("input", onComposeInput);' in script
     assert "updatePick();" in _function("onComposeInput")
+
+
+def test_322_picking_someone_not_in_the_room_invites_them_with_the_panels_own_call(world):
+    prelude = FAKE_DOM + API_STUB + """
+      function fitCompose() {}
+      const S = {me: {user_id: 1}, pick: null, open: {stream_id: 7, stream: "design"},
+                 members: new Map([[7, new Set([1, 2])]]), users: new Map([
+        [1, {user_id: 1, full_name: "Me", is_bot: false, email: "me@x"}],
+        [2, {user_id: 2, full_name: "CTO", is_bot: true, email: "cto-bot@chat.localhost"}],
+        [3, {user_id: 3, full_name: "PM", is_bot: true, email: "pm-bot@chat.localhost"}]])};
+      async function refreshCount(id) { calls.push(["refresh", id]); }
+      function subscribeReport(r, email) { return "הוזמן " + email; }
+    """
+    got = _js(("roleOf", "initial", "avatar", "el", "mentionQuery", "pickNames", "mentionNames",
+               "outsider", "closePick", "renderPick", "updatePick", "addMember", "inviteByName",
+               "choosePick"), """
+      const box = $("compose");
+      box.value = "@"; box.selectionStart = box.selectionEnd = 1;
+      updatePick();
+      out.tags = S.pick.items.map((n, i) => [n, $("picker").children[i].querySelectorAll(".tag").length]);
+      box.value = "@c"; box.selectionStart = box.selectionEnd = 2;
+      updatePick();
+      choosePick(S.pick.items.indexOf("CTO"));   // in the room: no invite
+      out.afterMember = calls.length;
+      box.value = "@p"; box.selectionStart = box.selectionEnd = 2;
+      updatePick();
+      choosePick(S.pick.items.indexOf("PM"));    // not in the room: invited first
+      await new Promise((r) => setTimeout(r, 0));
+      out.calls = calls; out.toasts = toasts; out.value = box.value;
+      S.members = new Map();                     // unknown: nobody is marked
+      box.value = "@p"; box.selectionStart = box.selectionEnd = 2;
+      updatePick();
+      out.unknown = $("picker").children.map((li) => li.querySelectorAll(".tag").length);
+    """, prelude=prelude)
+    tags = dict(got["tags"])
+    assert tags["CTO"] == 0 and tags["PM"] == 1 and tags["all"] == 0
+    assert got["afterMember"] == 0
+    [add, refresh] = got["calls"]
+    assert add[:2] == ["POST", "users/me/subscriptions"]
+    assert json.loads(add[2]["principals"]) == ["pm-bot@chat.localhost"]
+    assert json.loads(add[2]["subscriptions"]) == [{"name": "design"}]
+    assert refresh == ["refresh", 7]
+    assert got["toasts"] == [["#design: הוזמן pm-bot@chat.localhost", False]]
+    assert got["value"].endswith("@**PM** ")
+    assert set(got["unknown"]) == {0}
+    # Replayed against the real server as the founder: the PM is in, and nothing woke.
+    run, human, bots = world["run"], world["human"], world["bots"]
+    status, body = page_api(run, human, add[0], add[1], subscriptions=json.dumps([{"name": "feature"}]),
+                            principals=json.dumps([bots["CMO"]["email"]]))
+    assert status == 200 and body["subscribed"] == {bots["CMO"]["email"]: ["feature"]}, body
+    assert run.store.one("SELECT count(*) FROM messages")[0] == 0
+
+
+def test_322_the_picker_offers_the_pa_in_pa_only(world):
+    # the founder rule (2026-10-17): the PA never joins a company room and an
+    # @**PA** there wakes nothing, so the picker leaves it out outside #pa
+    prelude = FAKE_DOM + API_STUB + """
+      function fitCompose() {}
+      const S = {me: {user_id: 1}, pick: null, open: {stream_id: 7, stream: "design"},
+                 members: new Map([[7, new Set([1])], [9, new Set([1])]]), users: new Map([
+        [1, {user_id: 1, full_name: "Me", is_bot: false, email: "me@x"}],
+        [4, {user_id: 4, full_name: "PA", is_bot: true, email: "pa-bot@chat.localhost"}]])};
+      async function refreshCount(id) { calls.push(["refresh", id]); }
+      function subscribeReport(r, email) { return "הוזמן " + email; }
+    """
+    got = _js(("roleOf", "initial", "avatar", "el", "mentionQuery", "pickNames", "mentionNames",
+               "outsider", "closePick", "renderPick", "updatePick", "addMember", "inviteByName",
+               "choosePick"), """
+      const box = $("compose");
+      out.names = mentionNames();
+      box.value = "@pa"; box.selectionStart = box.selectionEnd = 3;
+      updatePick();
+      out.items = S.pick ? S.pick.items : [];
+      out.calls = calls.slice();
+      S.open = {stream_id: 9, stream: "pa"};    // in #pa the PA is still offered
+      box.value = "@pa"; box.selectionStart = box.selectionEnd = 3;
+      updatePick();
+      out.paTag = $("picker").children[S.pick.items.indexOf("PA")].querySelectorAll(".tag").length;
+    """, prelude=prelude)
+    assert "PA" not in got["names"] and "PA" not in got["items"] and got["calls"] == []
+    assert got["paTag"] == 1
 
 
 def test_77_compose_has_a_hint():
@@ -1267,7 +1332,8 @@ def test_77_a_toast_follows_each_action_and_says_success_only_when_the_server_di
       function sendTyping() {}
       const isTouch = () => false;
       let lastTypingSent = 0;
-      const S = {sending: false, open: {stream_id: 1, topic: "t"}};
+      const S = {sending: false, open: {stream_id: 1, stream: "feature"}};
+      const ROOM_TOPIC = "chat";
     """
     sent = _js(("sendError", "send"), """
       const box = $("compose");
@@ -1285,8 +1351,8 @@ def test_77_a_toast_follows_each_action_and_says_success_only_when_the_server_di
     script = _markup().script
     assert re.search(r"function report\(id, text, bad\) \{\s*say\(id, text, bad\);\s*toast\(text, bad\);", script)
     for call in ('report("members-status", subscribeReport(', 'report("members-status", r.removed.length',
-                 'report("members-status", privateReport(', 'report("create-status", createReport(',
-                 'report("create-status", "לא נוצר: "', 'report("members-status", "לא נוסף: "'):
+                 'report("create-status", createReport(',
+                 'report("create-status", "לא נוצר: "', 'report("members-status", "לא הוזמן: "'):
         assert call in script, call
 
 
@@ -1447,24 +1513,25 @@ def test_typing_indicator_shows_only_for_the_open_room_and_clears_on_stop():
     prelude = """
       const els = {};
       const $ = (id) => els[id] || (els[id] = {textContent: ""});
-      const S = {open: {stream_id: 1, topic: "t"}, typing: new Map()};
+      const S = {open: {stream_id: 1, stream: "feature"}, typing: new Map()};
       const TYPING_TTL_MS = 15000;
     """
-    got = _js(("typingKey", "onTyping", "renderTyping", "clearTyping"), """
-      onTyping({op: "start", status: "typing", stream_id: 1, topic: "t",
+    got = _js(("onTyping", "renderTyping", "clearTyping"), """
+      onTyping({op: "start", status: "typing", stream_id: 1, topic: "chat",
                sender: {user_id: 5, full_name: "CTO"}});
       out.oneTyper = $("typing").textContent;
-      onTyping({op: "start", status: "working", stream_id: 1, topic: "t",
+      // ops#322: an agent still typing into an old topic is typing in the room.
+      onTyping({op: "start", status: "working", stream_id: 1, topic: "#141 old",
                sender: {user_id: 6, full_name: "COO"}});
       out.twoTypers = $("typing").textContent;
       // A different room's event never shows here.
       onTyping({op: "start", status: "typing", stream_id: 2, topic: "other",
                sender: {user_id: 7, full_name: "CMO"}});
       out.unaffectedByOtherRoom = $("typing").textContent;
-      onTyping({op: "stop", status: "typing", stream_id: 1, topic: "t",
+      onTyping({op: "stop", status: "typing", stream_id: 1, topic: "chat",
                sender: {user_id: 5, full_name: "CTO"}});
       out.afterOneStops = $("typing").textContent;
-      clearTyping(1, "t", 6);
+      clearTyping(1, 6);
       out.afterClear = $("typing").textContent;
     """, prelude=prelude)
     assert got["oneTyper"] == "CTO מקליד/ה…"
@@ -1544,7 +1611,7 @@ def test_jump_to_quote_scrolls_when_loaded_fetches_when_not_and_toasts_when_miss
     # would be invisible to a function defined outside it.
     prelude = FAKE_DOM + """
       El.prototype.scrollIntoView = function () { this.scrolled = true; };
-      const S = {open: {stream_id: 1, stream: "feature", topic: "t"}, shown: new Set()};
+      const S = {open: {stream_id: 1, stream: "feature"}, shown: new Set()};
       function addMessages(list) { for (const m of list) S.shown.add(m.id); }
       const calls = [];
       let apiImpl = async () => ({});
@@ -1564,7 +1631,9 @@ def test_jump_to_quote_scrolls_when_loaded_fetches_when_not_and_toasts_when_miss
       const node = document.createElement("div");
       let lookups = 0;
       $("messages").querySelector = () => { lookups += 1; return lookups > 1 ? node : null; };
-      apiImpl = async () => ({message: {id: 12, display_recipient: "feature", subject: "t"}});
+      // ops#322: any topic of the open room is the room
+      apiImpl = async () => ({message: {id: 12, stream_id: 1, display_recipient: "feature",
+                                        subject: "an old topic"}});
       await jumpToQuote(12);
       out.scrolled = node.scrolled;
       out.calls = calls;
@@ -1578,7 +1647,7 @@ def test_jump_to_quote_scrolls_when_loaded_fetches_when_not_and_toasts_when_miss
       await jumpToQuote(99);
       out.toasted = toasts;
     """, prelude=prelude)
-    assert missing["toasted"] == [["ההודעה המקורית לא נמצאה בנושא הזה.", True]]
+    assert missing["toasted"] == [["ההודעה המקורית לא נמצאה בחדר הזה.", True]]
 
 
 # -- issue #85: clickable links (URLs and repo#N refs)
@@ -1667,10 +1736,12 @@ def test_85_a_hebrew_message_with_a_link_renders_as_dom_nodes_and_keeps_rtl_orde
 def test_page_registers_for_dashboard_events():
     # Extended, not replaced: the same register call still asks for "message"
     # (issue #82 says "extend an existing tool/call", D1's shape one layer up).
-    # ops#249 batch 1 extends it the same way, for "reaction" and "typing".
+    # ops#249 batch 1 extends it the same way, for "reaction" and "typing";
+    # ops#322 for "subscription" (an invite or a removal, live).
     script = _markup().script
     assert re.search(r'api\("POST", "register",\s*'
-                     r'\{event_types: \["message", "dashboard", "reaction", "typing"\]\}\)', script)
+                     r'\{event_types: \["message", "dashboard", "reaction", "typing", "subscription"\]\}\)',
+                     script)
 
 
 def test_page_has_the_panel_and_the_switch():
@@ -2549,122 +2620,113 @@ def test_326_no_text_on_the_board_is_under_13px():
 # -- issue #168: unread bubbles
 
 
-def test_168_unread_bubbles_render_next_to_streams_and_topics_hidden_when_zero():
+def test_168_unread_bubbles_render_one_per_room_hidden_when_zero():
     prelude = FAKE_DOM + """
-      const CARET = "c", GEAR = "g", CHECK = "k", SVG = "http://www.w3.org/2000/svg";
-      const S = {streams: [{stream_id: 1, name: "feature", invite_only: true},
-                           {stream_id: 2, name: "quiet", invite_only: false}],
-                 topics: new Map([["feature", new Map([["a", 5], ["b", 9]])],
-                                  ["quiet", new Map([["c", 1]])]]),
-                 unread: new Map([[1, {unread: 3, topics: new Map([["a", 3]])}]]),
-                 collapsed: new Set(), open: null, adding: null};
+      const GEAR = "g", CHECK = "k", SVG = "http://www.w3.org/2000/svg";
+      const S = {streams: [{stream_id: 1, name: "feature"}, {stream_id: 2, name: "quiet"}],
+                 unread: new Map([[1, 3]]), open: null};
     """
-    got = _js(("svgIcon", "renderStreams", "newTopicItem", "el"), """
+    got = _js(("svgIcon", "renderStreams", "el"), """
       renderStreams();
-      const rows = $("streams").querySelectorAll(".stream-row");
-      out.streamBadges = rows.map((r) => r.querySelectorAll(".badge").map((b) => b.textContent));
-      const items = $("streams").querySelectorAll(".topic-row");
-      out.topicBadges = items.map((it) => [it.querySelector(".topic").textContent,
-                                           it.querySelectorAll(".badge").map((b) => b.textContent)]);
+      const rows = $("streams").querySelectorAll(".room-row");
+      out.badges = rows.map((r) => r.querySelectorAll(".badge").map((b) => b.textContent));
     """, prelude=prelude)
-    # #feature has 3 unread, all in topic "a" — #quiet and topic "b" have none
-    # and show no badge at all (hidden, not a "0").
-    assert got["streamBadges"] == [["3"], []]
-    assert got["topicBadges"] == [["b", []], ["a", ["3"]], ["c", []]]
+    # #feature has 3 unread; #quiet has none and shows no badge at all (not a "0").
+    assert got["badges"] == [["3"], []]
 
 
-def test_168_every_streams_topic_list_starts_collapsed_the_first_time_it_is_seen():
-    # loadStreams() defaults a stream's fold to collapsed the first time it
-    # appears (page load, or a brand-new subscription); a reconnect that
-    # sees the same stream again must not re-collapse a fold the human chose.
+def test_322_load_streams_lists_every_room_and_asks_for_no_topics():
     stub = """
       const calls = [];
       async function api(method, path, params) {
-        calls.push([method, path, params]);
-        if (path === "users/me/subscriptions") {
-          return {subscriptions: [
-            {stream_id: 1, name: "feature", invite_only: true, is_archived: false},
-            {stream_id: 2, name: "later", invite_only: false, is_archived: false}]};
-        }
-        return {topics: []};
+        calls.push([method, path]);
+        return {subscriptions: [
+          {stream_id: 1, name: "coo", invite_only: true, is_archived: false},
+          {stream_id: 2, name: "old", invite_only: false, is_archived: true}]};
       }
       function renderStreams() {}
       function renderArchive() {}
-      function closeTopic() {}
-      const S = {streams: [], archivedStreams: [], topics: new Map(), archivedTopics: new Map(),
-                 collapsed: new Set(), seenStreams: new Set(), open: null};
+      let closed = 0;
+      function closeRoom() { closed += 1; }
+      const S = {streams: [], archivedStreams: [], open: {stream_id: 9, stream: "gone"}};
     """
     got = _js(("loadStreams",), """
       await loadStreams();
-      out.firstLoad = [...S.collapsed].sort();
-      S.collapsed.delete(1);   // the human expands #feature
-      await loadStreams();     // a reconnect: the same two streams again
-      out.afterReconnect = [...S.collapsed].sort();
+      out.calls = calls; out.streams = S.streams; out.archived = S.archivedStreams;
+      out.closed = closed;
     """, prelude=stub)
-    assert got["firstLoad"] == [1, 2]
-    assert got["afterReconnect"] == [2]
+    assert got["calls"] == [["GET", "users/me/subscriptions"]]  # no per-stream topic list
+    assert got["streams"] == [{"stream_id": 1, "name": "coo"}]
+    assert got["archived"] == [{"stream_id": 2, "name": "old"}]
+    assert got["closed"] == 1  # the open room is not listed any more: closed
 
 
-def test_168_mark_topic_read_zeroes_the_bubble_locally_and_tells_the_server():
-    prelude = API_STUB + """
-      const S = {unread: new Map([[1, {unread: 5, topics: new Map([["a", 2], ["b", 3]])}]])};
-      let renders = 0;
-      function renderStreams() { renders += 1; }
-      function updateTitle() {}
+def test_322_opening_a_room_reads_all_its_messages_across_old_topics(world):
+    prelude = FAKE_DOM + API_STUB + """
+      const S = {open: null, shown: new Set(), msgs: [], members: new Map(), streams: []};
+      const isTouch = () => true;
+      function refreshCount() {} function markRoomRead(id) { calls.push(["read", id]); }
+      function renderStreams() {} function seedTyping() {}
+      function addMessages(list) { S.msgs.push(...(list || [])); }
+      const ROOM_TOPIC = "chat";
     """
-    got = _js(("markTopicRead",), """
-      await markTopicRead(1, "A");
-      out.calls = calls.splice(0);
-      out.entry = {unread: S.unread.get(1).unread, topics: [...S.unread.get(1).topics.entries()]};
-      out.renders = renders;
-      await markTopicRead(1, "nothing-to-zero");
-      out.calls2 = calls.splice(0);
-      out.renders2 = renders;
+    got = _js(("membersLabel", "openRoom", "firstNewId", "scrollToNew"), """
+      await openRoom(4, "feature");
+      out.calls = calls; out.title = $("room-title").textContent; out.open = S.open;
+      out.buttons = [$("members-btn").disabled, $("invite-btn").disabled];
     """, prelude=prelude)
-    assert got["calls"] == [["POST", "mark_topic_as_read", {"stream_id": "1", "topic_name": "A"}]]
-    # Case-insensitive: "A" clears the "a" entry, "b" is untouched.
-    assert got["entry"] == {"unread": 3, "topics": [["b", 3]]}
-    assert got["renders"] == 1
-    # Nothing local to zero, but the server still gets told (idempotent).
-    assert got["calls2"] == [["POST", "mark_topic_as_read",
-                              {"stream_id": "1", "topic_name": "nothing-to-zero"}]]
-    assert got["renders2"] == 1
+    [read, fetch] = got["calls"]
+    assert read == ["read", 4]
+    assert fetch[:2] == ["GET", "messages"]
+    assert json.loads(fetch[2]["narrow"]) == [{"operator": "channel", "operand": "feature"}]
+    assert got["title"] == "#feature" and got["open"] == {"stream_id": 4, "stream": "feature"}
+    assert got["buttons"] == [False, False]
+    # Replayed against the real server: two old topics and a new message, in time order.
+    run, human = world["run"], world["human"]
+    for topic, text in (("#65 page", "old one"), ("כללי", "old two"), (None, "new one")):
+        extra = {"topic": topic} if topic else {}
+        assert page_api(run, human, "POST", "messages", type="stream", to="feature",
+                        content=text, **extra)[0] == 200
+    status, body = page_api(run, human, fetch[0], fetch[1], **fetch[2])
+    assert status == 200, body
+    assert [m["content"] for m in body["messages"]] == ["old one", "old two", "new one"]
+    assert body["messages"][-1]["subject"] == "chat"
 
 
-def test_168_a_live_message_bumps_the_bubble_unless_its_topic_is_open_or_the_message_is_mine():
+def test_168_a_live_message_bumps_the_bubble_unless_its_room_is_open_or_the_message_is_mine():
     prelude = API_STUB + """
-      const S = {me: {user_id: 9}, open: {stream_id: 1, stream: "feature", topic: "open-topic"},
-                 topics: new Map([["feature", new Map()]]), archivedTopics: new Map(),
+      const S = {me: {user_id: 9}, open: {stream_id: 1, stream: "feature"},
+                 streams: [{stream_id: 1, name: "feature"}, {stream_id: 2, name: "other"}],
                  unread: new Map(), typing: new Map()};
       let rendered = 0, titled = 0;
       function renderStreams() { rendered += 1; }
       function updateTitle() { titled += 1; }
-      function renderArchive() {}
-      function addMessages(list, toEnd) {}
+      const added = [];
+      function addMessages(list, toEnd) { added.push(...list.map((m) => m.id)); }
       function renderTyping() {}
     """
-    got = _js(("onMessage", "markTopicRead", "bumpUnread", "typingKey", "clearTyping",
+    got = _js(("onMessage", "markRoomRead", "bumpUnread", "clearTyping",
               "notifyAllowed", "notifyMessage"), """
-      const msg = (subject, id, sender) => ({type: "stream", stream_id: 1,
-        display_recipient: "feature", subject, id, sender_id: sender});
-      onMessage(msg("closed-topic", 1, 5));
-      onMessage(msg("closed-topic", 2, 5));
-      out.otherReaderUnread = [...S.unread.get(1).topics.entries()];
-      onMessage(msg("closed-topic", 3, 9));  // my own message: never unread
-      out.afterMine = S.unread.get(1).unread;
+      const msg = (stream_id, subject, id, sender) => ({type: "stream", stream_id,
+        display_recipient: stream_id === 1 ? "feature" : "other", subject, id, sender_id: sender});
+      onMessage(msg(2, "chat", 1, 5));
+      onMessage(msg(2, "an old topic", 2, 5));   // any topic of the room counts for the room
+      out.otherRoom = S.unread.get(2);
+      onMessage(msg(2, "chat", 3, 9));           // my own message: never unread
+      out.afterMine = S.unread.get(2);
+      onMessage(msg(3, "chat", 4, 5));           // a room I am not in: ignored
+      out.notMine = S.unread.has(3);
       await Promise.resolve();
       calls.length = 0;
-      onMessage(msg("open-topic", 4, 5));    // arrives while its own topic is open
+      onMessage(msg(1, "an old topic", 5, 5));   // arrives in the open room
       await Promise.resolve();
-      out.openTopicUnread = (S.unread.get(1).topics.get("open-topic") || 0);
-      out.markReadCalls = calls;
+      out.openUnread = S.unread.get(1) || 0;
+      out.markReadCalls = calls; out.added = added;
       out.rendered = rendered; out.titled = titled;
     """, prelude=prelude)
-    assert got["otherReaderUnread"] == [["closed-topic", 2]]
-    assert got["afterMine"] == 2  # unchanged by my own message
-    assert got["openTopicUnread"] == 0
-    assert got["markReadCalls"] == [["POST", "mark_topic_as_read",
-                                     {"stream_id": "1", "topic_name": "open-topic"}]]
+    assert got["otherRoom"] == 2 and got["afterMine"] == 2 and got["notMine"] is False
+    assert got["openUnread"] == 0 and got["added"] == [5]
+    assert got["markReadCalls"] == [["POST", "mark_stream_as_read", {"stream_id": "1"}]]
     assert got["rendered"] > 0 and got["titled"] > 0
 
 
@@ -2672,8 +2734,8 @@ def test_168_the_tab_title_shows_the_total_unread_count():
     got = _js(("updateTitle",), """
       updateTitle();
       out.empty = document.title;
-      S.unread.set(1, {unread: 2, topics: new Map()});
-      S.unread.set(2, {unread: 1, topics: new Map()});
+      S.unread.set(1, 2);
+      S.unread.set(2, 1);
       updateTitle();
       out.some = document.title;
     """, prelude="const document = {}; const S = {unread: new Map()};")
@@ -2681,77 +2743,101 @@ def test_168_the_tab_title_shows_the_total_unread_count():
     assert got["some"] == "(3) Agora"
 
 
-# -- reload consistency and mark-stream-read
+# -- reload consistency and mark-room-read
 
 
 def test_load_unread_replaces_local_state_with_exactly_what_the_server_says():
     # A reload starts with stale local counts (or none at all); loadUnread()
-    # must throw them away and take the server's answer as-is, so a reload
-    # never shows a count that disagrees with what mark_topic_as_read already
-    # persisted server-side.
+    # must throw them away and take the server's answer as-is: the room's
+    # total, whatever topics it is spread over.
     prelude = """
       async function api(method, path) {
-        if (path === "unread") return {streams: [{stream_id: 1, name: "feature", unread: 2,
-          topics: [{name: "a", unread: 2}]}]};
+        if (path === "unread") return {streams: [{stream_id: 1, name: "feature", unread: 5,
+          topics: [{name: "a", unread: 2}, {name: "chat", unread: 3}]}]};
         return {};
       }
-      const S = {unread: new Map([[1, {unread: 99, topics: new Map([["stale", 99]])}],
-                                  [2, {unread: 5, topics: new Map()}]])};
+      const S = {unread: new Map([[1, 99], [2, 5]])};
       function renderStreams() {}
       function updateTitle() {}
     """
     got = _js(("loadUnread",), """
       await loadUnread();
-      out.streamIds = [...S.unread.keys()];
-      out.feature = {unread: S.unread.get(1).unread, topics: [...S.unread.get(1).topics.entries()]};
+      out.unread = [...S.unread.entries()];
     """, prelude=prelude)
-    assert got["streamIds"] == [1]
-    assert got["feature"] == {"unread": 2, "topics": [["a", 2]]}
+    assert got["unread"] == [[1, 5]]
 
 
 def test_mark_read_button_shows_only_with_unread_and_clears_the_bubble_locally():
     prelude = FAKE_DOM + """
-      const CARET = "c", GEAR = "g", CHECK = "k", SVG = "http://www.w3.org/2000/svg";
-      const S = {streams: [{stream_id: 1, name: "feature", invite_only: true},
-                           {stream_id: 2, name: "quiet", invite_only: false}],
-                 topics: new Map([["feature", new Map([["a", 5]])], ["quiet", new Map()]]),
-                 unread: new Map([[1, {unread: 3, topics: new Map([["a", 3]])}]]),
-                 collapsed: new Set(), open: null, adding: null};
-      let markedStream = null;
+      const GEAR = "g", CHECK = "k", SVG = "http://www.w3.org/2000/svg";
+      const S = {streams: [{stream_id: 1, name: "feature"}, {stream_id: 2, name: "quiet"}],
+                 unread: new Map([[1, 3]]), open: null};
+      let marked = null;
       async function api(method, path, params) {
-        markedStream = [method, path, params];
+        marked = [method, path, params];
         return {};
       }
       function updateTitle() {}
+      function openMembers() {} function openRoom() {}
     """
-    got = _js(("svgIcon", "renderStreams", "newTopicItem", "el", "markStreamRead"), """
+    got = _js(("svgIcon", "renderStreams", "el", "markRoomRead"), """
       renderStreams();
-      const rows = $("streams").querySelectorAll(".stream-row");
+      const rows = $("streams").querySelectorAll(".room-row");
       out.hasButton = rows.map((r) => !!r.querySelector(".mark-read"));
       await $("streams").querySelectorAll(".mark-read")[0].on.click();
-      out.markedStream = markedStream;
-      const entry = S.unread.get(1);
-      out.entryAfter = {unread: entry.unread, topics: [...entry.topics.entries()]};
+      out.marked = marked;
+      out.after = S.unread.get(1) || 0;
+      out.badges = $("streams").querySelectorAll(".badge").length;
     """, prelude=prelude)
     assert got["hasButton"] == [True, False]
-    assert got["markedStream"] == ["POST", "mark_stream_as_read", {"stream_id": 1}]
-    assert got["entryAfter"] == {"unread": 0, "topics": []}
+    assert got["marked"] == ["POST", "mark_stream_as_read", {"stream_id": 1}]
+    assert got["after"] == 0 and got["badges"] == 0
 
 
-def test_mark_stream_read_tells_the_server_even_with_nothing_local_to_zero():
+def test_mark_room_read_tells_the_server_even_with_nothing_local_to_zero():
     prelude = API_STUB + """
       const S = {unread: new Map()};
       let renders = 0;
       function renderStreams() { renders += 1; }
       function updateTitle() {}
     """
-    got = _js(("markStreamRead",), """
-      await markStreamRead(7);
+    got = _js(("markRoomRead",), """
+      await markRoomRead(7);
       out.calls = calls;
       out.renders = renders;
     """, prelude=prelude)
     assert got["calls"] == [["POST", "mark_stream_as_read", {"stream_id": "7"}]]
     assert got["renders"] == 0  # nothing local to clear: no local entry, no re-render
+
+
+def test_322_a_live_invite_or_removal_reloads_the_list_and_a_peer_change_the_count():
+    prelude = """
+      const done = [];
+      async function loadStreams() { done.push("list"); }
+      function refreshCount(id) { done.push(["count", id]); }
+      const S = {open: {stream_id: 4, stream: "feature"}};
+    """
+    got = _js(("onSubscription",), """
+      onSubscription({type: "subscription", op: "add", subscriptions: [{name: "new"}]});
+      onSubscription({type: "subscription", op: "remove", subscriptions: [{name: "feature"}]});
+      onSubscription({type: "subscription", op: "peer_add", stream_ids: [4], user_ids: [3]});
+      onSubscription({type: "subscription", op: "peer_remove", stream_ids: [8], user_ids: [3]});
+      out.done = done;
+    """, prelude=prelude)
+    assert got["done"] == ["list", "list", ["count", 4]]
+
+
+def test_322_the_room_name_rule_matches_the_servers():
+    names = ["coo", "All hands", "כללי", "roadmap-2026_v1.2", "x" * 60, "a`b`", "a$(x)", 'a"b',
+             "a\\b", "a;b", "x" * 61, " lead", "trail ", "", "   "]
+    got = _js(("roomNameError",), f"out.e = {json.dumps(names)}.map(roomNameError);")
+    for name, err in zip(names, got["e"]):
+        assert (err == "") is (chat.room_name_error(name) is None), (name, err)
+    assert got["e"][5].startswith("תווים שאסור בשם חדר: `")
+    # Wired before the server is asked, at create and at rename.
+    script = _markup().script
+    create = script[script.index('$("create-form").addEventListener'):]
+    assert create.index("roomNameError(name)") < create.index("createStream(")
 
 
 # -- ops#236: phone pairing (the button, the QR, the ?pair= bootstrap)
