@@ -111,6 +111,18 @@ def crowd(role, room):
             user(103, "PM"), user(104, "PA"), user(105, "Watchdog")]
 
 
+def real(role, room):
+    """The rooms setup_streams.py makes: #coo has the COO and the PM, #PM the
+    PM, COO and CTO, #feature the CTO and COO (no owner), All hands every
+    role. Any other room has this one role bot."""
+    rooms = {"coo": ("COO", "PM"), "PM": ("PM", "COO", "CTO"), "feature": ("CTO", "COO"),
+             "All hands": ("COO", "CTO", "PM", "PA")}
+    if room not in rooms:
+        return alone(role, room)
+    return [user(FOUNDER, "Founder", bot=False)] + [
+        user(200 + i, r) for i, r in enumerate(rooms[room])]
+
+
 def make(wake, tmp_path, clock=None, spawner=None, dry_run=False, members=alone):
     emitted = []
     w = wake.Waker(FOUNDER, tmp_path / "state.json", spawner or FakeSpawner(),
@@ -179,6 +191,12 @@ def test_founder_without_mention_in_a_multi_bot_room_is_skipped(wake, tmp_path):
     w = make(wake, tmp_path, members=crowd)
     d = w.on_message("CTO", msg(10, stream="All hands"), ["mentioned"])  # @all, or the broadcast flag
     assert d["action"] == "skip" and "only @**CTO** wakes CTO" in d["reason"]
+
+
+def test_founder_without_mention_in_a_stream_is_skipped(wake, tmp_path):
+    # outside the role's own stream: the PM reads #coo, but #coo is not the PM's
+    w = make(wake, tmp_path, members=real)
+    assert w.on_message("PM", msg(10, stream="coo"), [])["action"] == "skip"
     assert w.spawner.started == []
 
 
@@ -187,7 +205,7 @@ def test_founder_dm_spawns_and_is_answered_in_the_role_stream(wake, tmp_path):
     d = w.on_message("PM", msg(10, stream=None), [])
     assert d["action"] == "spawn" and d["model"] == "sonnet"
     prompt = w.spawner.started[0][1]
-    assert "a direct message" in prompt and '--room "pm"' in prompt
+    assert "a direct message" in prompt and '--room "PM"' in prompt
 
 
 def test_a_session_opened_by_hand_is_left_to_its_hook(wake, tmp_path, monkeypatch):
@@ -940,6 +958,50 @@ def test_untagged_in_a_multi_bot_room_never_opens_a_session_nor_reaches_another_
     assert len(w.spawner.started) == 1
 
 
+def test_untagged_outside_the_own_stream_never_opens_a_session(wake, tmp_path):
+    w = make(wake, tmp_path, members=real)
+    assert w.on_message("CTO", msg(10, stream="feature"), [])["action"] == "skip"
+    assert w.spawner.started == []
+    w.on_message("CTO", msg(11, "@**CTO**", stream="feature"), ["mentioned"])
+    w.spawner.finish_all()
+    # #feature has no owner: the room's one open session (the CTO's) gets it
+    assert w.on_message("CTO", msg(12, stream="feature", topic="other"), [])["action"] == "resume"
+    assert w.on_message("CTO", msg(13, sender=99), [])["action"] == "skip"
+    assert w.on_message("PM", msg(14, stream="feature"), [])["action"] == "skip"
+    assert [a[4] for a, _, _ in w.spawner.started] == ["--session-id", "--resume"]
+
+
+@pytest.mark.parametrize("role,stream", [("PM", "PM"), ("CTO", "cto"), ("CMO", "cmo"),
+                                         ("CPSO", "cpso"), ("COO", "coo")])
+def test_founder_untagged_in_the_role_own_stream_wakes_it(wake, tmp_path, role, stream):
+    # founder 2026-10-17: in #PM the PM answered only when he tagged it
+    w = make(wake, tmp_path, members=real)
+    assert wake.own_stream(role) == stream
+    assert w.on_message(role, msg(10, "hi", stream=stream), [])["action"] == "spawn"
+
+
+def test_founder_untagged_in_a_shared_room_wakes_only_its_owner(wake, tmp_path):
+    # the real shared rooms (setup_streams.py): PM reads #coo; COO and CTO read #PM.
+    # One untagged founder line wakes the room's owner and no other bot.
+    w = make(wake, tmp_path, members=real)
+    assert w.on_message("PM", msg(10, "hi", stream="coo"), [])["action"] == "skip"
+    assert w.on_message("COO", msg(11, "hi", stream="PM"), [])["action"] == "skip"
+    assert w.on_message("CTO", msg(12, "hi", stream="PM"), [])["action"] == "skip"
+    assert w.spawner.started == []
+    assert w.on_message("COO", msg(13, "hi", stream="coo"), [])["action"] == "spawn"
+    assert len(w.spawner.started) == 1
+
+
+def test_every_home_stream_is_a_stream_setup_streams_makes(wake):
+    sys.path.insert(0, str(BOT_DIR))
+    try:
+        import setup_streams
+    finally:
+        sys.path.remove(str(BOT_DIR))
+    homes = set(wake.AGENT["home_streams"].values())
+    assert homes <= set(setup_streams.STREAMS), sorted(homes - set(setup_streams.STREAMS))
+
+
 def test_a_dm_is_answered_in_the_role_own_room(wake):
     assert wake.own_stream("CTO") == "cto" and wake.own_stream("PA") == "pa"
 
@@ -1274,7 +1336,8 @@ def _open(w, role, room, i):
 
 
 def test_322_untagged_in_a_multi_bot_room_resumes_the_one_open_session(wake, tmp_path):
-    w = make(wake, tmp_path, members=crowd)  # like #coo: more than one role bot
+    # (d) All hands: several role bots, no owner, so the one open session gets it
+    w = make(wake, tmp_path, members=crowd)
     _open(w, "COO", "All hands", 10)
     m = msg(11, "and the budget too", stream="All hands")
     got = {r: w.on_message(r, m, [])["action"] for r in ("COO", "CTO", "PM")}
@@ -1313,6 +1376,72 @@ def test_322_untagged_in_a_closing_session_room_wakes_nobody(wake, tmp_path):
     w.role("COO")["session"]["closing"] = True
     assert w.on_message("COO", msg(11, "x", stream="All hands"), [])["action"] == "skip"
     assert len(w.spawner.started) == 1
+
+
+def _pm_room(role, room):
+    """#PM as setup_streams.py makes it: the PM, the COO and the CTO."""
+    return [user(FOUNDER, "Founder", bot=False), user(103, "PM"), user(101, "COO"),
+            user(102, "CTO")]
+
+
+def _coo_room(role, room):
+    """#coo with the PM and an invited CTO."""
+    return [user(FOUNDER, "Founder", bot=False), user(101, "COO"), user(103, "PM"),
+            user(102, "CTO")]
+
+
+def test_322_owner_untagged_in_pm_wakes_the_pm_only(wake, tmp_path):
+    # (a) #PM {PM, COO, CTO}, nothing open: the owner spawns, the others skip
+    w = make(wake, tmp_path, members=_pm_room)
+    m = msg(10, "a new feature request", stream="PM")
+    got = {r: w.on_message(r, m, [])["action"] for r in ("PM", "COO", "CTO")}
+    assert got == {"PM": "spawn", "COO": "skip", "CTO": "skip"}
+    assert [role for _, _, role in w.spawner.started] == ["PM"]
+
+
+def test_322_owner_untagged_in_coo_wakes_the_coo(wake, tmp_path):
+    # (b) #coo {COO, PM}, nothing open: the COO spawns, the PM skips
+    w = make(wake, tmp_path, members=real)
+    m = msg(10, "what is on today?", stream="coo")
+    got = {r: w.on_message(r, m, [])["action"] for r in ("COO", "PM")}
+    assert got == {"COO": "spawn", "PM": "skip"}
+    assert [role for _, _, role in w.spawner.started] == ["COO"]
+
+
+def test_322_owner_gets_the_line_even_when_another_role_has_the_open_session(wake, tmp_path):
+    # (c) #coo while the CTO has the only open session there: the COO gets the
+    # line, the CTO skips and its idle timer moves
+    clock = Clock()
+    w = make(wake, tmp_path, clock=clock, members=_coo_room)
+    _open(w, "CTO", "coo", 10)
+    clock.t += 60
+    m = msg(11, "and the deadline?", stream="coo")
+    got = {r: w.on_message(r, m, []) for r in ("COO", "CTO", "PM")}
+    assert {r: d["action"] for r, d in got.items()} == \
+        {"COO": "spawn", "CTO": "skip", "PM": "skip"}
+    assert "extends" in got["CTO"]["reason"] and "owner, COO" in got["CTO"]["reason"]
+    assert w.role("CTO")["session"]["last_founder_at"] == clock.t
+    assert [role for _, _, role in w.spawner.started] == ["CTO", "COO"]
+    assert "and the deadline?" in w.spawner.started[-1][1]
+
+
+def test_322_a_tag_in_an_owned_room_wakes_only_that_role(wake, tmp_path):
+    # (e) @**CTO** in #PM: only the CTO, not the owner
+    w = make(wake, tmp_path, members=_pm_room)
+    m = msg(10, "@**CTO** can we store this?", stream="PM")
+    got = {r: w.on_message(r, m, ["mentioned"])["action"] for r in ("PM", "COO", "CTO")}
+    assert got == {"PM": "skip", "COO": "skip", "CTO": "spawn"}
+    assert [role for _, _, role in w.spawner.started] == ["CTO"]
+
+
+def test_322_the_owner_is_matched_without_case(wake, tmp_path, monkeypatch):
+    # without #135's map the PM's own room defaults to "pm"; Zulip names
+    # are case-insensitive, so #PM is still the PM's
+    monkeypatch.setitem(wake.AGENT, "home_streams", {"PA": "pa"})
+    w = make(wake, tmp_path, members=_pm_room)
+    m = msg(10, "hi", stream="PM")
+    got = {r: w.on_message(r, m, [])["action"] for r in ("PM", "COO", "CTO")}
+    assert got == {"PM": "spawn", "COO": "skip", "CTO": "skip"}
 
 
 def test_322_an_invited_role_in_pa_does_not_stop_the_pas_untagged_wake(wake, tmp_path):
@@ -1822,8 +1951,8 @@ def test_two_topics_in_one_room_count_against_one_cap(wake, tmp_path):
 
 
 def test_the_founder_is_routed_by_the_room_rule_only(wake, tmp_path):
-    # #coo holds the COO and the PM: an untagged line there goes to the open
-    # COO session because it is the room's only one (the old own-stream rule is gone)
+    # #coo holds the COO and the PM: an untagged line there goes to the COO,
+    # the room's owner, and never to the PM (the old (stream, topic) rule is gone)
     def coo_room(role, room):
         return [user(FOUNDER, "Founder", bot=False), user(101, "COO"), user(103, "PM")]
     clock = Clock()

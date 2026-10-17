@@ -1808,7 +1808,7 @@ DASH_FUNCS = ("el", "minsAgo", "agoText", "pillText", "renderPill", "joinDetail"
               "renderTimeline", "renderLive", "stuckRow", "renderStuck", "renderWaiting", "renderRoles",
               "renderQueue", "renderPrs", "renderWeek", "renderProducts", "fmtTok", "resetText",
               "renderPlan", "renderTokens", "renderProgress", "shortRef", "renderApprovals",
-              "clearApprovalsPending")
+              "clearApprovalsPending", "tapToOpen", "noData", "undoLeft", "tickApprovals")
 
 
 def _consts(*names: str) -> str:
@@ -1825,7 +1825,7 @@ def _consts(*names: str) -> str:
 def _dash_prelude() -> str:
     return FAKE_DOM + _consts("DASH_LIMIT", "dashOpen", "approvalsNotes", "TOKVIEW", "VIEW", "tokView",
                               "ANSWER_HE", "CHECK_HE", "ROLE_STATE", "TOK_WIN", "approvalsIdx",
-                              "approvalsPending", "G_STATE_HE") + """
+                              "approvalsPending", "G_STATE_HE", "PR_TYPE_HE") + """
 const rerendered = [];
 function rerenderDash(cls) { rerendered.push(cls); }
 let mounted = null;
@@ -1889,8 +1889,9 @@ def test_every_card_renders_cleanly_from_a_real_document(fixture):
         assert "[object" not in text and "undefined" not in text and "NaN" not in text, (name, text[:300])
         assert got[name]["text"].strip(), name
     if fixture == "old":
-        assert "צריך dashboard.py עדכני" in got["timeline"]["text"]
-        assert "צריך dashboard.py עדכני" in got["prs"]["text"]
+        # ops#326: plain Hebrew on the card; the developer's reason is its title.
+        assert got["timeline"]["text"] == "הנתון לא זמין עכשיו"
+        assert got["prs"]["text"] == "הנתון לא זמין עכשיו"
         assert "אין נתון תוכנית" in got["tokens"]["text"]
 
 
@@ -1943,7 +1944,7 @@ def test_kpi_strip_is_four_coloured_numbers():
       out.expired = dump(renderKpis({plan: {"5h": {percent: 90, expired: true}}}, now));
     """)
     tiles = [(k["cls"], k["kids"][0]["text"], k["kids"][1]["text"]) for k in got["k"]["kids"]]
-    assert tiles == [("kpi warn", "2", "מחכה לך"), ("kpi none", "פנוי", "ה-POOL"),
+    assert tiles == [("kpi warn", "2", "מחכה לך"), ("kpi none", "פנוי", "הרובוטים"),
                      ("kpi ok", "1", "נמזגו היום"), ("kpi bad", "90%", "תוכנית · 5 שעות")]
     assert [k["kids"][0]["text"] for k in got["none"]["kids"]] == ["—", "פנוי", "—", "—"]
     assert got["expired"]["kids"][3]["kids"][0]["text"] == "—"
@@ -1962,6 +1963,7 @@ def test_timeline_has_run_merge_and_decision_lanes_a_now_line_and_newest_first_e
       out.noDecisions = dump(renderTimeline({...t, decisions: null, notes: {decisions: "no decisions record yet"}}, now));
       out.empty = dump(renderTimeline({runs: [], merges: [], decisions: [], notes: {}}, now));
       out.missing = dump(renderTimeline(undefined, now));
+      out.missingTitle = renderTimeline(undefined, now).childNodes[0].title;
     """)
     full = got["full"]
     lanes = [k["text"] for k in _find(full, "ln")]
@@ -1977,7 +1979,7 @@ def test_timeline_has_run_merge_and_decision_lanes_a_now_line_and_newest_first_e
     assert [k["text"] for k in _find(nd, "ln")] == ["ריצות", "מיזוגים"]
     assert "החלטות מייסד: אין עדיין מקור" in _text(nd)
     assert "אין אירועים היום עדיין" in _text(got["empty"])
-    assert "צריך dashboard.py עדכני" in got["missing"]["text"]
+    assert got["missing"]["text"] == "הנתון לא זמין עכשיו" and "dashboard.py" in got["missingTitle"]
 
 
 def test_pool_now_shows_the_run_big_or_one_no_run_line():
@@ -1990,7 +1992,8 @@ def test_pool_now_shows_the_run_big_or_one_no_run_line():
     run = got["run"]
     big = _find(run, "big")[0]
     assert big["tag"] == "a" and big["text"] == "agora#71"
-    assert "2 · reviewer" in run["text"] and "34 מאז שהתחיל" in run["text"]
+    assert "סבב2" in run["text"] and "reviewer" not in run["text"]          # the phase is English: title only
+    assert "משימה" in run["text"] and "issue" not in run["text"] and "34 מאז שהתחיל" in run["text"]
     assert "0 מאז הפעולה האחרונה" in run["text"]            # clock skew clamped (agora#100)
     assert _find(run, "act")[0]["tag"] == "bdi"
 
@@ -2017,10 +2020,10 @@ def test_queue_and_prs_carry_chips():
     li = got["q"]["kids"][0]["kids"]
     assert (li[0]["cls"], li[0]["text"]) == ("chip p0", "P0") and li[-1]["text"] == "צריך אדם"
     chips = [c["text"] for c in _find(got["p"], "chip")]
-    assert chips == ["type B", "type A", "שינויים", "לא נבדק"]
+    assert chips == ["מחכה לך", "מחכה למיזוג", "שינויים", "לא נבדק"]          # ops#326: words, not "type B"
     assert "טיוטה · a" in _text(got["p"])
     assert "GitHub לא נקרא" in got["pNull"]["text"]
-    assert "type A: ממתין למיזוג" in got["p"]["text"] and "auto-merge" not in got["p"]["text"]   # the founder merges
+    assert "type" not in got["p"]["text"] and "auto-merge" not in got["p"]["text"]   # the founder merges
 
 
 def test_prs_say_when_the_list_is_cut():
@@ -2099,7 +2102,8 @@ def test_week_card_is_one_big_number_in_hebrew():
     got = _dash("out.w = dump(renderWeek({points_closed: 34, points_closed_previous: 27, "
                 "percent_of_company: 5.2, median_go_to_close_h: 1.3}));")
     assert _find(got["w"], "big")[0]["text"] == "34"
-    assert "נקודות נסגרו (שבוע קודם: 27)" in got["w"]["text"] and "1.3h" in got["w"]["text"]
+    assert "נקודות נסגרו (שבוע קודם: 27)" in got["w"]["text"] and "1.3 שע׳" in got["w"]["text"]
+    assert "agent:" not in got["w"]["text"]
 
 
 # `gantt` as `python tools/dashboard.py --json --no-tokens` (ops) printed it on
@@ -2138,6 +2142,7 @@ def test_gantt_card_renders_one_row_per_goal_from_doc_gantt():
       out.bars = bars; out.fills = fills; out.today = today;
       out.missing = dump(renderGantt(undefined, doc.as_of));
       out.empty = dump(renderGantt([], doc.as_of));
+      out.titles = [renderGantt(undefined, doc.as_of), renderGantt([], doc.as_of)].map((w) => w.childNodes[0].title);
     """, extra=("ganttDm", "renderGantt"), )
     rows = _find(got["card"], "g-row")
     assert [_find(r, "g-name")[0]["text"] for r in rows] == [g["he"] for g in GANTT_DOC["gantt"]]
@@ -2155,7 +2160,9 @@ def test_gantt_card_renders_one_row_per_goal_from_doc_gantt():
     assert len(got["today"]) == 4 and len(set(got["today"])) == 1
     assert "5.10 – 31.10" in _text(rows[0]) and "1.11 – 15.1.27" in _text(rows[2])
     assert "הקו המקווקו = היום · 6.10" in _text(got["card"])
-    assert "dashboard.py" in got["missing"]["text"] and "roadmap.md" in got["empty"]["text"]
+    # ops#326: file names are the title, never the card's text
+    assert got["missing"]["text"] == "הנתון לא זמין עכשיו" and "היעדים עוד לא הוגדרו" in got["empty"]["text"]
+    assert "dashboard.py" in got["titles"][0] and got["titles"][1] == "roadmap.md"
 
 
 def test_wide_screen_shows_board_and_chat_side_by_side():
@@ -2285,6 +2292,7 @@ def test_pill_states():
       out.stale = pillText({{last_sync: {now_s} - 10000, stale: true, last_error: null}}, now);
       out.never = pillText({{last_sync: null, stale: true, last_error: null}}, now);
       out.error = pillText({{last_sync: {now_s} - 120, stale: false, last_error: "gh: not logged in"}}, now);
+      out.errorKept = pillText({{doc: {{week: {{}}}}, last_sync: {now_s} - 120, stale: true, last_error: "x"}}, now);
       renderPill({{last_sync: {now_s} - 120, stale: false, last_error: null}}, now);
       out.freshClass = $("dash-pill").className;
       renderPill({{last_sync: {now_s} - 10000, stale: true, last_error: null}}, now);
@@ -2293,14 +2301,18 @@ def test_pill_states():
       out.errorText = $("dash-pill-text").textContent;
       out.errorKids = $("dash-pill-text").childNodes.map((n) => n.tagName || "#text");
       out.errorClass = $("dash-pill").className;
+      out.errorTitle = $("dash-pill").title;
     """)
     assert got["fresh"] == "מתעדכן אוטומטית · סנכרון אחרון לפני 2 דק׳ · מקור: GitHub"
     assert got["stale"] == "ישן: סנכרון אחרון לפני 3 שע׳ · מקור: GitHub"
     assert got["never"] == "עוד לא סונכרן · מקור: GitHub"
-    assert got["error"] == "שגיאה: gh: not logged in"
+    # ops#326: the server's English error is the pill's title; its text is plain Hebrew.
+    assert got["error"] == "הסנכרון נכשל · הנתון לא זמין עכשיו"
+    assert got["errorKept"] == "הסנכרון נכשל · מוצג הנתון האחרון"
     assert "stale" not in got["freshClass"].split() and "stale" in got["staleClass"].split()
-    # An error replaces the line outright, red, the English part in its own <bdi>.
-    assert got["errorText"] == got["error"] and got["errorKids"] == ["#text", "BDI"]
+    # An error replaces the line outright, red; the English error is in the title only.
+    assert got["errorText"] == got["error"] and got["errorKids"] == ["#text"]
+    assert got["errorTitle"] == "gh: not logged in"
     assert "bad" in got["errorClass"].split() and "stale" not in got["errorClass"].split()
 
 
@@ -2353,6 +2365,273 @@ def test_a_failed_fetch_keeps_the_last_good_document():
     """, prelude=API_STUB + "const S = {dashboard: null};\nfunction renderDashboard() {}\n")
     assert got["d"] == {"doc": {"week": {"points_closed": 3}}, "last_sync": 10, "stale": True,
                         "last_error": "network down"}
+
+
+# -- ops#326: the board's UX review (approvals first, four cards, full text
+# on tap, thumb-sized decisions, plain Hebrew, a 13px floor)
+
+
+def _board_ids() -> tuple[list[str], list[str]]:
+    """The card ids on the default board, and the ones under "עוד פרטים",
+    in markup order."""
+    text = PAGE.read_text(encoding="utf-8")
+    board = text[text.index('<aside id="dash"'):text.index("</aside>", text.index('<aside id="dash"'))]
+    first, more = board.split('<div class="cards" id="dash-more" hidden>')
+    def ids(part: str) -> list[str]:
+        return re.findall(r'<section class="[^"]*" id="(dash-[a-z]+)"', part)
+    return ids(first), ids(more)
+
+
+def test_326_approvals_come_first_full_width_right_under_the_kpi_strip():
+    first, _ = _board_ids()
+    assert first[0] == "dash-approvals" and first[1] == "dash-waiting"
+    text = PAGE.read_text(encoding="utf-8")
+    assert '<section class="dash-card card wide" id="dash-approvals">' in text
+    assert text.index('id="dash-kpis"') < text.index('id="dash-approvals"') < text.index('id="dash-timeline"')
+    # the KPI "מחכה לך" is a link that scrolls to the approvals card
+    got = _dash("""
+      const k = renderKpis({next_moves: [{id: "a"}]}, Date.parse("2026-10-16T12:00:00Z"));
+      out.tag = k.childNodes[0].tagName; out.href = k.childNodes[0].href; out.others = k.childNodes.slice(1).map((t) => t.tagName);
+    """)
+    assert got == {"tag": "A", "href": "#dash-approvals", "others": ["DIV", "DIV", "DIV"]}
+
+
+def test_326_four_cards_by_default_and_one_remembered_toggle_shows_the_other_nine():
+    first, more = _board_ids()
+    assert first == ["dash-approvals", "dash-waiting", "dash-live", "dash-stuck"]
+    assert len(more) == 9 and set(first) | set(more) == {"dash-" + c for c in (
+        "approvals", "waiting", "live", "stuck", "timeline", "gantt", "roles", "tokens", "queue", "prs",
+        "week", "products", "progress")}
+    [(_, btn)] = [(t, a) for t, a in _markup().elements if a.get("id") == "dash-more-btn"]
+    assert btn["aria-controls"] == "dash-more" and btn["aria-expanded"] == "false"
+    got = _js(("setDashMore",), """
+      for (let i = 0; i < 9; i++) $("dash-more").append(document.createElement("section"));
+      setDashMore(false);
+      out.closed = [$("dash-more").hidden, $("dash-more-btn").textContent, $("dash-more-btn").attrs["aria-expanded"]];
+      setDashMore(true);
+      out.open = [$("dash-more").hidden, $("dash-more-btn").textContent, $("dash-more-btn").attrs["aria-expanded"]];
+    """, prelude=FAKE_DOM)
+    assert got["closed"] == [True, "עוד פרטים (9)", "false"]
+    assert got["open"] == [False, "פחות פרטים", "true"]
+    script = _markup().script
+    assert 'const MORE = "agora-board-more";' in script
+    handler = script[script.index('$("dash-more-btn").addEventListener("click"'):]
+    assert 'localStorage.setItem(MORE, open ? "1" : "0")' in handler[:400]
+    assert 'moreOpen = localStorage.getItem(MORE) === "1"' in script and "setDashMore(moreOpen);" in script
+
+
+def test_326_a_long_question_reason_or_row_opens_in_full_on_one_tap():
+    long = "ש" * 400
+    got = _dash(f"""
+      const card = renderApprovals([{{id: "a", q_he: "{long}", why_he: "{long}", link: "https://x/1"}}]);
+      const q = card.querySelector(".q"), why = card.querySelector(".why");
+      out.before = [q.className, q.attrs["aria-expanded"], q.attrs.role, q.tabIndex];
+      q.onclick();
+      out.after = [q.className, q.attrs["aria-expanded"]];
+      q.onkeydown({{key: "Enter", preventDefault() {{}}}});
+      out.again = q.attrs["aria-expanded"];
+      out.why = why.attrs["aria-expanded"];
+      const row = rowItem({{label: "shal#1", detail: "{long}"}}).childNodes[1];
+      row.onclick();
+      out.row = [row.className, row.attrs["aria-expanded"]];
+    """)
+    assert got["before"] == ["q clamp", "false", "button", 0]
+    assert got["after"] == ["q clamp open", "true"] and got["again"] == "false" and got["why"] == "false"
+    assert got["row"] == ["dash-detail tx clamp open", "true"]
+    css = _css()
+    assert "-webkit-line-clamp: none" in _rule(".appr-body .q.open, .appr-body .why.open", css)
+    assert "white-space: normal" in _rule(".tx.clamp.open, .one.clamp.open", css)
+
+
+def test_326_yes_no_later_and_the_arrows_are_thumb_sized_with_yes_and_no_at_the_ends():
+    css = _css()
+    assert "min-height: 48px" in _rule(".appr-btns button", css) and "gap: 12px" in _rule(".appr-btns", css)
+    nav = _rule(".appr-nav .go", css)
+    assert "min-width: 44px" in nav and "min-height: 44px" in nav
+    assert "min-height: 44px" in _rule(".appr-undo .go", css)
+    got = _dash("""
+      const card = renderApprovals([{id: "a", q_he: "A?"}, {id: "b", q_he: "B?"}]);
+      out.order = card.querySelector(".appr-btns").childNodes.map((b) => b.textContent);
+    """)
+    assert got["order"] == ["כן", "אחר כך", "לא"]
+
+
+def test_326_the_undo_bar_counts_down_from_ten():
+    got = _dash("""
+      let clock = 1000000;
+      Date.now = () => clock;
+      const moves = [{id: "a", q_he: "A?"}];
+      renderApprovals(moves).querySelector(".yes").onclick();
+      $("dash-approvals").append(mounted.node);
+      const count = () => $("dash-approvals").querySelector(".appr-count").textContent;
+      out.start = count();
+      out.firstTick = timers[0].ms;
+      clock += 1000; timers[0].fn();
+      out.one = count();
+      clock += 8600; timers[timers.length - 1].fn();
+      out.late = [count(), timers[timers.length - 1].ms];
+      clock += 400; timers[timers.length - 1].fn();
+      out.zero = count();
+      out.ticks = timers.length;
+    """)
+    assert got["start"] == "נשלח בעוד 10 שניות" and got["firstTick"] == 1000
+    assert got["one"] == "נשלח בעוד 9 שניות"
+    assert got["late"] == ["נשלח בעוד 1 שניות", 400]          # the next tick lands on the whole second
+    assert got["zero"] == "נשלח בעוד 0 שניות"
+    assert got["ticks"] == 4   # the 10 s send timer + 3 ticks run here: none after 0
+
+
+_FLUSH_PRELUDE = """
+  const S = {creds: {email: "f@x", key: "k"}};
+  function basic(e, k) { return "Basic " + e + ":" + k; }
+  class ApiFailure extends Error {
+    constructor(status, body) { super((body && body.msg) || ("HTTP " + status)); this.status = status; }
+  }
+  function showKeys() {}
+  const cleared = [];
+  function clearTimeout(t) { cleared.push(t); }
+  const sent = [];
+  let REPLY = {status: 200, ok: true, body: {result: "success"}};
+  function fetch(url, o) {
+    sent.push([url, o]);
+    if (REPLY === "down") return Promise.reject(new Error("offline"));
+    const r = REPLY;
+    return Promise.resolve({status: r.status, ok: r.ok, json: async () => r.body});
+  }
+  let loads = 0;
+  async function loadDashboard() { loads++; }
+"""
+_FLUSH_FUNCS = ("flushApprovals", "clearApprovalsPending", "commitApproval", "api")
+
+
+def test_326_leaving_the_page_inside_the_undo_window_sends_the_answer_at_once():
+    got = _js(_FLUSH_FUNCS, """
+      approvalsPending = {id: "a", answer: "no", note: "later", until: 0, timer: 1, tick: 2};
+      approvalsNotes.a = "later";
+      await flushApprovals();
+      out.pending = approvalsPending;
+      out.cleared = cleared;
+      out.notes = approvalsNotes;
+      out.sent = sent.map(([url, o]) => [url, o.method, o.keepalive, o.headers.Authorization, String(o.body)]);
+      out.toasts = toasts;
+      out.loads = loads;
+      await flushApprovals();                 // nothing pending: nothing more is sent
+      out.count = sent.length;
+    """, prelude=FAKE_DOM + _consts("approvalsNotes", "approvalsPending", "ANSWER_HE") + _FLUSH_PRELUDE)
+    assert got["pending"] is None and sorted(got["cleared"]) == [1, 2] and got["notes"] == {}
+    assert got["sent"] == [["/api/v1/dashboard/approve", "POST", True, "Basic f@x:k", "id=a&answer=no&note=later"]]
+    assert got["toasts"] == [["נדחה: נשמר", False]] and got["loads"] == 1
+    assert got["count"] == 1
+    script = _markup().script
+    assert 'addEventListener("pagehide", flushApprovals);' in script
+    assert 'if (document.visibilityState === "hidden") flushApprovals();' in script
+    # flushApprovals has no fetch of its own: one code path to the server (CTO on PR 137)
+    assert "fetch(" not in _function("flushApprovals")
+
+
+@pytest.mark.parametrize("reply", ["500", "401", "down"])
+def test_326_a_refused_flush_says_not_sent_and_re_renders_the_card(reply):
+    got = _js(_FLUSH_FUNCS, f"""
+      REPLY = {{"500": {{status: 500, ok: false, body: {{result: "error", msg: "boom"}}}},
+               "401": {{status: 401, ok: false, body: {{result: "error", msg: "bad key"}}}},
+               "down": "down"}}["{reply}"];
+      approvalsPending = {{id: "a", answer: "yes", note: "", until: 0, timer: 1, tick: 2}};
+      await flushApprovals();
+      out.pending = approvalsPending;
+      out.toasts = toasts;
+      out.loads = loads;
+      out.keepalive = sent.map(([, o]) => o.keepalive);
+    """, prelude=FAKE_DOM + _consts("approvalsNotes", "approvalsPending", "ANSWER_HE") + _FLUSH_PRELUDE)
+    assert got["pending"] is None and got["keepalive"] == [True]
+    assert len(got["toasts"]) == 1
+    text, bad = got["toasts"][0]
+    assert bad and text.startswith("לא נשלח: ")
+    assert got["loads"] == 1                  # the frozen countdown is replaced by a fresh board
+
+
+def test_326_an_ordinary_call_is_not_keepalive():
+    got = _js(("api",), """
+      await api("GET", "dashboard");
+      await api("POST", "dashboard/approve", {id: "a", answer: "yes", note: ""});
+      out.keepalive = sent.map(([, o]) => o.keepalive);
+    """, prelude=FAKE_DOM + _FLUSH_PRELUDE)
+    assert got["keepalive"] == [False, False]
+
+
+def test_326_the_prs_card_speaks_hebrew_too():
+    script = _markup().script
+    assert '"dash-prs": "בקשות מיזוג פתוחות"' in script
+    assert "PRs פתוחים" not in script
+
+
+def _visible_text(node) -> list[str]:
+    """Every text a dumped node shows, minus links' ref names (`.ref`) and
+    the run log's command (`.act`): those are data, not the page's words."""
+    if "text" in node and "kids" not in node:
+        return [node["text"]]
+    if {"ref", "act"} & set((node.get("cls") or "").split()):
+        return []
+    return [t for k in node.get("kids") or [] for t in _visible_text(k)]
+
+
+@pytest.mark.parametrize("fixture", ["old", "220", "empty"])
+def test_326_the_default_board_says_nothing_in_developer_words_or_english(fixture):
+    doc = {"old": DASHBOARD_FIXTURE, "220": DASHBOARD_FIXTURE_220, "empty": {}}[fixture]
+    doc = json.loads(json.dumps(doc))
+    for r in doc.get("stuck") or []:   # an issue's own title is data, kept as GitHub has it
+        if r["check"] != "IDLE":
+            r["text"] = "agent:needs-human: כותרת המשימה"
+    got = _dash(f"""
+      const doc = {json.dumps(doc)};
+      const now = Date.parse("2026-09-29T19:11:53Z");
+      out.cards = [renderKpis(doc, now), renderApprovals(doc.next_moves), renderWaiting(doc.stuck),
+                   renderLive(doc.live), renderStuck(doc.stuck)].map(dump);
+      out.pill = [pillText({{last_error: "gh: not logged in", doc: null}}, now),
+                  pillText({{last_error: "boom", doc: {{}}}}, now)];
+      out.idleTitle = stuckRow({{check: "IDLE", repo: "shal", number: 0,
+                                 text: "2 issue(s) at agent:go, nothing at agent:working"}});
+    """)
+    texts = [t for c in got["cards"] for t in _visible_text(c)] + got["pill"]
+    for t in texts:
+        assert ".py" not in t and "ops#" not in t and "agent:" not in t, t
+        assert not re.search(r"[A-Za-z]{2,}[ ,:]+[A-Za-z]{2,}[ ,:]+[A-Za-z]{2,}", t), t
+    assert got["idleTitle"]["detail"] == "2 משימות מוכנות, אף משימה לא בעבודה"
+    assert got["idleTitle"]["title"].startswith("2 issue(s)")       # the original stays in the title
+    titles = dict(re.findall(r'"(dash-[a-z]+)": "([^"]+)"', _markup().script))
+    assert titles["dash-live"] == "הרובוטים עכשיו" and "POOL" not in "".join(titles.values())
+
+
+def test_326_on_a_phone_the_timeline_is_its_event_list_only():
+    css = _css()
+    phone = css[css.index("/* ops#326: on a phone the timeline"):]
+    assert "display: none" in _rule("#dash-timeline .tl", phone)
+    # the list is built newest first and cut to five rows (test above)
+    assert 'wrap.append(cutList(ul, items, "tl-events"));' in _function("renderTimeline")
+
+
+def test_326_on_a_phone_a_row_wraps_to_two_lines_hebrew_text_first():
+    css = _css()
+    phone = css[css.index("/* ops#326: on a phone the timeline"):]
+    tx = _rule(".rows li .tx", phone)
+    assert "order: -1" in tx and "white-space: normal" in tx and "-webkit-line-clamp: 2" in tx
+    assert "flex-wrap: wrap" in _rule(".rows li", phone)
+    assert "color: var(--muted)" in _rule(".rows li .ref", phone)
+
+
+def test_326_no_text_on_the_board_is_under_13px():
+    css = _css()
+    board = css[css.index("/* The board, in the approved mockup's look"):css.index("#app.both {")]
+    # the lane chart's hour labels and bars: only on a wide screen, under "עוד פרטים"
+    chart = {".tlin", ".axis", ".ev.run", ".now span"}
+    small = []
+    for sel, body in re.findall(r"([^{}]+)\{([^}]*)\}", board):
+        sel = re.sub(r"/\*.*?\*/", "", sel, flags=re.DOTALL).strip()
+        for px in re.findall(r"font-size:\s*([\d.]+)px", body):
+            if float(px) < 13 and sel not in chart:
+                small.append((sel, px))
+    assert small == []
+    assert "font-size: 13px" in _rule("#dash .muted", css)
+    assert "font-size: 15px" in _rule("#dash", css) and "font-size: 14px" in _rule(".card h3", css)
 
 
 # -- issue #168: unread bubbles
@@ -2662,3 +2941,143 @@ def test_pairing_a_phone_is_a_real_round_trip_through_the_server(tmp_path):
     finally:
         run.stop()
 
+
+
+# -- dictation (ops#323)
+
+# A DOM and a recogniser, just enough for setupDictation(). ``window`` carries
+# (or lacks) the Speech API, exactly the switch the page reads.
+DICTATION_STUB = """
+const els = {};
+function mk(id, extra) { return els[id] = Object.assign({
+  id, value: "", hidden: true, listeners: {}, attrs: {}, text: "",
+  classes: [],
+  classList: { toggle(c, on) { const me = this.owner; me.classes = me.classes.filter((x) => x !== c);
+    if (on) me.classes.push(c); } },
+  setAttribute(k, v) { this.attrs[k] = v; },
+  addEventListener(t, f) { this.listeners[t] = f; }}, extra); }
+mk("mic-btn"); mk("compose", {hidden: false}); mk("send-error"); mk("mic-note");
+for (const e of Object.values(els)) e.classList.owner = e;
+const $ = (id) => els[id];
+// Every road out of the page: the page's own send() and the network itself.
+const sent = [];
+function send() { sent.push(["send", els.compose.value]); }
+global.fetch = (...a) => { sent.push(["fetch", a]); return new Promise(() => {}); };
+function fitCompose() {}
+function sendError(m) { els["send-error"].text = m; }
+let made = [];
+let START_FAILS = false;
+class FakeSR { constructor() { made.push(this); }
+  start() { if (START_FAILS) throw new Error("InvalidStateError"); this.started = true; } stop() { this.onend && this.onend(); } }
+const res = (t, isFinal) => ({isFinal, 0: {transcript: t}});
+"""
+
+
+def test_the_mic_button_is_in_the_compose_row_and_starts_hidden():
+    m = _markup()
+    [mic] = [a for t, a in m.elements if a.get("id") == "mic-btn"]
+    assert "hidden" in mic and mic["type"] == "button"
+    assert "Google" in mic["title"], "the privacy note belongs in the tooltip"
+
+
+def test_the_mic_button_shows_only_when_the_speech_api_exists():
+    out = _js(("setupDictation",), """
+      global.window = {};
+      setupDictation();
+      out.without = $("mic-btn").hidden;
+      global.window = {webkitSpeechRecognition: FakeSR};
+      setupDictation();
+      out.prefixed = $("mic-btn").hidden;
+      els["mic-btn"].hidden = true;
+      global.window = {SpeechRecognition: FakeSR};
+      setupDictation();
+      out.standard = $("mic-btn").hidden;
+    """, DICTATION_STUB)
+    assert out == {"without": True, "prefixed": False, "standard": False}
+
+
+def test_the_transcript_lands_in_the_compose_box_in_hebrew_and_is_never_sent():
+    out = _js(("setupDictation",), """
+      global.window = {SpeechRecognition: FakeSR};
+      $("compose").value = "היי";
+      setupDictation();
+      $("mic-btn").listeners.click();
+      const r = made[0];
+      out.lang = r.lang; out.interim = r.interimResults; out.started = r.started;
+      r.onresult({resultIndex: 0, results: [res("מה", false)]});
+      out.live = $("compose").value;
+      r.onresult({resultIndex: 0, results: [res("מה שלומך", true)]});
+      out.final = $("compose").value;
+      r.onend();
+      out.sent = sent;
+    """, DICTATION_STUB)
+    assert out["lang"] == "he-IL" and out["interim"] and out["started"]
+    assert out["live"] == "היי מה"
+    assert out["final"] == "היי מה שלומך"
+    assert out["sent"] == [], "dictation must never send"
+
+
+def test_a_denied_microphone_says_so_and_a_second_press_stops():
+    out = _js(("setupDictation",), """
+      global.window = {SpeechRecognition: FakeSR};
+      setupDictation();
+      $("mic-btn").listeners.click();
+      made[0].onerror({error: "not-allowed"});
+      out.err = $("send-error").text;
+      $("mic-btn").listeners.click();   // stops (onend clears)
+      $("mic-btn").listeners.click();   // a fresh recogniser
+      out.n = made.length;
+    """, DICTATION_STUB)
+    assert out["err"] and out["n"] == 2
+
+
+def test_the_mic_button_is_a_44px_tap_target():
+    # 2.6rem at a 14px root is 41.6px, under the 44px a finger needs.
+    rule = _rule("#mic-btn")
+    assert "min-width: 44px" in rule and "min-height: 44px" in rule, rule
+
+
+def test_listening_shows_on_the_button_and_clears_when_it_ends():
+    out = _js(("setupDictation",), """
+      global.window = {SpeechRecognition: FakeSR};
+      setupDictation();
+      out.before = [$("mic-btn").attrs["aria-pressed"] || "false", $("mic-btn").classes.slice()];
+      $("mic-btn").listeners.click();
+      out.during = [$("mic-btn").attrs["aria-pressed"], $("mic-btn").classes.slice()];
+      made[0].onend();
+      out.after = [$("mic-btn").attrs["aria-pressed"], $("mic-btn").classes.slice()];
+    """, DICTATION_STUB)
+    assert out["before"] == ["false", []]
+    assert out["during"] == ["true", ["on"]]
+    assert out["after"] == ["false", []]
+
+
+def test_a_recogniser_that_will_not_start_says_so():
+    out = _js(("setupDictation",), """
+      global.window = {SpeechRecognition: FakeSR};
+      START_FAILS = true;
+      setupDictation();
+      $("mic-btn").listeners.click();
+      out.err = $("send-error").text;
+      out.pressed = $("mic-btn").attrs["aria-pressed"];
+      START_FAILS = false;
+      $("mic-btn").listeners.click();   // the dead press left nothing behind
+      out.n = made.length;
+    """, DICTATION_STUB)
+    assert out == {"err": "ההקלטה לא התחילה.", "pressed": "false", "n": 2}
+
+
+def test_the_privacy_note_is_a_visible_line_when_the_mic_is_offered():
+    m = _markup()
+    [note] = [a for t, a in m.elements if a.get("id") == "mic-note"]
+    assert "hidden" in note, "no mic, no note"
+    assert "לספק הדפדפן" in PAGE.read_text(encoding="utf-8").split('id="mic-note"')[1].split("</p>")[0]
+    out = _js(("setupDictation",), """
+      global.window = {};
+      setupDictation();
+      out.without = $("mic-note").hidden;
+      global.window = {SpeechRecognition: FakeSR};
+      setupDictation();
+      out.with = $("mic-note").hidden;
+    """, DICTATION_STUB)
+    assert out == {"without": True, "with": False}

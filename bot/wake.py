@@ -16,10 +16,13 @@ How it works:
     on (below). Every other sender is skipped and logged.
   - Rooms (ops#322): a room is a stream with one fixed topic, and the session
     key is the room. In a room with one role bot, any founder message wakes
-    it; in a room with two or more, only ``@**ROLE**`` wakes that role, and
-    an untagged line goes only to the room's one open session, if exactly one
-    role has one there (never a spawn). A role that is not a member of the room never wakes there, by the founder
-    or by a bot. The PA wakes only in #pa or a founder DM, never in a company
+    it. In a room with two or more, an untagged founder line wakes the room's
+    owner (the role whose ``home_streams`` entry it is: #coo the COO, #PM the
+    PM) and no other bot; ``@**ROLE**`` wakes only that role. In a room no
+    member owns (All hands), an untagged line goes only to the room's one
+    open session, if exactly one role has one there (never a spawn). A role
+    that is not a member of the room never wakes there, by the founder or by
+    a bot. The PA wakes only in #pa or a founder DM, never in a company
     room. An invite only subscribes and wakes nothing; a removal closes the
     role's session in that room. A room name that is not safe text is never
     put in a hint.
@@ -118,8 +121,11 @@ AGENT: dict[str, Any] = {
     # The PA (ops#293 item 7) runs in PA_DIR from bot/.env, on Sonnet.
     "models": {"COO": "opus", "CTO": "opus", "PM": "sonnet", "CMO": "sonnet", "CPSO": "sonnet",
                "PA": "sonnet"},
-    # Where a DM to the role is answered (its own room).
-    "home_streams": {"PA": "pa"},
+    # Each role's own room (its owner): a DM to the role is answered there,
+    # and an untagged founder line there wakes it. Names as setup_streams.py
+    # makes them (#PM is upper case).
+    "home_streams": {"PA": "pa", "COO": "coo", "CTO": "cto", "PM": "PM",
+                     "CMO": "cmo", "CPSO": "cpso"},
     # Where a conversation the agent made is kept, to tell a session that
     # exists from an id that never got one (ops#318). None: do not check.
     "conversations": str(Path(os.environ.get("CLAUDE_CONFIG_DIR")
@@ -436,6 +442,12 @@ def own_stream(role: str) -> str:
     return AGENT["home_streams"].get(role, role.lower())
 
 
+def _owns(role: str, room: str) -> bool:
+    """Whether ``room`` is the role's own room (its owner). Zulip stream
+    names are case-insensitive, so #PM and #pm are one room."""
+    return room.casefold() == own_stream(role).casefold()
+
+
 def _quote(text: str) -> str:
     """A double-quoted argument with the text as plain UTF-8: never a \\u
     escape, never cut (ops#318). Only quotes and backslashes are escaped."""
@@ -663,10 +675,11 @@ class Waker:
     def _wakes(self, role: str, msg: dict[str, Any]) -> tuple[str, str]:
         """Whether a message calls this role (ops#322): ``"yes"``, ``"no"``,
         ``"not_member"`` or ``"untagged"`` (no tag in a multi-bot room), and
-        why not. A DM always does. The PA wakes only in its own room #pa (or
-        a DM): it is the founder's personal assistant and never joins a
-        company room. In #pa an untagged founder message wakes the PA, even
-        if he invited another role there."""
+        why not. A DM always does. In a multi-bot room an untagged founder
+        message wakes the room's owner, the role whose ``own_stream()`` it is
+        (#PM wakes the PM, #coo the COO, #pa the PA), and no other bot: one
+        wake per line. The PA wakes only in its own room #pa (or a DM): it is
+        the founder's personal assistant and never joins a company room."""
         if msg.get("type") != "stream":
             return "yes", ""
         room = _where(msg, role)
@@ -686,11 +699,17 @@ class Waker:
             bots.discard("PA")
         if role not in bots:
             return "not_member", f"{role} is not a member of #{room}"
-        if len(bots) == 1 or mentioned or role == "PA":
+        content = str(msg.get("content") or "")
+        tagged = any(mentions(r, content) for r in ROLES)
+        if len(bots) == 1 or mentioned or (not tagged and _owns(role, room)):
             return "yes", ""
         self.room_bots[(role, room)] = bots
-        return "untagged", (f"#{room} has {len(bots)} role bots ({', '.join(sorted(bots))}); "
-                      f"only @**{role}** wakes {role}")
+        owner = next((r for r in sorted(bots) if _owns(r, room)), None)
+        why = (f"#{room} has {len(bots)} role bots ({', '.join(sorted(bots))}); "
+               f"only @**{role}** wakes {role}")
+        if owner:
+            why += f" (an untagged line wakes the room's owner, {owner})"
+        return "untagged", why
 
     def _bot_of(self, msg: dict[str, Any]) -> str | None:
         """The role whose bot sent ``msg``, by ``sender_id`` only; None for the
@@ -846,12 +865,17 @@ class Waker:
         return self._deliver(role, msg, founder=True)
 
     def _sole_open(self, role: str, msg: dict[str, Any]) -> bool:
-        """An untagged founder message in a multi-bot room goes on the open
-        conversation: it resumes (or queues for) this role's session when, of
-        the room's role bots, only this role has an open, non-closing session
-        there. It never spawns one; with none or two open, nobody gets it."""
+        """An untagged founder message in a multi-bot room that no member
+        owns (All hands, a new room) goes on the open conversation: it
+        resumes (or queues for) this role's session when, of the room's role
+        bots, only this role has an open, non-closing session there. It never
+        spawns one; with none or two open, nobody gets it. In a room with its
+        owner among the members, the owner gets the line and nobody else."""
         room = _where(msg, role)
-        open_here = [r for r in sorted(self.room_bots.get((role, room), ()))
+        bots = self.room_bots.get((role, room), ())
+        if any(_owns(r, room) for r in bots):
+            return False
+        open_here = [r for r in sorted(bots)
                      if (s := self.state["roles"].get(r, {}).get("session"))
                      and not s.get("closing") and s.get("stream") == room]
         return open_here == [role]

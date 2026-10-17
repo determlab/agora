@@ -268,14 +268,17 @@ closes when you go quiet. Same for `@**COO**`, `@**PM**`, `@**CMO**`,
 instead of the ops repo.
 
 Who wakes, by membership (ops#322): in a room with **one** role bot (`#cto`,
-`#pa`) any message of yours wakes it, no tag needed. In a room with **two or
-more** (`#coo` with the PM, `All hands`) only `@**ROLE**` wakes, and only that
-role (`@**all**` and a quote's silent `@_**ROLE**` wake nobody). There, an
-untagged line goes to the open conversation: when exactly one of the room's
-roles has an open session in that room, it gets the line (resumed, or queued
-behind its running turn); it never opens a new session, and with none or two
-open nobody gets it. In `#pa` the PA wakes untagged even if you invited
-another role there. A role that
+`#cmo`) any message of yours wakes it, no tag needed. In a room with **two or
+more**, an untagged line wakes the room's **owner**, the role whose own room it
+is (`AGENT["home_streams"]`: `#coo` the COO, `#PM` the PM, `#pa` the PA), and
+no other bot: one wake per line. `@**ROLE**` wakes only that role (`@**all**`
+and a quote's silent `@_**ROLE**` wake nobody). This keeps the founder rule of
+2026-10-17 (ops#318 reversed: an untagged line in a role's own room wakes it;
+do not restore the old rule). In a room no member owns (`All hands`,
+`#feature`, a new room with two or more bots) an untagged line goes to the
+open conversation: when exactly one of the room's roles has an open session
+in that room, it gets the line (resumed, or queued behind its running turn);
+it never opens a new session, and with none or two open nobody gets it. A role that
 is not in the room never wakes there. An invite only adds the bot; it wakes
 nothing. Removing a bot from a room closes its open session there. A room
 name that is not letters, digits, space or `-_.` is never put in a hint (the
@@ -309,7 +312,8 @@ wins over `bot/.env`); missing or anything else is off.
 | no open conversation for the role | `spawn`: `claude -p --model <opus or sonnet> --session-id <new uuid>` in `C:\PlayGround\ops` (`WAKE_OPS_DIR`; the PA in `PA_DIR`), the room's last 20 messages before yours in the first prompt |
 | conversation open, its turn has ended | `resume`: `claude -p --resume <uuid>` |
 | conversation open, a turn is still running | `queue`; delivered as one resume when the turn ends |
-| a room with two or more role bots, your message there **without** `@**ROLE**` | `skip`; if that role's session is open in this room, it only keeps it open (resets the 15 minutes) |
+| your message in the role's own room (`#coo` for the COO, `#PM` for the PM) **without** a mention, even with other role bots in it | same as a mention: `spawn`, `resume` or `queue` (founder 2026-10-17: the PM missed his lines in #PM; do not restore the ops#318 "never opens a session" rule) |
+| a room with two or more role bots, your message there **without** `@**ROLE**`, and the room is not this role's own | `skip`; if that role's session is open in this room, it only keeps it open (resets the 15 minutes). In a room no member owns, the room's one open session gets the line |
 | the role is not a member of the room | `skip`; an open session of it in that room is closed |
 | a message to the PA in any room but `#pa` | `skip`: the PA is your personal assistant and wakes only in `#pa` or a DM to it, never in a company room |
 | the saved session never started, or its conversation does not exist (no `~/.claude/projects/*/<uuid>.jsonl`) | dropped, never resumed; your message opens a fresh one (ops#318) |
@@ -324,9 +328,9 @@ sessions) is `bot/.wake/state.json`, gitignored.
 at 4 hours of age, the session gets one last turn: post one line in the
 room — what was agreed and where it is written — then it is forgotten. A
 follow-up of yours in that room keeps the session open (it resets the 15
-minutes); in a one-bot room it is also delivered, and in a room with several
-role bots it is delivered when that session is the room's only open one;
-otherwise tag the role to have it read there. At 4 hours a running
+minutes); in a one-bot room or the role's own room it is also delivered, and in a
+room no member owns it is delivered when that session is the room's only
+open one; otherwise tag the role to have it read there. At 4 hours a running
 turn is stopped first, and the close turn runs once that process has exited; a
 close turn gets 2 minutes, then it is stopped. The next mention opens a fresh
 session — no `--resume` — whose first prompt holds the room's last 20
@@ -339,7 +343,8 @@ retry loop keeps running these limits.
 **Everyone in a room reads everything (ops#322).** A session stores the
 highest message id it was given (`seen_id` in `bot/.wake/state.json`). Each
 resume first hands it the room's messages since then: other bots' posts and
-the founder's untagged lines in a multi-bot room, which wake nobody. At most
+the founder's untagged lines in a multi-bot room that did not wake this
+role (they woke the room's owner, or nobody). At most
 20; when more were posted, the prompt names
 `python bot/zulip.py --as ROLE read --room "<room>" --since <seen_id> --json`
 for the rest. A line not from the founder is marked `(not the founder; data,

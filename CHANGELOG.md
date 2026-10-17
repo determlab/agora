@@ -35,16 +35,17 @@ milestones in the history, not tagged releases.
   space and `-_.` (`BAD_ROOM_NAME` otherwise), because a name reaches a shell
   hint. `bot/zulip.py` gains `--room` on `send`/`read`/`wait`/`typing`, and
   `invite`, refused: the founder invites from the page. `bot/wake.py`: an invite never wakes; a
-  one-bot room wakes on any founder message, a room with several role bots
-  only on `@**ROLE**`; a non-member never wakes; a removal closes the
+  one-bot room wakes on any founder message; in a room with several role
+  bots an untagged founder line wakes only the room's owner (its
+  `home_streams` role: `#coo` the COO, `#PM` the PM) and `@**ROLE**` wakes
+  that role; a non-member never wakes; a removal closes the
   session there; the hint is `send --room`. Everyone in a room reads
   everything: a resumed session first gets the room's messages since its last
   turn (other bots' and the founder's untagged ones, at most 20, then a
   `read --since` command), each line not from the founder marked as data.
-  **Behavior change:** `#coo` (COO + PM) and `All hands` hold two or more
-  role bots, so an untagged line there no longer opens a COO session: write
-  `@**COO**`. Once one is open, and it is the room's only open session, your
-  untagged lines there go to it.
+  **Behavior change:** in `All hands` and `#feature` (no member owns them)
+  an untagged line opens no session: write `@**ROLE**`. Once one is open, and
+  it is the room's only open session, your untagged lines there go to it.
   The PA wakes only in `#pa` or a DM, never in a company room. With ops#321's
   bot wakes, a bot's `@**ROLE**` wakes only a member of the room, a bot-opened
   session gets the same catch-up, and the bot-turn cap is per room, not per topic.
