@@ -11,7 +11,9 @@ Two roles, one script, selected by argv:
               poll against Zulip's event queue (``register`` once, then
               ``GET /api/v1/events``). When someone @-mentions or DMs this
               session's bot, or anyone else writes in its own role stream (issue
-              #50), or the founder writes in #feature (issue #56), it prints
+              #50), or the founder writes in #feature (issue #56), or anyone
+              else writes in a room it shares with another role bot (issue
+              #146), it prints
               the message and **exits 2**, which wakes the session with that
               text. That is the whole mechanism by which a
               person reaches into a running agent: there is no other supported
@@ -73,10 +75,14 @@ BACKFILL_PAGES = 50
 # The one stream two role sessions share (issue #56): the founder, the CTO bot
 # and the COO bot, for a big feature. bot/setup_streams.py owns who is in it.
 FEATURE_STREAM = "feature"
-# Meeting rooms (issue #146): every member session reads every message there,
-# the founder's and the other bots', tagged or not. ``MEETING_STREAMS`` in
-# bot/.env, comma-separated; bot/wake.py reads the same key.
-DEFAULT_MEETING_STREAMS = "All hands"
+# Multi-bot rooms (issue #146): a room with two or more of these role bots is
+# a meeting, where every member session reads every message, the founder's and
+# the other bots', tagged or not. Room membership decides; there is no list.
+# The PA is home-only (ops#327): it never joins a company room. The same names
+# as bot/wake.py's ROLES, less the PA.
+SHARED_ROLES = ("COO", "CTO", "PM", "CMO", "CPSO")
+# How often a session re-reads which of its rooms are multi-bot.
+ROOMS_SECONDS = 5 * 60
 
 
 def _payload() -> dict:
@@ -173,13 +179,6 @@ def _dotenv(path: Path) -> dict:
     return out
 
 
-def _meeting_streams() -> set:
-    """The meeting rooms, casefolded (Zulip stream names are case-insensitive)."""
-    raw = (os.environ.get("MEETING_STREAMS") or _dotenv(DOTENV).get("MEETING_STREAMS")
-           or DEFAULT_MEETING_STREAMS)
-    return {s.strip().casefold() for s in raw.split(",") if s.strip()}
-
-
 def _from_bot(msg: dict) -> bool:
     """Zulip names every bot it creates ``<short_name>-bot@<domain>`` (see
     ``_wakes``); a message carries no ``is_bot``."""
@@ -241,6 +240,35 @@ def _zulip(creds: tuple[str, str, str], method: str, path: str, params: dict,
         return None
 
 
+def _multi_bot_rooms(creds: tuple[str, str, str]) -> set | None:
+    """This bot's rooms that two or more role bots are in, casefolded (Zulip
+    stream names are case-insensitive), from the server's own subscriber
+    lists; None when Zulip cannot answer."""
+    subs = _zulip(creds, "GET", "users/me/subscriptions",
+                  {"include_subscribers": "true"}, 15.0)
+    users = _zulip(creds, "GET", "users", {}, 15.0)
+    if (not subs or subs.get("result") != "success"
+            or not users or users.get("result") != "success"):
+        return None
+    bots = {u.get("user_id") for u in users.get("members") or [] if isinstance(u, dict)
+            and u.get("is_bot") and str(u.get("full_name") or "").upper() in SHARED_ROLES}
+    return {str(s.get("name") or "").casefold() for s in subs.get("subscriptions") or []
+            if isinstance(s, dict) and len(bots & set(s.get("subscribers") or ())) >= 2}
+
+
+def _rooms(creds: tuple[str, str, str], name: str, state: dict) -> set:
+    """The multi-bot rooms for this session, re-read every ``ROOMS_SECONDS``.
+    The PA has none. Zulip not answering keeps the last answer (or none)."""
+    if name.upper() == "PA":
+        return set()
+    now = time.time()
+    if now - float(state.get("rooms_at") or 0) >= ROOMS_SECONDS:
+        got = _multi_bot_rooms(creds)
+        if got is not None:
+            state["rooms"], state["rooms_at"] = sorted(got), now
+    return set(state.get("rooms") or ())
+
+
 def _wakes(event: dict, bot_email: str, name: str = "",
            meetings: set | None = None) -> bool:
     """The whole wake rule: a mention of this bot, a direct message to it, or
@@ -270,9 +298,10 @@ def _wakes(event: dict, bot_email: str, name: str = "",
     own stream" cannot be one narrow. The queue takes every message and this
     picks.
 
-    A meeting room (issue #146, ``MEETING_STREAMS``) wakes on every message
-    but the session's own, for every role but the PA: a member reads the whole discussion there. A
-    bot's post comes marked as not the founder (``_rewake_text``).
+    A multi-bot room (issue #146, ``meetings``: see ``_multi_bot_rooms``)
+    wakes on every message but the session's own, for every role but the PA:
+    a member reads the whole discussion there. A bot's post comes marked as
+    not the founder (``_rewake_text``).
     """
     if event.get("type") != "message":
         return False
@@ -284,8 +313,7 @@ def _wakes(event: dict, bot_email: str, name: str = "",
     if msg.get("type") != "stream":
         return False
     stream = str(msg.get("display_recipient") or "").lower()
-    if name.upper() != "PA" and stream.casefold() in (
-            _meeting_streams() if meetings is None else meetings):
+    if name.upper() != "PA" and stream.casefold() in (meetings or ()):
         return True  # the PA reads company rooms only when mentioned (ops#327)
     if stream == FEATURE_STREAM:
         sender = str(msg.get("sender_email") or "")
@@ -309,10 +337,9 @@ def _rewake_text(name: str, msg: dict, meetings: set | None = None) -> str:
         topic = msg.get("subject") or ""
         if "mentioned" in (msg.get("flags") or []):
             where = f"@{name} in #{stream} › {topic} — from {sender}"
-        else:  # written in this role's own stream or a meeting room, no tag needed
+        else:  # written in this role's own stream or a multi-bot room, no tag needed
             where = f"#{stream} › {topic} — from {sender}"
-        meeting = name.upper() != "PA" and str(stream).casefold() in (
-            _meeting_streams() if meetings is None else meetings)
+        meeting = name.upper() != "PA" and str(stream).casefold() in (meetings or ())
         if meeting and _from_bot(msg):
             marker = BOT_MARKER.format(src=sender) + "\n\n"
         reply = f"Reply in #{stream}, topic {topic!r}."
@@ -484,10 +511,12 @@ def _load_state(path: Path) -> dict:
         return {"queue_id": saved.get("queue_id"),
                 "last_event_id": int(saved.get("last_event_id", -1)),
                 "last_message_id": int(saved["last_message_id"]),
-                "backfill": bool(saved.get("backfill"))}
+                "backfill": bool(saved.get("backfill")),
+                "rooms": [str(r) for r in saved.get("rooms") or []],
+                "rooms_at": float(saved.get("rooms_at") or 0)}
     except (OSError, ValueError, TypeError, AttributeError):
         return {"queue_id": None, "last_event_id": -1,
-                "last_message_id": None, "backfill": False}
+                "last_message_id": None, "backfill": False, "rooms": [], "rooms_at": 0.0}
 
 
 def _save_state(path: Path, state: dict) -> None:
@@ -497,7 +526,7 @@ def _save_state(path: Path, state: dict) -> None:
 
 
 def _backfill(creds: tuple[str, str, str], after: int,
-              name: str = "") -> tuple[list, bool] | None:
+              name: str = "", meetings: set | None = None) -> tuple[list, bool] | None:
     """Every message after id ``after`` that the live path could wake on,
     oldest first and each once, and whether the whole gap was read; None if
     Zulip could not answer.
@@ -531,8 +560,8 @@ def _backfill(creds: tuple[str, str, str], after: int,
     # and COO bots are in it, so for any other session it errs and is skipped.
     if name.lower() != FEATURE_STREAM:
         narrows.append(([{"operator": "channel", "operand": FEATURE_STREAM}], False))
-    # Meeting rooms (issue #146), optional too: a role not in one errs here.
-    for room in sorted(_meeting_streams() if name.upper() != "PA" else ()):
+    # Multi-bot rooms (issue #146), optional too: one left since errs here.
+    for room in sorted(meetings or ()):
         if room not in (name.lower(), FEATURE_STREAM):
             narrows.append(([{"operator": "channel", "operand": room}], False))
     found: dict = {}
@@ -572,7 +601,6 @@ def _poll_once(creds: tuple[str, str, str], name: str, state: dict,
     long poll. Returns the rewake text on a hit. State is saved before a hit
     is returned, so the next run never delivers the same message twice."""
     bot_email = creds[1]
-    meetings = _meeting_streams()
     if state["queue_id"] is None:
         reg = _zulip(creds, "POST", "register", {
             "event_types": json.dumps(["message"]),
@@ -590,9 +618,10 @@ def _poll_once(creds: tuple[str, str, str], name: str, state: dict,
             # in the message history.
             state["backfill"] = True
         _save_state(state_path, state)
+    meetings = _rooms(creds, name, state)
     candidates: list = []
     if state["backfill"]:
-        got_back = _backfill(creds, state["last_message_id"], name)
+        got_back = _backfill(creds, state["last_message_id"], name, meetings)
         if got_back is None:
             time.sleep(2.0)
             return None
