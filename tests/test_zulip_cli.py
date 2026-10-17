@@ -320,3 +320,29 @@ def test_as_pa_without_a_key_says_which_lines_to_add_and_the_setup_command(cli, 
     msg = str(exc.value)
     assert "ZULIP_PA_EMAIL" in msg and "ZULIP_PA_API_KEY" in msg
     assert "bot/.env" in msg and "bot/setup_streams.py" in msg
+
+
+def test_dm_founder_sends_one_private_message(cli, monkeypatch, capsys):
+    monkeypatch.setenv("FOUNDER_ZULIP_ID", "7")
+    fake = _stub(monkeypatch, cli, FakeZulip())
+    assert cli.main(["send", "--dm", "founder", "--text", "hi", "--json"]) == 0
+    assert json.loads(capsys.readouterr().out) == {"ok": True, "id": 99, "dm": "founder"}
+    assert fake.calls == [("POST", "messages",
+                           {"type": "private", "to": [7], "content": "hi"})]
+
+
+@pytest.mark.parametrize("who", ["cto", "someone@x", "7", "Founder"])
+def test_dm_to_anyone_else_is_refused(cli, monkeypatch, capsys, who):
+    monkeypatch.setenv("FOUNDER_ZULIP_ID", "7")
+    fake = _stub(monkeypatch, cli, FakeZulip())
+    assert cli.main(["send", "--dm", who, "--text", "hi"]) == 2
+    assert "only 'founder'" in capsys.readouterr().err
+    assert fake.calls == []
+
+
+def test_dm_without_founder_id_is_refused(cli, monkeypatch, capsys):
+    monkeypatch.delenv("FOUNDER_ZULIP_ID", raising=False)
+    fake = _stub(monkeypatch, cli, FakeZulip())
+    assert cli.main(["send", "--dm", "founder", "--text", "hi"]) == 2
+    assert "FOUNDER_ZULIP_ID" in capsys.readouterr().err
+    assert fake.calls == []

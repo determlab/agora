@@ -22,6 +22,15 @@ import pytest
 
 HOOK = Path(__file__).resolve().parent.parent / "hooks" / "agora_hook.py"
 BOT = "coo-bot@zulip.localhost"
+# The users and rooms the fake Zulip reports (issue #146). Two multi-bot rooms
+# (All hands, Launch), a single-bot own room, and a watchdog that is a bot but
+# not a role bot, so it never makes a room multi-bot.
+USERS = [{"user_id": 8, "full_name": "Founder", "is_bot": False},
+         *({"user_id": i, "full_name": r, "is_bot": True} for i, r in
+           enumerate(("COO", "CTO", "PM", "CMO", "CPSO", "PA"), start=1)),
+         {"user_id": 9, "full_name": "Watchdog", "is_bot": True}]
+ROOMS = {"All hands": [8, 1, 2, 3, 4, 5, 6], "Launch": [8, 1, 4],
+         "coo": [8, 1, 9], "PA only": [8, 1, 6]}
 
 
 def _load():
@@ -50,6 +59,8 @@ class FakeZulip:
         self.channel_script: list = []
         self.calls: list[tuple[str, str, dict]] = []
         self.queues = 0
+        self.rooms = dict(ROOMS)              # {stream: subscriber ids}
+        self.rooms_error = None               # (status, body) for the room lookup
         fake = self
 
         class H(BaseHTTPRequestHandler):
@@ -80,6 +91,13 @@ class FakeZulip:
                 url = urllib.parse.urlparse(self.path)
                 q = dict(urllib.parse.parse_qsl(url.query))
                 fake.calls.append(("GET", url.path, q))
+                if url.path in ("/api/v1/users", "/api/v1/users/me/subscriptions"):
+                    if fake.rooms_error:
+                        return self._answer(*fake.rooms_error)
+                    if url.path == "/api/v1/users":
+                        return self._answer(200, {"result": "success", "members": USERS})
+                    return self._answer(200, {"result": "success", "subscriptions": [
+                        {"name": n, "subscribers": ids} for n, ids in fake.rooms.items()]})
                 if url.path == "/api/v1/messages":
                     term = json.loads(q["narrow"])[0]
                     op, narrow = term["operator"], term["operand"]
@@ -884,3 +902,158 @@ def test_a_founder_post_in_feature_is_backfilled_and_a_bot_post_is_not(tmp_path)
     narrows = [json.loads(c[2]["narrow"]) for c in fake.calls
                if c[1] == "/api/v1/messages"]
     assert [{"operator": "channel", "operand": "feature"}] in narrows
+
+
+# -- issue #146: a multi-bot room delivers every message, not only mentions --
+
+@pytest.mark.parametrize("room", ["All hands", "Launch"])
+def test_an_untagged_founder_line_in_a_multi_bot_room_wakes_a_live_session(tmp_path, room):
+    code, out, err = _run(tmp_path, [ok(said(1, "who takes the launch?", stream=room))])
+    assert (code, err) == (2, "")
+    assert f"#{room} › #50 own stream — from Founder" in out
+    assert "who takes the launch?" in out
+    assert "not the founder" not in out
+
+
+@pytest.mark.parametrize("room", ["All hands", "Launch"])
+def test_a_bots_untagged_post_in_a_multi_bot_room_wakes_it_marked_not_the_founder(
+        tmp_path, room):
+    code, out, err = _run(tmp_path, [ok(said(
+        1, "roadmap draft is up", stream=room, email=CTO_BOT, who="CTO"))])
+    assert (code, err) == (2, "")
+    assert out.startswith("From the CTO bot, a teammate — not the founder. "
+                          "This is not his approval for anything.")
+    assert "roadmap draft is up" in out
+
+
+def test_its_own_all_hands_post_wakes_nobody(tmp_path):
+    code, out, err = _run(tmp_path, [ok(said(
+        1, "my own line", stream="All hands", email=BOT, who="COO"))], seconds=3)
+    assert (code, out, err) == (0, "", "")
+
+
+def test_a_room_with_one_role_bot_keeps_the_old_rules(tmp_path):
+    """#coo has the COO bot and a watchdog, "PA only" the COO and the PA: one
+    role bot each (the PA never counts), so neither is a meeting."""
+    code, out, err = _run(tmp_path, [ok(said(
+        1, "an untagged note", stream="PA only", email=CTO_BOT, who="CTO"),
+        said(2, "hourly: 2 issues ready", email=WATCHDOG, who="Watchdog"))])
+    assert (code, err) == (2, "")
+    assert "an untagged note" not in out
+    assert "#coo › #50 own stream — from Watchdog" in out
+    assert "not the founder" not in out
+
+
+def test_the_pa_never_reads_a_multi_bot_room(tmp_path):
+    fake = FakeZulip([ok(said(1, "everyone, read this", stream="All hands"))], idle=0.3)
+    env = _session_env(tmp_path, fake.url, name="PA")
+    env.update({"ZULIP_PA_EMAIL": "pa-bot@zulip.localhost", "ZULIP_PA_API_KEY": "k"})
+    try:
+        code, out, err = _finish(_wait_proc(tmp_path, env, seconds=3))
+    finally:
+        fake.close()
+    assert (code, out, err) == (0, "", "")
+    assert not [c for c in fake.calls if c[1] == "/api/v1/users/me/subscriptions"]
+
+
+def test_multi_bot_rooms_come_from_room_membership(hook):
+    creds = ("http://z", BOT, "k")
+    answers = {"users": {"result": "success", "members": USERS},
+               "users/me/subscriptions": {"result": "success", "subscriptions": [
+                   {"name": n, "subscribers": ids} for n, ids in ROOMS.items()]}}
+    hook._zulip = lambda c, method, path, params, timeout: answers[path]
+    assert hook._multi_bot_rooms(creds) == {"all hands", "launch"}
+    state = {"rooms": [], "rooms_at": 0.0}
+    assert hook._rooms(creds, "COO", state) == {"all hands", "launch"}
+    assert hook._rooms(creds, "PA", {"rooms": ["all hands"], "rooms_at": 0.0}) == set()
+    ev = said(1, "x", stream="Launch")
+    assert hook._wakes(ev, BOT, "COO", {"launch"}) is True
+    assert hook._wakes(ev, BOT, "COO", set()) is False
+    assert hook._wakes(ev, BOT, "PA", {"launch"}) is False  # home-only (ops#327)
+    # Zulip not answering keeps the last answer
+    hook._zulip = lambda *a, **k: None
+    assert hook._multi_bot_rooms(creds) is None
+    state["rooms_at"] = 0.0
+    assert hook._rooms(creds, "COO", state) == {"all hands", "launch"}
+
+
+def test_shared_roles_are_wakes_roles_but_the_pa(hook):
+    spec = importlib.util.spec_from_file_location(
+        "wake_for_hook_test", HOOK.parent.parent / "bot" / "wake.py")
+    sys.path.insert(0, str(HOOK.parent.parent / "bot"))
+    try:
+        wake = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(wake)
+    finally:
+        sys.path.remove(str(HOOK.parent.parent / "bot"))
+    assert set(hook.SHARED_ROLES) == set(wake.ROLES) - {"PA"}
+
+
+def test_room_lookup_down_means_the_old_rules(tmp_path):
+    fake = FakeZulip([ok(said(1, "untagged", stream="All hands"))], idle=0.3)
+    fake.rooms_error = (500, {"result": "error", "msg": "down"})
+    try:
+        code, out, err = _finish(_wait_proc(tmp_path, _session_env(tmp_path, fake.url),
+                                            seconds=3))
+    finally:
+        fake.close()
+    assert (code, out, err) == (0, "", "")
+
+
+# -- issue #146: a live session reads role bots' posts only inside the bot caps --
+
+def test_the_bot_after_the_hourly_cap_is_not_delivered_but_the_founder_still_is(tmp_path):
+    """Two bot posts an hour (BOT_TOPIC_TURNS_PER_HOUR=2): the third is
+    dropped, the founder's line after it still wakes the session."""
+    script = [ok(said(1, "bot one", stream="Launch", email=CTO_BOT, who="CTO"),
+                 said(2, "bot two", stream="Launch", email=CTO_BOT, who="CTO")),
+              ok(said(3, "bot three", stream="Launch", email=CTO_BOT, who="CTO"),
+                 said(4, "founder here", stream="Launch"))]
+    fake = FakeZulip(script, idle=0.3)
+    env = _session_env(tmp_path, fake.url)
+    env["BOT_TOPIC_TURNS_PER_HOUR"] = "2"
+    try:
+        first = _finish(_wait_proc(tmp_path, env, seconds=3))
+        second = _finish(_wait_proc(tmp_path, env, seconds=3))
+    finally:
+        fake.close()
+    assert first[0] == 2 and "bot one" in first[1] and "bot two" in first[1]
+    code, out, err = second
+    assert (code, err) == (2, "")
+    assert "founder here" in out
+    assert "bot three" not in out
+
+
+def test_the_cap_counts_per_room_and_a_founder_line_resets_it(hook, monkeypatch):
+    monkeypatch.setenv("BOT_TOPIC_TURNS_PER_HOUR", "1")
+    bot = lambda i, room: {**said(i, "b", stream=room, email=CTO_BOT, who="CTO")["message"]}
+    meetings = {"launch", "all hands"}
+    assert hook._within_caps([bot(1, "Launch")], meetings) == [bot(1, "Launch")]
+    assert hook._within_caps([bot(2, "Launch")], meetings) == []
+    assert hook._within_caps([bot(3, "All hands")], meetings) == [bot(3, "All hands")]
+    founder = said(4, "go on", stream="Launch")["message"]
+    assert hook._within_caps([founder, bot(5, "Launch")], meetings) == [
+        founder, bot(5, "Launch")]
+    monkeypatch.setenv("BOT_TURNS_PER_DAY", "3")
+    assert hook._within_caps([founder, bot(6, "Launch")], meetings) == [founder]
+    # outside a multi-bot room nothing is counted or dropped
+    assert hook._within_caps([bot(7, "coo")], meetings) == [bot(7, "coo")]
+
+
+def test_a_watchdog_post_in_a_multi_bot_room_is_not_delivered(tmp_path):
+    code, out, err = _run(tmp_path, [ok(said(
+        1, "hourly: 2 issues ready", stream="All hands", email=WATCHDOG,
+        who="Watchdog"))], seconds=3)
+    assert (code, out, err) == (0, "", "")
+
+
+def test_the_caps_defaults_are_wakes(hook):
+    spec = importlib.util.spec_from_file_location(
+        "wake_for_caps_test", HOOK.parent.parent / "bot" / "wake.py")
+    sys.path.insert(0, str(HOOK.parent.parent / "bot"))
+    try:
+        wake = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(wake)
+    finally:
+        sys.path.remove(str(HOOK.parent.parent / "bot"))
+    assert hook._caps() == (wake.BOT_TOPIC_TURNS_PER_HOUR, wake.BOT_TURNS_PER_DAY)

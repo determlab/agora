@@ -57,6 +57,11 @@ two cannot wake each other in a loop. `--check` counts every member of
 founder missing, or on it being public. Both bots post there as usual:
 `python bot/zulip.py --as CTO send --stream feature --topic "ops#44 routes" --text "..."`.
 
+**Direct message to the founder (issue #150):** `python bot/zulip.py --as PM send --dm founder --text "..." [--json]`
+sends one private message from the role bot to the founder, addressed by the existing
+`FOUNDER_ZULIP_ID` (no new key). It prints the message id. `founder` is the only value
+`--dm` accepts: any other recipient is refused, exit 2, nothing sent.
+
 The **Watchdog** bot (issue #49) is the ops watchdog's own bot user, not the
 COO bot: it also posts to `#coo` to wake the COO, and a bot's own posts never
 wake its own session (#50). It is subscribed to `#status` and `#coo` and
@@ -267,18 +272,21 @@ closes when you go quiet. Same for `@**COO**`, `@**PM**`, `@**CMO**`,
 `@**CPSO**`. `@**PA**` opens a PA session in your PA folder (`PA_DIR`)
 instead of the ops repo.
 
-Who wakes, by membership (ops#322): in a room with **one** role bot (`#cto`,
-`#cmo`) any message of yours wakes it, no tag needed. In a room with **two or
-more**, an untagged line wakes the room's **owner**, the role whose own room it
-is (`AGENT["home_streams"]`: `#coo` the COO, `#PM` the PM, `#pa` the PA), and
-no other bot: one wake per line. `@**ROLE**` wakes only that role (`@**all**`
-and a quote's silent `@_**ROLE**` wake nobody). This keeps the founder rule of
-2026-10-17 (ops#318 reversed: an untagged line in a role's own room wakes it;
-do not restore the old rule). In a room no member owns (`All hands`,
-`#feature`, a new room with two or more bots) an untagged line goes to the
-open conversation: when exactly one of the room's roles has an open session
-in that room, it gets the line (resumed, or queued behind its running turn);
-it never opens a new session, and with none or two open nobody gets it. A role that
+Who wakes, by membership (ops#322, issue #146): in a room with **one** role
+bot (`#cto`, `#cmo`) any message of yours wakes it, no tag needed. A room with
+**two or more** role bots (`All hands`, `#coo`, `#PM`, `#feature`, any new
+one) is a meeting (founder, 2026-10-17: "if I don't need someone, I'll take
+them out of the room"): every message of yours there, tagged or not, goes to
+every member role (resumed, queued behind its running turn, or a fresh
+session opened), and a role bot's untagged post goes to every other member's
+open session there (never opens one), marked as a bot's and under the bot caps
+below. There is no list of meeting rooms; room membership decides who reads.
+A hand-opened live session reads the room through its hook, and the hook
+applies the same caps (`BOT_TOPIC_TURNS_PER_HOUR` per room an hour,
+`BOT_TURNS_PER_DAY` a day, from bot/.env) to role bots' posts; your lines are
+never capped, and the watchdog or any other non-role bot does not count.
+The PA is home-only: it never joins a company room and never counts as a
+member there. A role that
 is not in the room never wakes there. An invite only adds the bot; it wakes
 nothing. Removing a bot from a room closes its open session there. A room
 name that is not letters, digits, space or `-_.` is never put in a hint (the
@@ -302,6 +310,10 @@ no credentials is not listened for, and says so at start. For the PA also
 folder) the PA is skipped and the start line says what to add.
 `BOT_WAKES=on` turns bot wakes on (below; an environment variable of the same name
 wins over `bot/.env`); missing or anything else is off.
+The bot-wake caps can be set the same way (positive whole numbers; anything else is an
+error naming the key): `BOT_TOPIC_TURNS_PER_HOUR` (6), `BOT_ROLE_SPAWNS_PER_HOUR` (3),
+`BOT_ROLE_SPAWNS_PER_DAY` (2000), `BOT_TURNS_PER_DAY` (10000). Edit the line, restart
+wake.py; its first line, `wake: caps ...`, shows the values in force.
 
 **What it does with a founder mention or DM:**
 
