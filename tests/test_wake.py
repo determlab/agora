@@ -13,7 +13,9 @@ import importlib.util
 import json
 import sys
 import threading
+import time
 import uuid
+from datetime import datetime
 from pathlib import Path
 
 import pytest
@@ -2255,3 +2257,105 @@ def test_146_a_role_alone_in_its_room_keeps_the_old_rules(wake, tmp_path):
     # a DM is unchanged too
     dm = msg(12, "a DM", stream=None)
     assert "meeting" not in w.on_message("CPSO", dm, [])
+
+
+# -- agora#163: a bot-loop stop ends on its own --------------------------------
+
+def _stopped_state(wake, path, at, turns=6, room="coo"):
+    """state.json as a wake.py under the old cap of 6 left it: six bot turns
+    in the room and a stop flag that survives a restart."""
+    log = [{"at": at, "role": "CPSO", "from": "COO", "topic": room, "spawn": False}
+           for _ in range(turns)]
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"roles": {}, "bots": {
+        "log": log, "topic_reset": {}, "topic_stopped": {room: at}}}), encoding="utf-8")
+
+
+def test_163_a_stop_under_the_current_cap_is_dropped_on_start(wake, tmp_path, monkeypatch):
+    clock = Clock()
+    _stopped_state(wake, tmp_path / "state.json", clock.t - 60)
+    monkeypatch.setattr(wake, "BOT_TOPIC_TURNS_PER_HOUR", 1000)  # the cap was raised
+    w = make_bots(wake, tmp_path, clock=clock)  # restart
+    assert w.state["bots"]["topic_stopped"] == {}
+    d = w.on_message("CPSO", bmsg(30, "COO", "CPSO"), ["mentioned"])
+    assert d["action"] == "spawn"
+
+
+def test_163_a_stop_under_the_current_cap_does_not_block_in_bot_cap(wake, tmp_path,
+                                                                    monkeypatch):
+    clock, posts = Clock(), []
+    w = make_bots(wake, tmp_path, clock=clock, posts=posts)
+    _ping_pong(w, clock, 7)
+    assert w._bots()["topic_stopped"]
+    monkeypatch.setattr(wake, "BOT_TOPIC_TURNS_PER_HOUR", 1000)  # raised while running
+    w.spawner.finish_all()
+    d = w.on_message("CPSO", bmsg(30, "COO", "CPSO"), ["mentioned"])
+    assert d["action"] != "skip"
+    assert w._bots()["topic_stopped"] == {}
+
+
+def test_163_a_stopped_room_accepts_a_bot_mention_one_hour_after_the_last_bot_turn(
+        wake, tmp_path):
+    clock, posts = Clock(), []
+    last = clock.t
+    _stopped_state(wake, tmp_path / "state.json", last)
+    w = make_bots(wake, tmp_path, clock=clock, posts=posts)
+    clock.t = last + wake.HOUR - 1
+    d = w.on_message("CPSO", bmsg(30, "COO", "CPSO"), ["mentioned"])
+    assert d["action"] == "skip" and "bot loop stopped" in d["reason"]
+    clock.t = last + wake.HOUR
+    d = w.on_message("CPSO", bmsg(31, "COO", "CPSO"), ["mentioned"])
+    assert d["action"] == "spawn"
+    assert w._bots()["topic_stopped"] == {}
+
+
+def test_163_a_skipped_mention_posts_one_line_naming_the_role_and_the_fix(wake, tmp_path):
+    clock, posts = Clock(), []
+    w = make_bots(wake, tmp_path, clock=clock, posts=posts)
+    _ping_pong(w, clock, 7)
+    stop = "bot loop stopped; @**Hemi|8**, @-mention a role to continue"
+    assert posts == [("CPSO", "coo", stop)]
+    # the stop holds; two later bot @mentions are skipped, one line for both
+    for i in (30, 31):
+        d = w.on_message("CMO", bmsg(i, "COO", "CMO"), ["mentioned"])
+        assert d["action"] == "skip" and "bot loop stopped" in d["reason"]
+    assert len(posts) == 2
+    role, room, line = posts[1]
+    assert (role, room) == ("CMO", "coo")
+    assert "CMO was not woken" in line and "founder message" in line and "UTC" in line
+    assert "@**" not in line  # a line that pings nobody and wakes nobody
+    # a new stop gets its own line
+    w.on_message("CPSO", msg(40, "@**CPSO** go on", stream="coo", topic="handoff"),
+                 ["mentioned"])
+    _ping_pong(w, clock, 7, start=50)
+    w.on_message("CMO", bmsg(70, "COO", "CMO"), ["mentioned"])
+    w.on_message("CMO", bmsg(71, "COO", "CMO"), ["mentioned"])
+    assert [p[2] for p in posts].count(stop) == 2 and len(posts) == 4
+
+
+def test_163_dry_run_json_lists_stopped_rooms_with_their_end_time(wake, tmp_path,
+                                                                  monkeypatch, capsys):
+    env = tmp_path / ".env"
+    env.write_text("FOUNDER_ZULIP_ID=8\nZULIP_CTO_EMAIL=cto-bot@x\nZULIP_CTO_API_KEY=k\n")
+    for role in wake.ROLES:
+        monkeypatch.delenv(f"ZULIP_{role}_EMAIL", raising=False)
+    monkeypatch.delenv("FOUNDER_ZULIP_ID", raising=False)
+    monkeypatch.delenv("BOT_TOPIC_TURNS_PER_HOUR", raising=False)
+    monkeypatch.setattr(wake, "DOTENV", env)
+    monkeypatch.setattr(wake, "STATE_DIR", tmp_path / ".wake")
+    monkeypatch.setattr(wake, "DUTY_DIR", tmp_path / "duty")
+    monkeypatch.setattr(wake.load_config, "__defaults__", (env,))
+    at = time.time() - 60
+    _stopped_state(wake, tmp_path / ".wake" / "state.json", at, room="all hands")
+    client = FakeClient(history=[])
+    monkeypatch.setattr(wake.ZulipClient, "_request",
+                        lambda self, m, p, params=None: client._request(m, p, params))
+    monkeypatch.setattr(wake.subprocess, "Popen", lambda *a, **k: pytest.fail("spawned"))
+    assert wake.main(["--dry-run", "--json"]) == 0
+    lines = [json.loads(x) for x in capsys.readouterr().out.splitlines()]
+    stopped = [d for d in lines if d.get("action") == "stopped"]
+    assert len(stopped) == 1
+    d = stopped[0]
+    assert d["room"] == "all hands"
+    ends = datetime.fromisoformat(d["ends_at"])
+    assert abs(ends.timestamp() - (at + 3600)) < 2
