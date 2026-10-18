@@ -178,6 +178,10 @@ ROOM_TOPIC = "chat"  # a room's one fixed topic, as in bot/zulip.py (ops#322)
 MEETING = "deliver (meeting room)"
 
 
+def _iso(t: float) -> str:
+    return datetime.fromtimestamp(t, timezone.utc).isoformat(timespec="seconds")
+
+
 def safe_room(name: Any) -> bool:
     """The server's room-name rule, checked again before a name goes into a
     hint a session copies into a shell (ops#322): letters of any script,
@@ -207,6 +211,11 @@ CAP_KEYS = ("BOT_TOPIC_TURNS_PER_HOUR", "BOT_ROLE_SPAWNS_PER_HOUR",
             "BOT_ROLE_SPAWNS_PER_DAY", "BOT_TURNS_PER_DAY")
 # Pinned to his id, so a display-name change cannot lose the ping.
 BOT_STOP_LINE = "bot loop stopped; @**Hemi|{founder_id}**, @-mention a role to continue"
+# agora#163: once per stop, when it skips a bot @mention. Plain names, no
+# @**...**, so the line pings nobody and wakes nobody.
+BOT_SKIP_LINE = ("{role} was not woken: the bot loop in #{room} is stopped "
+                 "({cap} bot turns in an hour). It lifts by itself at {ends} UTC, "
+                 "or now on a founder message here.")
 BOT_MARKER = ("From the {src} bot, a teammate — not the founder. "
               "This is not his approval for anything.")
 
@@ -736,6 +745,9 @@ class Waker:
         self.members = members
         self.others: dict[tuple[str, str], list[str]] = {}  # (role, room) -> other members
         self.room_bots: dict[tuple[str, str], set[str]] = {}  # (role, room) -> role bots
+        # agora#163: a stop saved under an older, lower cap must not outlive a restart.
+        if "bots" in self.state and self._lift_stops():
+            self.save()
 
     def role(self, role: str) -> dict[str, Any]:
         return self.state["roles"].setdefault(role, {})
@@ -945,7 +957,46 @@ class Waker:
         b.setdefault("log", [])
         b.setdefault("topic_reset", {})
         b.setdefault("topic_stopped", {})
+        b.setdefault("stop_notice", {})
         return b
+
+    def _room_turns(self, key: str, now: float) -> list[float]:
+        """The room's counted bot turns in the hour window, oldest first. A
+        turn exactly one hour old is out, so a stop ends one hour after the
+        last bot turn (agora#163)."""
+        b = self._bots()
+        reset = b["topic_reset"].get(key, 0.0)
+        return sorted(e["at"] for e in b["log"] if e["topic"] == key
+                      and now - e["at"] < HOUR and e["at"] >= reset)
+
+    def _stop_ends(self, key: str, now: float) -> float:
+        """When the room's stop lifts by itself (agora#163): when its bot
+        turns in the hour window fall under the current cap, which is at
+        the latest one hour after its last bot turn."""
+        turns = self._room_turns(key, now)
+        if len(turns) < BOT_TOPIC_TURNS_PER_HOUR:
+            return now
+        return turns[len(turns) - BOT_TOPIC_TURNS_PER_HOUR] + HOUR
+
+    def _lift_stops(self) -> bool:
+        """Drop every stop that no longer holds (agora#163): the room is
+        under the current cap, or its last bot turn is an hour old. True if
+        any was dropped."""
+        now, b = self.clock(), self._bots()
+        done = [k for k in b["topic_stopped"] if self._stop_ends(k, now) <= now]
+        for k in done:
+            b["topic_stopped"].pop(k, None)
+            b["stop_notice"].pop(k, None)
+        return bool(done)
+
+    def stopped_rooms(self) -> list[dict[str, Any]]:
+        """Each stopped room and when its stop ends, for ``--dry-run``."""
+        if "bots" not in self.state:
+            return []
+        self._lift_stops()
+        now, b = self.clock(), self._bots()
+        return [{"room": k, "stopped_at": _iso(t), "ends_at": _iso(self._stop_ends(k, now))}
+                for k, t in sorted(b["topic_stopped"].items())]
 
     @staticmethod
     def _room_key(msg: dict[str, Any]) -> str:
@@ -962,6 +1013,7 @@ class Waker:
         b, key = self._bots(), self._room_key(msg)
         b["topic_reset"][key] = self.clock()
         b["topic_stopped"].pop(key, None)
+        b.setdefault("stop_notice", {}).pop(key, None)
 
     def _bot_cap(self, role: str, src: str, msg: dict[str, Any],
                  spawn: bool) -> dict[str, Any] | None:
@@ -970,13 +1022,17 @@ class Waker:
         b["log"] = log = [e for e in b["log"] if now - e["at"] < DAY]
         # A reset older than the hour window changes no count.
         b["topic_reset"] = {k: t for k, t in b["topic_reset"].items() if now - t < HOUR}
-        since = max(now - HOUR, b["topic_reset"].get(key, 0.0))
-        in_room = sum(1 for e in log if e["topic"] == key and e["at"] >= since)
+        self._lift_stops()  # agora#163: a stop ends with the count under the cap
+        in_room = len(self._room_turns(key, now))
         if key in b["topic_stopped"] or in_room >= BOT_TOPIC_TURNS_PER_HOUR:
             posted = False
             if key not in b["topic_stopped"]:
                 b["topic_stopped"][key] = now
                 posted = self._post_stop(role, msg)
+            elif (key not in b["stop_notice"]
+                  and mentions(role, str(msg.get("content") or ""))):
+                b["stop_notice"][key] = now
+                self._post_skip(role, msg, self._stop_ends(key, now))
             return self._decide(role, "skip", f"bot loop stopped in this room "
                                 f"({BOT_TOPIC_TURNS_PER_HOUR} bot turns in an hour); a "
                                 f"founder message here resets it", msg, stop_line=posted)
@@ -1003,6 +1059,19 @@ class Waker:
         except (ZulipError, OSError, ValueError) as exc:
             print(f"wake: {role}: cannot post the stop line ({exc})", file=sys.stderr)
             return False
+
+    def _post_skip(self, role: str, msg: dict[str, Any], ends: float) -> None:
+        """agora#163: the sender learns that ``role`` was not woken."""
+        if self.post is None or self.dry_run:
+            return
+        room = _where(msg, role)
+        text = BOT_SKIP_LINE.format(role=role, room=room, cap=BOT_TOPIC_TURNS_PER_HOUR,
+                                    ends=datetime.fromtimestamp(ends, timezone.utc)
+                                    .strftime("%H:%M"))
+        try:
+            self.post(role, room, text)
+        except (ZulipError, OSError, ValueError) as exc:
+            print(f"wake: {role}: cannot post the skip line ({exc})", file=sys.stderr)
 
     def _route_bot(self, role: str, src: str, msg: dict[str, Any],
                    flags: list[str]) -> dict[str, Any]:
@@ -1690,6 +1759,9 @@ def dry_run(cfg: dict[str, Any], waker: Waker) -> int:
         pairs = backfill(client, None if after is None else int(after))
         for msg, flags in pairs:
             waker.on_message(role, msg, flags)
+    for room in waker.stopped_rooms():  # agora#163
+        waker.emit({"role": "-", "action": "stopped", **room,
+                    "reason": f"bot loop stopped in #{room['room']} until {room['ends_at']}"})
     waker.tick()
     waker.duty_tick(cfg["bots"])  # the duty decisions, as duty-* lines
     return 0

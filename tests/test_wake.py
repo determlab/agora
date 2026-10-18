@@ -1666,7 +1666,9 @@ def test_topic_cap_posts_the_stop_line_once(wake, tmp_path):
     assert all(d["action"] == "skip" and "bot loop stopped" in d["reason"] for d in ds[6:])
     # posted once, by the bot of the role the stopped message was for
     line = "bot loop stopped; @**Hemi|8**, @-mention a role to continue"
-    assert posts == [("CPSO", "coo", line)]
+    assert posts[0] == ("CPSO", "coo", line) and [p[2] for p in posts].count(line) == 1
+    # agora#163: the later skips get one line, naming the role not woken
+    assert len(posts) == 2 and posts[1][2].startswith("COO was not woken")
     assert [d.get("stop_line") for d in ds[6:]] == [True, False, False]
     assert len(w.spawner.started) == 6
     # ops#322: the cap is the room's, so another topic in it is stopped too
@@ -1751,7 +1753,8 @@ def test_counters_survive_a_reload_of_state_json(wake, tmp_path):
     w2 = make_bots(wake, tmp_path, clock=clock, spawner=spawner, posts=posts)  # restart
     d = w2.on_message("CPSO", bmsg(30, "COO", "CPSO"), ["mentioned"])
     assert d["action"] == "skip" and "bot loop stopped" in d["reason"]
-    assert len(posts) == 1  # still once
+    assert len(posts) == 2  # the stop line still once, plus one skip line (agora#163)
+    assert posts[1][2].startswith("CPSO was not woken")
     w3 = make_bots(wake, tmp_path / "fresh", clock=clock, spawner=spawner)
     assert w3.on_message("CPSO", bmsg(31, "COO", "CPSO"), ["mentioned"])["action"] != "skip"
 
