@@ -423,6 +423,9 @@ def test_each_picker_name_inserts_exactly_what_wakes_that_bot(world, monkeypatch
     for u in (human, *bots.values()):
         run.store.subscribe(u["id"], sid)
     hook = _hook(world, monkeypatch)
+    # Every role bot is in this room, so it is a multi-bot room (issue #146) and
+    # would wake on any post; this test is about mentions, so it sees none (#159).
+    monkeypatch.setattr(hook, "_multi_bot_rooms", lambda creds: set())
     states = {}
     for name, bot in bots.items():
         states[name] = {"queue_id": None, "last_event_id": -1, "last_message_id": None,

@@ -1230,14 +1230,21 @@ class Chat:
             raise ApiError(f"Must be an organization administrator to {what}: use the "
                            f"credentials from add-human or bootstrap", "UNAUTHORIZED")
 
-    # GET /users/me/subscriptions: an archived stream only with include_archived=true
+    # GET /users/me/subscriptions: an archived stream only with include_archived=true;
+    # include_subscribers=true adds each stream's member user_ids, as Zulip does
+    # (hooks/agora_hook.py finds its multi-bot rooms from them, issue #159)
     def subscriptions(self, me: dict, p: dict | None = None) -> dict:
         archived = "" if _bool((p or {}).get("include_archived"), False) \
             else "AND s.is_archived=0 "
-        return {"subscriptions": [
-            stream_json(r) for r in self.s.q(
-                "SELECT s.* FROM streams s JOIN subscriptions x ON x.stream_id=s.stream_id "
-                f"WHERE x.user_id=? {archived}ORDER BY s.name", (me["id"],))]}
+        subs = [stream_json(r) for r in self.s.q(
+            "SELECT s.* FROM streams s JOIN subscriptions x ON x.stream_id=s.stream_id "
+            f"WHERE x.user_id=? {archived}ORDER BY s.name", (me["id"],))]
+        if _bool((p or {}).get("include_subscribers"), False):
+            for sub in subs:
+                sub["subscribers"] = [r[0] for r in self.s.q(
+                    "SELECT user_id FROM subscriptions WHERE stream_id=? ORDER BY user_id",
+                    (sub["stream_id"],))]
+        return {"subscriptions": subs}
 
     # GET /streams: an archived stream only with exclude_archived=false (Zulip's name)
     def streams(self, me: dict, p: dict) -> dict:
