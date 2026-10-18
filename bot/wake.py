@@ -958,6 +958,9 @@ class Waker:
         b.setdefault("topic_reset", {})
         b.setdefault("topic_stopped", {})
         b.setdefault("stop_notice", {})
+        # room -> when its stop line last pinged the founder: at most once an
+        # hour per room, also across stops (CTO review of PR 167).
+        b.setdefault("stop_line_at", {})
         return b
 
     def _room_turns(self, key: str, now: float) -> list[float]:
@@ -1014,6 +1017,7 @@ class Waker:
         b["topic_reset"][key] = self.clock()
         b["topic_stopped"].pop(key, None)
         b.setdefault("stop_notice", {}).pop(key, None)
+        b.setdefault("stop_line_at", {}).pop(key, None)
 
     def _bot_cap(self, role: str, src: str, msg: dict[str, Any],
                  spawn: bool) -> dict[str, Any] | None:
@@ -1028,7 +1032,12 @@ class Waker:
             posted = False
             if key not in b["topic_stopped"]:
                 b["topic_stopped"][key] = now
-                posted = self._post_stop(role, msg)
+                b["stop_line_at"] = {k: t for k, t in b["stop_line_at"].items()
+                                     if now - t < HOUR}
+                if key not in b["stop_line_at"]:
+                    posted = self._post_stop(role, msg)
+                    if posted:
+                        b["stop_line_at"][key] = now
             elif (key not in b["stop_notice"]
                   and mentions(role, str(msg.get("content") or ""))):
                 b["stop_notice"][key] = now
