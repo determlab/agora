@@ -2362,3 +2362,21 @@ def test_163_dry_run_json_lists_stopped_rooms_with_their_end_time(wake, tmp_path
     assert d["room"] == "all hands"
     ends = datetime.fromisoformat(d["ends_at"])
     assert abs(ends.timestamp() - (at + 3600)) < 2
+
+
+def test_163_a_loop_that_keeps_going_pings_the_founder_at_most_once_an_hour(wake, tmp_path):
+    # CTO review of PR 167: with turns spread over the hour, each one that
+    # ages out lets one more through and the room is stopped again. Each new
+    # stop must not ping the founder again within the hour.
+    clock, posts = Clock(), []
+    w = make_bots(wake, tmp_path, clock=clock, posts=posts)
+    start = clock.t
+    _ping_pong(w, clock, 1, start=10)
+    for i in range(5):  # six turns, ten minutes apart
+        clock.t = start + (i + 1) * 600
+        _ping_pong(w, clock, 1, start=11 + i)
+    clock.t = start + 51 * 60
+    _ping_pong(w, clock, 69, start=100)  # then a try every minute, to two hours
+    assert clock.t - start == 2 * wake.HOUR
+    stop = "bot loop stopped; @**Hemi|8**, @-mention a role to continue"
+    assert 1 <= [p[2] for p in posts].count(stop) <= 2
