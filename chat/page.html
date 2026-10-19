@@ -393,6 +393,7 @@ a.ref:hover { text-decoration: underline; }
 .gbody .gtop { display: flex; justify-content: space-between; gap: 8px; align-items: baseline; flex-wrap: wrap; }
 .gbody .gpct { font-size: 26px; font-weight: 800; line-height: 1; font-variant-numeric: tabular-nums; }
 .gbody .gd { font-size: 13px; color: var(--muted); }
+.gd .nw { white-space: nowrap; }
 .burn { width: 100%; max-width: 520px; height: auto; display: block; direction: ltr; }
 .burn .tot { stroke: var(--muted); stroke-dasharray: 2 3; }
 .burn .plan { fill: none; stroke: var(--wait); stroke-width: 2; stroke-dasharray: 5 4; }
@@ -2644,9 +2645,11 @@ function burnupSvg(points, total) {
 function goalBody(g) {
   const body = el("div", "gbody");
   const top = el("div", "gtop");
-  top.append(el("span", "gpct", g.percent != null ? g.percent + "%" : "—"),
-             el("span", "gd", joinDetail(g.start ? "התחלה " + g.start : null, g.end ? "יעד " + g.end : "אין תאריך יעד",
-                                         g.forecast ? "צפי " + g.forecast : null)));
+  // Each date is its own unbreakable piece: in RTL a bare "2026-10-25" splits at a hyphen.
+  const dates = el("span", "gd");
+  [g.start ? "התחלה " + g.start : null, g.end ? "יעד " + g.end : "אין תאריך יעד", g.forecast ? "צפי " + g.forecast : null]
+    .filter(Boolean).forEach((t, i) => { if (i) dates.append(" · "); dates.append(el("span", "nw", t)); });
+  top.append(el("span", "gpct", g.percent != null ? g.percent + "%" : "—"), dates);
   body.append(top);
   const svg = burnupSvg(g.burnup, g.total);
   if (svg) body.append(svg, el("div", "gd", "מלא: נסגר · מקווקו: מתוכנן"));
