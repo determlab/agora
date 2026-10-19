@@ -916,9 +916,6 @@ class Waker:
         return self.bot_ids.get(sender)
 
     def _route(self, role: str, msg: dict[str, Any], flags: list[str]) -> dict[str, Any]:
-        if msg.get("type") != "stream" and is_ack(msg.get("content")):
-            return self._decide(role, "skip", "a DM that is only an acknowledgement "
-                                "wakes nobody (#175)", msg)
         if self._in_meeting(role, msg):
             d = self._route_meeting(role, msg, flags)
             if d is not None:
@@ -1156,7 +1153,11 @@ class Waker:
         """Issue #175: a role bot's DM wakes the role it was sent to, like a
         tag. Only this role's queue holds it, so being here is being
         addressed. No room cap (the founder: no limit on DMs); the spawn and
-        daily caps still hold."""
+        daily caps still hold. A bot DM that is only an acknowledgement wakes
+        nobody; the founder's own "אוקיי" is a reply and goes to _route_founder."""
+        if is_ack(msg.get("content")):
+            return self._decide(role, "skip", "a bot DM that is only an acknowledgement "
+                                "wakes nobody (#175)", msg)
         self._drop_stale(role)
         hand = registry_live(role, _any_pid_alive)
         if hand:
