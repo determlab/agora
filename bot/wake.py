@@ -55,8 +55,11 @@ How it works:
     mention opens a fresh one.
   - Bot wakes (ops#321), off unless ``BOT_WAKES=on`` in bot/.env: a role bot
     listed in bot/.env may wake another role with an explicit ``@**ROLE**`` in
-    a room that role is a member of (never a DM, never untagged), per
-    ``AGENT["bot_wakes"]``. The
+    a room that role is a member of (never untagged), per
+    ``AGENT["bot_wakes"]``, or with a DM (``send --dm ROLE``, issue #175):
+    a DM wakes the role it is sent to, has no room cap, is answered by DM,
+    and wakes nobody when its whole text is an acknowledgement
+    (``ACK_WORDS``). The
     sender is known by its ``sender_id`` (``GET /users/me`` per bot at start),
     never by a name. Nobody but the founder wakes the PA; no bot wakes its own
     role. Caps, kept in state.json so a restart keeps them: 6 bot turns per
@@ -218,6 +221,30 @@ BOT_SKIP_LINE = ("{role} was not woken: the bot loop in #{room} is stopped "
                  "or now on a founder message here.")
 BOT_MARKER = ("From the {src} bot, a teammate — not the founder. "
               "This is not his approval for anything.")
+
+# Issue #175: a DM whose whole text is one of these wakes nobody, so two
+# roles never thank each other in a loop ("nobody replies to an
+# acknowledgement"). Short and fixed on purpose: a list that guesses at
+# meaning would one day swallow a real answer ("כן" is an answer, not here).
+ACK_WORDS = frozenset({
+    "קיבלתי", "תודה", "תודה רבה", "סבבה", "אוקיי", "אוקי", "מעולה",
+    "got it", "thanks", "thank you", "ok", "okay", "noted", "ack", "roger",
+    "👍", "🙏", "✅",
+})
+# The punctuation an acknowledgement may carry and still be one.
+_ACK_TRIM = re.compile(r"[\s.,!?:;…\-–—]+")
+# The rule the founder set with #175, told to every role a bot DMs.
+DM_RULES = ("A direct message asks for help or answers. A decision goes to the founder "
+            "(his room and decisions.md), never settled in a DM. Do not answer an "
+            "acknowledgement.")
+
+
+def is_ack(content: Any) -> bool:
+    """The whole text is one acknowledgement from ``ACK_WORDS``, give or take
+    case, spaces and trailing punctuation."""
+    text = _ACK_TRIM.sub(" ", str(content or "")).strip().casefold()
+    return text in ACK_WORDS
+
 
 # Duty wakes (ops#338): the files the watchdog writes, one per role. Module
 # constants, read at call time, so the tests point them at a tmp folder. The
@@ -605,8 +632,12 @@ def message_prompt(role: str, msg: dict[str, Any], first: bool,
         head += (f"Also in #{room}: {', '.join(others)}. Others read this room; share "
                  f"personal data only if he asks here.\n\n")
     marker = BOT_MARKER.format(src=bot) + "\n\n" if bot else ""
-    return (f"{marker}{head}Message from {sender} in {origin}:\n\n{msg.get('content', '')}\n\n"
-            f"Answer in the room #{room} with:\n  {_send_hint(role, room)}\n"
+    body = f"{marker}{head}Message from {sender} in {origin}:\n\n{msg.get('content', '')}\n\n"
+    if bot and msg.get("type") != "stream":
+        # Issue #175: a role's DM is answered by DM, never in a room.
+        return (f"{body}{DM_RULES}\n\nAnswer the {bot} with:\n"
+                f'  python "{ZULIP_CLI}" --as {role} send --dm {bot} --text "..."\n')
+    return (f"{body}Answer in the room #{room} with:\n  {_send_hint(role, room)}\n"
             f"Copy the room name exactly as written here.\n")
 
 
@@ -885,6 +916,9 @@ class Waker:
         return self.bot_ids.get(sender)
 
     def _route(self, role: str, msg: dict[str, Any], flags: list[str]) -> dict[str, Any]:
+        if msg.get("type") != "stream" and is_ack(msg.get("content")):
+            return self._decide(role, "skip", "a DM that is only an acknowledgement "
+                                "wakes nobody (#175)", msg)
         if self._in_meeting(role, msg):
             d = self._route_meeting(role, msg, flags)
             if d is not None:
@@ -1028,7 +1062,8 @@ class Waker:
         b["topic_reset"] = {k: t for k, t in b["topic_reset"].items() if now - t < HOUR}
         self._lift_stops()  # agora#163: a stop ends with the count under the cap
         in_room = len(self._room_turns(key, now))
-        if key in b["topic_stopped"] or in_room >= BOT_TOPIC_TURNS_PER_HOUR:
+        dm = msg.get("type") != "stream"  # #175: a DM has no room, and no room cap
+        if not dm and (key in b["topic_stopped"] or in_room >= BOT_TOPIC_TURNS_PER_HOUR):
             posted = False
             if key not in b["topic_stopped"]:
                 b["topic_stopped"][key] = now
@@ -1056,7 +1091,8 @@ class Waker:
             if len(spawns) >= BOT_ROLE_SPAWNS_PER_DAY:
                 return self._decide(role, "skip", f"{BOT_ROLE_SPAWNS_PER_DAY} bot spawns of "
                                     f"{role} today, the cap", msg)
-        log.append({"at": now, "role": role, "from": src, "topic": key, "spawn": spawn})
+        log.append({"at": now, "role": role, "from": src,
+                    "topic": f"dm:{role}" if dm else key, "spawn": spawn})
         return None
 
     def _post_stop(self, role: str, msg: dict[str, Any]) -> bool:
@@ -1094,8 +1130,7 @@ class Waker:
             return self._decide(role, "skip", f"the {src} bot may not wake {role} "
                                 "(AGENT['bot_wakes'])", msg)
         if msg.get("type") != "stream":
-            return self._decide(role, "skip", "a bot wakes a role only by @-mention in a "
-                                "stream, never by DM", msg)
+            return self._route_bot_dm(role, src, msg)
         if "mentioned" not in flags or not mentions(role, str(msg.get("content") or "")):
             return self._decide(role, "skip", f"no @**{role}** in a bot's message", msg)
         # ops#322: the room rule before any cap, so a bot's @**ROLE** for a
@@ -1112,6 +1147,22 @@ class Waker:
         # Queued behind a running turn counts as no spawn; if that session then
         # closes, _finish spawns it outside the per-role spawn cap. The topic
         # and daily caps still bound it.
+        capped = self._bot_cap(role, src, msg, spawn=not sess or bool(sess.get("closing")))
+        if capped:
+            return capped
+        return self._deliver(role, msg, founder=False)
+
+    def _route_bot_dm(self, role: str, src: str, msg: dict[str, Any]) -> dict[str, Any]:
+        """Issue #175: a role bot's DM wakes the role it was sent to, like a
+        tag. Only this role's queue holds it, so being here is being
+        addressed. No room cap (the founder: no limit on DMs); the spawn and
+        daily caps still hold."""
+        self._drop_stale(role)
+        hand = registry_live(role, _any_pid_alive)
+        if hand:
+            return self._decide(role, "skip", f"live {role} session (pid {hand}); "
+                                "its hook delivers the DM", msg)
+        sess = self.role(role).get("session")
         capped = self._bot_cap(role, src, msg, spawn=not sess or bool(sess.get("closing")))
         if capped:
             return capped

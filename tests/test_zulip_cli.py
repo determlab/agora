@@ -331,7 +331,7 @@ def test_dm_founder_sends_one_private_message(cli, monkeypatch, capsys):
                            {"type": "private", "to": [7], "content": "hi"})]
 
 
-@pytest.mark.parametrize("who", ["someone@x", "7", "PA", "CFO"])
+@pytest.mark.parametrize("who", ["someone@x", "7", "Founder", "CFO"])
 def test_dm_to_anyone_but_the_founder_or_a_company_role_is_refused(cli, monkeypatch,
                                                                    capsys, who):
     monkeypatch.setenv("FOUNDER_ZULIP_ID", "7")

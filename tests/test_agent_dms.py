@@ -186,6 +186,23 @@ def test_the_page_shows_the_agents_room_read_only():
     page = (ROOT / "chat" / "page.html").read_text(encoding="utf-8")
     assert f'AGENTS_ROOM = "{AGENTS_ROOM}"' in page
     assert 'id="readonly-note"' in page
+    from test_chat_page import API_STUB, FAKE_DOM, _js
+    prelude = FAKE_DOM + API_STUB + f"""
+      const S = {{open: null, shown: new Set(), msgs: [], members: new Map(), streams: []}};
+      const isTouch = () => true;
+      function refreshCount() {{}} function markRoomRead() {{}}
+      function renderStreams() {{}} function seedTyping() {{}}
+      function addMessages() {{}}
+      const ROOM_TOPIC = "chat"; const AGENTS_ROOM = "{AGENTS_ROOM}";
+    """
+    got = _js(("membersLabel", "openRoom", "firstNewId", "scrollToNew", "setReadOnly"), f"""
+      await openRoom(5, "{AGENTS_ROOM}");
+      out.agents = [$("write").hidden, $("readonly-note").hidden, $("invite-btn").disabled];
+      await openRoom(4, "feature");
+      out.feature = [$("write").hidden, $("readonly-note").hidden, $("invite-btn").disabled];
+    """, prelude=prelude)
+    assert got["agents"] == [True, False, True]  # no write box, the note, no invite
+    assert got["feature"] == [False, True, False]
 
 
 # -- DoD: a "קיבלתי" DM wakes nobody --------------------------------------------
@@ -216,7 +233,7 @@ def test_the_acknowledgement_list_is_short_and_fixed():
 
 # -- the agent path: --json, and every error names the fix ---------------------
 
-@pytest.mark.parametrize("who", ["cto", "CTO", "Cpso"])
+@pytest.mark.parametrize("who", ["cto", "CTO", "Pm"])
 def test_dm_takes_any_company_role_in_any_case(run, cli, capsys, who):
     out = _dm(cli, capsys, "COO", who, "hi")
     assert out == {"ok": True, "id": out["id"], "dm": who.upper()}
