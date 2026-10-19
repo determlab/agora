@@ -223,6 +223,18 @@ def test_a_dm_that_only_starts_with_an_acknowledgement_still_wakes(
     assert w.on_message("COO", _as_seen_by(run, "COO", out["id"]), [])["action"] == "spawn"
 
 
+@pytest.mark.parametrize("text", ["אוקיי", "קיבלתי", "thanks"])
+def test_a_founder_acknowledgement_dm_still_spawns(run, cli, capsys, tmp_path, monkeypatch, text):
+    """The ack filter is for bot DMs only: the founder's "אוקיי" is a reply."""
+    wake, w, sp = _waker(run, tmp_path, monkeypatch)
+    status, out = run.api(run.founder)("POST", "messages", type="private",
+                                       to=json.dumps([run.bots["COO"]["email"]]), content=text)
+    assert status == 200, out
+    d = w.on_message("COO", _as_seen_by(run, "COO", out["id"]), [])
+    assert d["action"] == "spawn", d
+    assert [r for r, _ in sp.started] == ["COO"]
+
+
 def test_the_acknowledgement_list_is_short_and_fixed():
     wake = _load("wake")
     assert "קיבלתי" in wake.ACK_WORDS and "got it" in wake.ACK_WORDS
