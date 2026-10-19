@@ -1093,11 +1093,11 @@ def test_77_inline_code_and_mentions_render_as_elements_never_as_markup():
     kinds = [(k.get("tag"), k.get("cls"), k.get("dir"), k["text"]) for k in body["kids"]]
     assert kinds == [
         ("strong", "mention-name", "ltr", "@CTO"), (None, None, None, " שלום "),
-        ("code", "chip", "ltr", "x<y>"), (None, None, None, " <b>hi</b>\n"),
-        ("pre", "", "ltr", "print(1)\n"), (None, None, None, "\nend")]
+        ("code", "chip copy", "ltr", "x<y>"), (None, None, None, " <b>hi</b>\n"),
+        ("div", "codebox", "", "print(1)\nהעתק"), (None, None, None, "\nend")]
     # Every element's content is one text node: nothing was parsed.
     for k in body["kids"]:
-        if "tag" in k:
+        if "tag" in k and k["tag"] != "div":
             assert k["kids"] == [{"text": k["text"]}]
     css = _css()
     ment = _rule(".mention-name", css)
@@ -3166,3 +3166,64 @@ def test_brief_missing_says_so_and_empty_lists_say_so_in_words():
     """)
     assert got["none"] == "הנתון לא זמין עכשיו"
     assert "שום דבר לא תקוע" in got["empty"] and "שום דבר לא זז עכשיו" in got["empty"]
+
+
+COPY_PRELUDE = FAKE_DOM + """
+  const copied = [];
+  const navigator = {clipboard: {writeText: async (t) => { copied.push(t); }}};
+  const timers = [];
+  const setTimeout = (f, ms) => { timers.push([f, ms]); return timers.length; };
+"""
+COPY_FUNCS = ("textDir", "copyText", "inlineParts", "inlineNodes", "fillBody")
+
+
+def test_173_a_fenced_block_is_an_ltr_box_with_a_copy_button_for_the_exact_text():
+    got = _js(COPY_FUNCS, r"""
+      const el = document.createElement("div");
+      fillBody(el, "שלום, הרץ:\n```\necho <b>hi</b>\n  ls -la\n```\nסוף");
+      const box = el.querySelector("div.codebox");
+      const pre = box.querySelector("pre");
+      const btn = box.querySelector("button");
+      out.pre = {dir: pre.dir, text: pre.textContent, kids: pre.childNodes.length};
+      out.btn = {text: btn.textContent, type: btn.type};
+      out.before = btn.textContent;
+      await btn.on.click();
+      out.copied = copied.slice();
+      out.after = btn.textContent;
+      out.timer = timers.map((t) => t[1]);
+      timers[0][0]();
+      out.reset = btn.textContent;
+    """, prelude=COPY_PRELUDE)
+    # Nothing in the block is parsed as markup: one text node, line breaks kept.
+    assert got["pre"] == {"dir": "ltr", "text": "echo <b>hi</b>\n  ls -la\n", "kids": 1}
+    assert got["btn"] == {"text": "העתק", "type": "button"}
+    # The clipboard gets the block's text, without the closing line break.
+    assert got["copied"] == ["echo <b>hi</b>\n  ls -la"]
+    assert got["after"] == "הועתק" and got["timer"] == [2000] and got["reset"] == "העתק"
+
+
+def test_173_clicking_inline_code_copies_its_text_and_says_so():
+    got = _js(COPY_FUNCS, r"""
+      const el = document.createElement("div");
+      fillBody(el, "run `claude --cmo` now");
+      const chip = el.querySelector("code");
+      await chip.on.click();
+      out.copied = copied.slice();
+      out.toasts = toasts.slice();
+    """, prelude=COPY_PRELUDE)
+    assert got["copied"] == ["claude --cmo"]
+    assert got["toasts"] == [["הועתק", False]]
+
+
+def test_173_a_copy_that_the_browser_refuses_is_not_reported_as_done():
+    got = _js(COPY_FUNCS, r"""
+      navigator.clipboard.writeText = async () => { throw new Error("denied"); };
+      const el = document.createElement("div");
+      fillBody(el, "```\ncmd\n```");
+      const btn = el.querySelector("button");
+      await btn.on.click();
+      out.text = btn.textContent;
+      out.toasts = toasts.slice();
+    """, prelude=COPY_PRELUDE)
+    assert got["text"] == "העתק"
+    assert got["toasts"] == [["ההעתקה נכשלה", True]]
