@@ -203,7 +203,7 @@ button.archived-name:hover { color: var(--text); }
   border-radius: 10px; box-shadow: 0 4px 14px rgba(0, 0, 0, .18); }
 #picker li { display: flex; align-items: center; gap: .45rem; padding: .25rem .45rem; border-radius: 6px; cursor: pointer; }
 #picker li.active { background: var(--accent-soft); }
-#hint, #mic-note { margin: .3rem 0 0; }
+#hint, #mic-note, #tag-note { margin: .3rem 0 0; }
 dialog { background: var(--panel); color: var(--text); border: 1px solid var(--line);
   border-radius: 10px; padding: 1rem 1.25rem; width: min(28rem, 92vw); }
 dialog::backdrop { background: rgba(0, 0, 0, .4); }
@@ -638,6 +638,7 @@ a.ref:hover { text-decoration: underline; }
         <button type="button" id="send-btn" class="btn primary">שלח</button>
       </div>
       <p id="hint" class="muted">הקלדת @ פותחת רשימת שמות · Enter שולח · Shift+Enter שורה חדשה</p>
+      <p id="tag-note" class="muted" dir="auto" hidden>לא בחדר: התיוג לא יגיע. הוספה דרך הגדרות החדר.</p>
       <p id="mic-note" class="muted" hidden>&#127908; הקלטה: הקול נשלח לספק הדפדפן לתמלול.</p>
       <p id="send-error" class="error" hidden></p>
     </div>
@@ -3222,6 +3223,7 @@ async function send() {
       type: "stream", to: S.open.stream_id, topic: ROOM_TOPIC, content: text});
     // Cleared, and reported sent, only once the server returned the new id.
     if (box.value === text) box.value = "";
+    $("tag-note").hidden = true;
     lastTypingSent = 0;  // same state the idle-stop resets (ops#249 review)
     sendTyping("stop");
     toast("נשלח · id " + sent.id);
@@ -3240,9 +3242,9 @@ async function send() {
 
 // -- the @ picker: the role bots, @all, and everyone the server lists.
 // (ops#277 removed the row of mention buttons; the picker keeps their names.)
-// ops#322: someone not in the open room is marked so, and choosing them
-// invites them first ("invite by @name"). An invite wakes nobody; the
-// message, once sent, is what calls them.
+// ops#322: someone not in the open room is marked so. agora#168: choosing
+// them only inserts the tag and shows a note under the box; a tag never adds
+// anyone. The members panel's Invite button is the only add path.
 
 function mentionNames() {
   const names = ["COO", "CTO", "CMO", "CPSO", "PM", "PA", "Watchdog", "all"];
@@ -3284,8 +3286,8 @@ function renderPick() {
     label.textContent = name;
     li.append(avatar(name, u ? u.is_bot : false, true), label);
     if (outsider(name)) {
-      const tag = el("span", "tag", "לא בחדר · יוזמן");
-      li.title = name + " לא בחדר: בחירה מזמינה אותו/ה לחדר";
+      const tag = el("span", "tag", "לא בחדר");
+      li.title = name + " לא בחדר: התיוג לא יגיע";
       li.append(tag);
     }
     // mousedown, not click: the compose box must keep the focus and caret.
@@ -3313,19 +3315,8 @@ function choosePick(i) {
   closePick();
   fitCompose();
   box.focus();
-  if (guest) inviteByName(guest, S.open);
-}
-
-// "Invite by @name": the same call as the panel's Invite button, and the
-// same honest report of what the server did.
-async function inviteByName(u, room) {
-  try {
-    const r = await addMember(room.stream, u.email);
-    toast("#" + room.stream + ": " + subscribeReport(r, u.email));
-  } catch (e) {
-    toast("לא הוזמן: " + e.message, true);
-  }
-  await refreshCount(room.stream_id);
+  // agora#168: no invite, no add button; only the note says the tag goes nowhere.
+  $("tag-note").hidden = !guest;
 }
 
 $("compose").addEventListener("keydown", (e) => {

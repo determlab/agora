@@ -966,7 +966,7 @@ def test_77_the_ui_speaks_hebrew_right_to_left_and_keeps_technical_terms_english
     for he in ("שלח", "חברים", "בחרו חדר", "ציטוט", "חדרים", "שכח מפתח", "הזמנה", "הזמן"):
         assert he in text, he
     # The labels the script writes are Hebrew too.
-    for he in ('"מי בחדר, הזמנה ושם"', '"לא בחדר · יוזמן"', '"בוט" : "אדם"', '"נשלח · id "',
+    for he in ('"מי בחדר, הזמנה ושם"', '"לא בחדר"', '"בוט" : "אדם"', '"נשלח · id "',
                '"מחובר"'):
         assert he in m.script, he
     for en in ('"Pick a topic"', '"Members"', '"quote"', '"remove"', '"sent, id "', '"Forget key"'):
@@ -1160,7 +1160,10 @@ def test_77_typing_at_opens_a_picker_that_inserts_the_mention():
     assert "updatePick();" in _function("onComposeInput")
 
 
-def test_322_picking_someone_not_in_the_room_invites_them_with_the_panels_own_call(world):
+def test_168_picking_someone_not_in_the_room_only_tags_them_and_shows_a_note():
+    # agora#168 (founder, 2026-10-19): a tag never adds anyone to a room; the
+    # members panel's Invite is the only add path. The pick inserts the tag,
+    # makes no users/me/subscriptions call, and a note says the tag goes nowhere.
     prelude = FAKE_DOM + API_STUB + """
       function fitCompose() {}
       const S = {me: {user_id: 1}, pick: null, open: {stream_id: 7, stream: "design"},
@@ -1168,25 +1171,28 @@ def test_322_picking_someone_not_in_the_room_invites_them_with_the_panels_own_ca
         [1, {user_id: 1, full_name: "Me", is_bot: false, email: "me@x"}],
         [2, {user_id: 2, full_name: "CTO", is_bot: true, email: "cto-bot@chat.localhost"}],
         [3, {user_id: 3, full_name: "PM", is_bot: true, email: "pm-bot@chat.localhost"}]])};
-      async function refreshCount(id) { calls.push(["refresh", id]); }
-      function subscribeReport(r, email) { return "הוזמן " + email; }
+      $("tag-note").hidden = true;
     """
     got = _js(("roleOf", "initial", "avatar", "el", "mentionQuery", "pickNames", "mentionNames",
-               "outsider", "closePick", "renderPick", "updatePick", "addMember", "inviteByName",
-               "choosePick"), """
+               "outsider", "closePick", "renderPick", "updatePick", "choosePick"), """
       const box = $("compose");
       box.value = "@"; box.selectionStart = box.selectionEnd = 1;
       updatePick();
       out.tags = S.pick.items.map((n, i) => [n, $("picker").children[i].querySelectorAll(".tag").length]);
       box.value = "@c"; box.selectionStart = box.selectionEnd = 2;
       updatePick();
-      choosePick(S.pick.items.indexOf("CTO"));   // in the room: no invite
-      out.afterMember = calls.length;
+      choosePick(S.pick.items.indexOf("CTO"));   // in the room: no note
+      out.memberNote = $("tag-note").hidden;
       box.value = "@p"; box.selectionStart = box.selectionEnd = 2;
       updatePick();
-      choosePick(S.pick.items.indexOf("PM"));    // not in the room: invited first
+      choosePick(S.pick.items.indexOf("PM"));    // not in the room: tag + note, no add
       await new Promise((r) => setTimeout(r, 0));
-      out.calls = calls; out.toasts = toasts; out.value = box.value;
+      out.guestNote = $("tag-note").hidden;
+      out.value = box.value; out.calls = calls; out.toasts = toasts;
+      box.value = "@c"; box.selectionStart = box.selectionEnd = 2;
+      updatePick();
+      choosePick(S.pick.items.indexOf("CTO"));   // a member again: the note goes
+      out.backToMember = $("tag-note").hidden;
       S.members = new Map();                     // unknown: nobody is marked
       box.value = "@p"; box.selectionStart = box.selectionEnd = 2;
       updatePick();
@@ -1194,21 +1200,25 @@ def test_322_picking_someone_not_in_the_room_invites_them_with_the_panels_own_ca
     """, prelude=prelude)
     tags = dict(got["tags"])
     assert tags["CTO"] == 0 and tags["PM"] == 1 and tags["all"] == 0
-    assert got["afterMember"] == 0
-    [add, refresh] = got["calls"]
-    assert add[:2] == ["POST", "users/me/subscriptions"]
-    assert json.loads(add[2]["principals"]) == ["pm-bot@chat.localhost"]
-    assert json.loads(add[2]["subscriptions"]) == [{"name": "design"}]
-    assert refresh == ["refresh", 7]
-    assert got["toasts"] == [["#design: הוזמן pm-bot@chat.localhost", False]]
-    assert got["value"].endswith("@**PM** ")
+    assert got["value"] == "@**PM** "
+    assert got["calls"] == [] and got["toasts"] == []
+    assert got["memberNote"] is True and got["guestNote"] is False and got["backToMember"] is True
     assert set(got["unknown"]) == {0}
-    # Replayed against the real server as the founder: the PM is in, and nothing woke.
-    run, human, bots = world["run"], world["human"], world["bots"]
-    status, body = page_api(run, human, add[0], add[1], subscriptions=json.dumps([{"name": "feature"}]),
-                            principals=json.dumps([bots["CMO"]["email"]]))
-    assert status == 200 and body["subscribed"] == {bots["CMO"]["email"]: ["feature"]}, body
-    assert run.store.one("SELECT count(*) FROM messages")[0] == 0
+    # No add path is left in the pick, and the note has no button.
+    pick = _function("choosePick")
+    assert "addMember" not in pick and "subscriptions" not in pick
+    assert "inviteByName" not in _markup().script
+    [note] = [a for t, a in _markup().elements if a.get("id") == "tag-note"]
+    assert "hidden" in note
+    text = PAGE.read_text(encoding="utf-8")
+    para = text[text.index('id="tag-note"'):]
+    para = para[:para.index("</p>")]
+    assert "<button" not in para
+    assert "לא בחדר: התיוג לא יגיע. הוספה דרך הגדרות החדר." in para
+
+
+def test_168_a_sent_message_hides_the_not_in_the_room_note():
+    assert '$("tag-note").hidden = true;' in _function("send")
 
 
 def test_322_the_picker_offers_the_pa_in_pa_only(world):
@@ -1224,8 +1234,7 @@ def test_322_the_picker_offers_the_pa_in_pa_only(world):
       function subscribeReport(r, email) { return "הוזמן " + email; }
     """
     got = _js(("roleOf", "initial", "avatar", "el", "mentionQuery", "pickNames", "mentionNames",
-               "outsider", "closePick", "renderPick", "updatePick", "addMember", "inviteByName",
-               "choosePick"), """
+               "outsider", "closePick", "renderPick", "updatePick", "choosePick"), """
       const box = $("compose");
       out.names = mentionNames();
       box.value = "@pa"; box.selectionStart = box.selectionEnd = 3;
