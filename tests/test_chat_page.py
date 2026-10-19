@@ -2377,14 +2377,16 @@ def _board_ids() -> tuple[list[str], list[str]]:
     return ids(first), ids(more)
 
 
-def test_326_approvals_come_first_full_width_right_under_the_brief():
-    # founder 2026-10-17: the brief replaced the KPI strip on top; the strip
-    # moved under "עוד פרטים" with the cards the brief now covers.
+def test_326_approvals_come_first_full_width_above_the_brief():
+    # agora#174 (the approved board): "waiting for you" is the top block,
+    # under the "updated" line; the brief (goals, running, stuck, queues,
+    # tokens) follows it, and the KPI strip stays under "עוד פרטים".
     first, _ = _board_ids()
     assert first[0] == "dash-approvals"
     text = PAGE.read_text(encoding="utf-8")
     assert '<section class="dash-card card wide" id="dash-approvals">' in text
-    assert text.index('id="dash-brief"') < text.index('id="dash-approvals"') < text.index('id="dash-kpis"')         < text.index('id="dash-timeline"')
+    assert (text.index('id="dash-updated"') < text.index('id="dash-approvals"') < text.index('id="dash-brief"')
+            < text.index('id="dash-kpis"') < text.index('id="dash-timeline"'))
     # the KPI "מחכה לך" is a link that scrolls to the approvals card
     got = _dash("""
       const k = renderKpis({next_moves: [{id: "a"}]}, Date.parse("2026-10-16T12:00:00Z"));
@@ -3103,24 +3105,15 @@ BRIEF = {
                  "milestones": [{"repo": "shal", "title": "v0.4.0", "closed": 20, "total": 23, "percent": 87, "url": "m"}],
                  "stage1": {"due": "2026-12-08", "days_left": 52, "done": 1, "total": 3}},
 }
-BRIEF_FUNCS = ("ageText", "briefTiles", "briefSection", "briefRow", "briefStuck", "briefMoving", "briefTokens",
-               "briefProgress", "renderBrief")
+BRIEF_FUNCS = ("ageText", "briefSection", "briefRow", "briefStuck", "briefMoving", "briefTokens",
+               "briefProgress", "renderBrief", "boardGoals", "goalChip", "burnupSvg", "goalBody", "goalItem",
+               "boardGoalsSec", "pinGoal", "wakeButton", "wakeOwner", "boardRunning", "queueCell", "boardQueues")
 
 
-def _brief(body: str):
-    return _js(DASH_FUNCS + BRIEF_FUNCS, body, prelude=_dash_prelude() + _consts("OWNER_CLS", "TOK_WHO_HE"))
-
-
-def test_brief_tiles_say_what_moves_what_is_stuck_and_what_waits_for_the_founder():
-    got = _brief(f"""
-      const b = {json.dumps(BRIEF, ensure_ascii=False)};
-      const t = briefTiles(b);
-      out.tiles = t.childNodes.map((n) => [n.className, n.childNodes.map((c) => c.textContent)]);
-    """)
-    assert got["tiles"] == [
-        ["bf-tile ok", ["2", "זז עכשיו", "15 נכנסו לקוד ב-24 שעות"]],
-        ["bf-tile bad", ["3", "תקוע", "לכל אחד יש בעלים"]],
-        ["bf-tile you", ["1", "מחכה לך", "רק אתה יכול"]]]
+def _brief(body: str, prelude: str = ""):
+    return _js(DASH_FUNCS + BRIEF_FUNCS, body,
+               prelude=_dash_prelude() + _consts("OWNER_CLS", "TOK_WHO_HE", "SVG", "goalOpen", "WAKE_ROLES",
+                                                 "wokenRows", "LIVE_STATE", "QUEUE_ROWS", "QUEUE_COLS") + prelude)
 
 
 def test_brief_every_stuck_row_leads_with_its_owner_and_age():
@@ -3134,6 +3127,138 @@ def test_brief_every_stuck_row_leads_with_its_owner_and_age():
     assert got["rows"][1] == [["chip own own-cto", "CTO"], ["dash-label ref", "shal#462"], ["why", "אושר ולא מוזג"],
                               ["age", "כבר 33 שע׳"]]
     assert got["rows"][2][0] == ["chip own own-pm", "PM"] and got["rows"][2][3] == ["age", "כבר 11 ימים"]
+
+
+def test_174_a_roles_stuck_row_has_wake_and_the_founders_own_row_does_not():
+    got = _brief(f"""
+      const b = {json.dumps(BRIEF, ensure_ascii=False)};
+      const ul = briefStuck(b.stuck).childNodes[1];
+      out.wake = ul.childNodes.map((li) => li.querySelectorAll(".wake").map((w) => w.textContent));
+      const btn = ul.childNodes[2].querySelector(".wake");
+      await btn.onclick();
+      out.calls = calls;
+      out.after = [btn.textContent, btn.disabled];
+      out.toast = toasts[0];
+      // a re-render keeps the answer, not a fresh "wake" that would tag again
+      out.again = [briefStuck(b.stuck).childNodes[1].childNodes[2].querySelector(".wake").textContent];
+    """, prelude=API_STUB.replace("return {};", 'return {posted: true, id: 7, room: "PM", owner: "PM"};')
+       + "const S = {dashboard: null};\n")
+    assert got["wake"] == [[], ["תעיר"], ["תעיר"]]
+    assert got["calls"] == [["POST", "dashboard/wake", {"owner": "PM", "ref": "ops#273"}]]
+    assert got["after"] == ["תויג ב-#PM", True]
+    assert got["toast"] == ["תויג: PM בחדר #PM", False]
+    assert got["again"] == ["תויג ב-#PM"]
+
+
+def test_174_a_refused_wake_says_why_and_the_button_comes_back():
+    got = _brief(f"""
+      const b = {json.dumps(BRIEF, ensure_ascii=False)};
+      const btn = briefStuck(b.stuck).childNodes[1].childNodes[1].querySelector(".wake");
+      FAIL = true;
+      await btn.onclick();
+      out.after = [btn.textContent, btn.disabled];
+      out.toast = toasts[0];
+    """, prelude=API_STUB + "const S = {dashboard: null};\n")
+    assert got["after"] == ["תעיר", False]
+    assert got["toast"] == ["לא תויג: network down", True]
+
+
+GOALS = [
+    {"key": "demo", "name": "הדמו", "what": "דמו שמראים ללקוח", "percent": 60, "status": "in_work",
+     "start": "2026-10-06", "end": "2026-10-13", "forecast": "2026-10-25", "late": True, "days_left": -6,
+     "missing": ["Watch", {"ref": "shal#317", "url": "https://x/317", "title": "approve"}],
+     "burnup": [{"date": "10-06", "closed": 0, "planned": 4}, {"date": "10-12", "closed": 6, "planned": 14},
+                {"date": "10-19", "closed": 12, "planned": 20}], "total": 20},
+    {"key": "pypi", "name": "שחרור PyPI", "percent": 0, "status": "unknown", "end": "2026-10-31", "days_left": 12},
+]
+
+
+def test_174_the_pinned_goal_is_first_and_open_and_a_tap_opens_another():
+    got = _brief(f"""
+      const doc = {{goals: {json.dumps(GOALS, ensure_ascii=False)}}};
+      const sec = boardGoalsSec(boardGoals(doc, null), "pypi");
+      const items = sec.childNodes[1].childNodes;
+      out.order = items.map((li) => [li.className, li.querySelector(".pinb").textContent,
+                                     li.querySelector(".ghead").attrs["aria-expanded"], li.childNodes.length]);
+      items[1].querySelector(".ghead").onclick();
+      out.flipped = [...goalOpen];
+      const demo = boardGoalsSec(boardGoals(doc, null), "pypi").childNodes[1].childNodes[1];
+      out.body = demo.querySelector(".gbody").textContent;
+      out.svg = demo.querySelector(".gbody").childNodes[1].tagName;
+      out.lines = demo.querySelectorAll("polyline").map((n) => [n.attrs.class, n.attrs.points]);
+      out.chip = demo.querySelector(".chip").textContent;
+    """)
+    assert got["order"] == [["goal pinned", "נעוץ", "true", 2], ["goal", "נעץ", "false", 1]]
+    assert got["flipped"] == ["demo"]
+    assert "60%" in got["body"] and "יעד 2026-10-13" in got["body"] and "צפי 2026-10-25" in got["body"]
+    assert "Watch" in got["body"] and "shal#317" in got["body"]
+    assert got["svg"] == "SVG" and got["chip"] == "באיחור 6 ימים"
+    assert got["lines"] == [["plan", "10,83 150,46 290,24"], ["done", "10,98 150,76 290,54"]]
+
+
+def test_174_pin_goes_to_the_server_not_the_browser():
+    got = _brief(f"""
+      const doc = {{goals: {json.dumps(GOALS, ensure_ascii=False)}}};
+      const sec = boardGoalsSec(boardGoals(doc, null), null);
+      await sec.childNodes[1].childNodes[1].querySelector(".pinb").onclick({{stopPropagation() {{}}}});
+      out.calls = calls;
+      out.pin = S.dashboard.pin;
+      out.toast = toasts[0];
+      out.rerendered = rerendered;
+    """, prelude=API_STUB.replace("return {};", 'return {goal: params.goal, at: 5, by: "Founder"};')
+       + "const S = {dashboard: {doc: {}}};\n")
+    assert got["calls"] == [["POST", "dashboard/pin", {"goal": "pypi"}]]
+    assert got["pin"] == {"goal": "pypi", "at": 5, "by": "Founder"}
+    assert got["toast"] == ["נעוץ למעלה, גם בטלפון", False] and got["rerendered"] == ["pinb"]
+    script = _function("pinGoal") + _function("goalItem") + _function("boardGoalsSec")
+    assert "localStorage" not in script
+
+
+def test_174_goals_fall_back_to_the_gantt_until_ops_414_lands():
+    gantt = [{"key": "arena", "he": "הזירה", "start": "2026-10-03", "end": "2026-10-12", "percent": 75,
+              "state": "in_work", "items_done": 3, "items_total": 4}]
+    got = _brief(f"""
+      const b = {json.dumps(BRIEF, ensure_ascii=False)};
+      b.progress.goals[0].he = "הזירה";
+      const g = boardGoals({{gantt: {json.dumps(gantt, ensure_ascii=False)}}}, b);
+      out.g = g[0];
+      out.body = goalBody(g[0]).textContent;
+    """)
+    g = got["g"]
+    assert (g["key"], g["name"], g["percent"], g["late"], g["days_left"], g["done"], g["total"]) == (
+        "arena", "הזירה", 75, True, -5, 3, 4)
+    assert "אין עדיין נתוני burn-up · 3 מתוך 4 נסגרו" in got["body"]
+
+
+def test_174_running_now_shows_state_red_first_and_never_the_last_action():
+    live = [{"ref": "shal#508", "title": "A", "round": 1, "claimed_min": 30, "idle_min": 2, "state": "working",
+             "last_action": "Bash: secret"},
+            {"ref": "shal#522", "title": "B", "round": 2, "claimed_min": 50, "idle_min": 20, "state": "stuck?"}]
+    got = _brief(f"""
+      const sec = boardRunning({json.dumps(live)}, {{moving: []}});
+      out.text = sec.textContent;
+      out.dots = sec.querySelectorAll(".lv-dot").map((d) => d.className);
+      out.fallback = boardRunning([{{ref: "x#1"}}], {{moving: []}}).textContent;
+    """)
+    assert got["dots"] == ["lv-dot stuck", "lv-dot working"]
+    assert "תקוע? · B" in got["text"] and "סבב 2 · 50 דק׳ בריצה · צעד אחרון לפני 20 דק׳" in got["text"]
+    assert "secret" not in got["text"]
+    assert "שום דבר לא זז עכשיו" in got["fallback"]
+
+
+def test_174_queues_are_a_company_products_matrix_and_say_when_missing():
+    q = {"company": {"ready": 5, "pr": [1, 2, 3, 4, 5, 6], "open": {"count": 137, "url": "https://x/o"},
+                     "repos": ["ops", "agora"]},
+         "products": {"ready": 9, "pr": 7, "open": 53}}
+    got = _brief(f"""
+      const t = boardQueues({json.dumps(q)});
+      out.rows = t.querySelectorAll("tr").map((r) => r.childNodes.map((c) => c.textContent));
+      out.note = t.childNodes[2].textContent;
+      out.none = boardQueues(undefined).textContent;
+    """)
+    assert got["rows"] == [["", "מוכן לבנייה", "PR למיזוג", "פתוחים"], ["חברה", "5", "6", "137"],
+                           ["מוצרים", "9", "7", "53"]]
+    assert got["note"] == "חברה: ops, agora" and "הנתון לא זמין עכשיו" in got["none"]
 
 
 def test_brief_tokens_label_every_number_and_say_the_cloud_is_not_measured():
@@ -3155,7 +3280,8 @@ def test_brief_progress_shows_the_v1_rule_and_late_goals():
     """)
     t = got["text"]
     assert "13 מתוך 39 מיזוגים בשבוע (33%)" in t and "מתחת ליעד: 2 מתוך 3" in t
-    assert "באיחור 5 ימים" in t and "עוד 14 ימים" in t
+    # agora#174: the goals moved up to the goals block, not shown twice
+    assert "באיחור 5 ימים" not in t and "arena" not in t
     assert "20 מתוך 23 משימות" in t and "שלב 1: עוד 52 ימים · 1 מתוך 3 בדיקות עברו" in t
 
 
@@ -3163,6 +3289,11 @@ def test_brief_missing_says_so_and_empty_lists_say_so_in_words():
     got = _brief("""
       out.none = renderBrief(undefined).textContent;
       out.empty = renderBrief({counts: {moving: 0, stuck: 0, for_founder: 0}, stuck: [], moving: []}).textContent;
+      out.order = renderBrief({stuck: [], moving: []}, 0, {next_moves: [{id: "a"}], gantt: [{key: "k", he: "g"}]},
+                              {goal: "k"}).childNodes.map((n) => n.childNodes[0].textContent);
     """)
     assert got["none"] == "הנתון לא זמין עכשיו"
     assert "שום דבר לא תקוע" in got["empty"] and "שום דבר לא זז עכשיו" in got["empty"]
+    assert "מחכה לך: שום דבר" in got["empty"]
+    # agora#174, the approved order under "waiting for you": goals, running, stuck, queues, tokens
+    assert [t.split(" · ")[0] for t in got["order"]] == ["יעדים", "זז עכשיו", "תקוע", "תורים", "טוקנים"]
