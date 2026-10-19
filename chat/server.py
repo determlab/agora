@@ -105,6 +105,19 @@ NO_DASHBOARD = "no dashboard command configured: start the server with --dashboa
 APPROVE_TIMEOUT = 30.0  # ops#176: a local, gh-free write — nowhere near dashboard.py's own timeout
 NO_APPROVE = "no approve command configured: start the server with --approve-cmd"
 ANSWERS = ("yes", "no", "later")
+# agora#174: the board's pinned goal is one row in the database, so the phone
+# and the PC read the same pin and a restart keeps it.
+PIN_MAX = 200
+# agora#174: the stuck row's "wake" tags the owner in its home room. The map
+# is bot/wake.py's `home_streams` (the room a role answers in, setup_streams.py
+# names; #PM upper case), without the PA: no company row is ever the PA's.
+HOME_ROOMS = {"COO": "coo", "CTO": "cto", "PM": "PM", "CMO": "cmo", "CPSO": "cpso"}
+# A second tap on the same row inside this window (a phone double-tap, or the
+# page and an agent both reacting to one stuck row) returns the first tag
+# instead of posting another: one stuck row, one tag.
+WAKE_DEDUPE = 600
+BOARD_ORG = "determlab"  # the board's refs are "repo#N" in this org (ops tools/dashboard.py ORG)
+WAKE_REF = re.compile(r"[A-Za-z0-9_.-]+(?:#\d+)?")
 PAIR_TTL = 300  # ops#236: a pairing code is good for 5 minutes
 PAIR_RATE_LIMIT = 10  # ops#236: failed /pair/redeem attempts per PAIR_RATE_WINDOW per address
 PAIR_RATE_WINDOW = 60.0
@@ -172,6 +185,9 @@ CREATE TABLE IF NOT EXISTS events (
     id INTEGER PRIMARY KEY AUTOINCREMENT, queue_id TEXT NOT NULL, body TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS events_queue ON events (queue_id, id);
 CREATE TABLE IF NOT EXISTS dashboard (ts INTEGER PRIMARY KEY, doc TEXT, error TEXT);
+CREATE TABLE IF NOT EXISTS board_pin (
+    id INTEGER PRIMARY KEY CHECK (id = 1), goal TEXT NOT NULL, by_id INTEGER,
+    at INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS archived_topics (
     stream_id INTEGER NOT NULL, topic TEXT COLLATE NOCASE NOT NULL,
     archived_at INTEGER NOT NULL, PRIMARY KEY (stream_id, topic));
@@ -627,7 +643,8 @@ class Dashboard:
 
     def state(self) -> dict:
         if not self.cmd:
-            return {"doc": None, "last_sync": None, "stale": True, "last_error": NO_DASHBOARD}
+            return {"doc": None, "last_sync": None, "stale": True, "last_error": NO_DASHBOARD,
+                    "pin": self.pin()}
         row = self.s.one("SELECT ts, doc FROM dashboard ORDER BY ts DESC LIMIT 1")
         doc = None
         last_error = self.last_error
@@ -644,7 +661,42 @@ class Dashboard:
         last = row["ts"] if row is not None else None
         return {"doc": doc, "last_sync": last,
                 "stale": last is None or self.clock() - last > DASHBOARD_STALE,
-                "last_error": last_error}
+                "last_error": last_error, "pin": self.pin()}
+
+    def pin(self) -> dict:
+        """agora#174: the goal the board opens at the top. Stored, not kept
+        in a browser, so his phone and his PC show the same one, and it
+        stays until someone changes it — a restart included."""
+        row = self.s.one("SELECT p.goal, p.at, u.full_name FROM board_pin p "
+                         "LEFT JOIN users u ON u.id = p.by_id WHERE p.id = 1")
+        if row is None:
+            return {"goal": None, "at": None, "by": None}
+        return {"goal": row["goal"], "at": row["at"], "by": row["full_name"]}
+
+    def set_pin(self, me: dict, goal) -> dict:
+        """Pin ``goal`` (the goal's key as the board document names it), or
+        clear the pin with an empty one. Whoever is watching the board gets
+        a ``dashboard`` event, so the other screen moves too."""
+        if goal is None:
+            raise ApiError("Missing 'goal': the goal's key to pin, or an empty string "
+                           "to clear the pin", "REQUEST_VARIABLE_MISSING")
+        goal = str(goal).strip()
+        if len(goal) > PIN_MAX:
+            raise ApiError(f"'goal' is {len(goal)} characters, the limit is {PIN_MAX}: "
+                           f"send the goal's key, not its text")
+        with self.s.tx():
+            if goal:
+                self.s.x("INSERT OR REPLACE INTO board_pin (id, goal, by_id, at) "
+                         "VALUES (1, ?, ?, ?)", (goal, me["id"], int(self.clock())))
+            else:
+                self.s.x("DELETE FROM board_pin WHERE id = 1")
+            row = self.s.one("SELECT ts FROM dashboard ORDER BY ts DESC LIMIT 1")
+            for q in self.s.q("SELECT queue_id, event_types FROM queues"):
+                if q["event_types"] and "dashboard" in json.loads(q["event_types"]):
+                    self.s.x("INSERT INTO events (queue_id, body) VALUES (?,?)",
+                             (q["queue_id"], json.dumps({"type": "dashboard", "pin": True,
+                                                         "last_sync": row["ts"] if row else None})))
+        return self.pin()
 
     def approve(self, card_id: str | None, answer: str | None, note: str | None) -> dict:
         """ops#176: what the approvals carousel's Yes/No/Later buttons send.
@@ -767,6 +819,8 @@ class Chat:
         self.poll_seconds = poll_seconds
         self.dashboard = dashboard or Dashboard(store)
         self.allow_hosts = allow_hosts
+        self.woken: dict[tuple[str, str], tuple[int, float]] = {}  # (owner, ref) -> (message id, when)
+        self.wake_lock = threading.Lock()
         self.pair_limiter = RateLimiter(PAIR_RATE_LIMIT, PAIR_RATE_WINDOW)
 
     def message_json(self, row, me: dict) -> dict:
@@ -1044,6 +1098,58 @@ class Chat:
                        (me["id"], "stream", room["stream_id"], ROOM_TOPIC,
                         f"הודעה פרטית אל {names}:\n{content}", now))
         return self.s.one("SELECT * FROM messages WHERE id=?", (cid,))
+
+    def wake(self, me: dict, p: dict) -> dict:
+        """agora#174: the stuck row's "wake" button. Posts one line, as the
+        caller, in the owner's home room, tagging the owner's role bot once —
+        the tag is what wakes it (bot/wake.py). It refuses, and posts
+        nothing, when the tag would reach nobody: an owner with no home
+        room (the founder's own rows), no such bot, or a bot that is not in
+        its room — a tag never adds a member (#168), so it would wake no one.
+        The refusal is a 409 that names the fix (D3)."""
+        owner = str(p.get("owner") or "").strip()
+        ref = str(p.get("ref") or "").strip()
+        if not owner or not ref:
+            raise ApiError("Missing 'owner' or 'ref': send the stuck row's owner (a role) and "
+                           "its ref (repo#N)", "REQUEST_VARIABLE_MISSING")
+        if not WAKE_REF.fullmatch(ref):
+            raise ApiError(f"Invalid 'ref' {ref!r}: use repo#N or a repo name")
+        role = owner.upper()
+        if role not in HOME_ROOMS:
+            raise ApiError(f"{owner!r} has no home room to be tagged in: wake one of "
+                           f"{', '.join(HOME_ROOMS)}; a row the founder owns waits for him")
+        room = HOME_ROOMS[role]
+        stream = self.s.stream_by_ref(room)
+        bot = self.s.one("SELECT * FROM users WHERE is_bot=1 AND upper(full_name)=?", (role,))
+        if stream is None:
+            raise ApiError(f"{role}'s home room #{room} does not exist, so a tag reaches nobody: "
+                           f"create it with bot/setup_streams.py", "WAKE_REACHES_NOBODY", 409)
+        if bot is None:
+            raise ApiError(f"no {role} bot on this server, so a tag reaches nobody: create it "
+                           f"with bot/setup_streams.py", "WAKE_REACHES_NOBODY", 409)
+        if stream["stream_id"] not in self.s.subscribed(bot["id"]):
+            raise ApiError(f"the {role} bot is not in #{room}, so a tag there reaches nobody: "
+                           f"add it to the room first (POST /users/me/subscriptions)",
+                           "WAKE_REACHES_NOBODY", 409)
+        key = (role, ref)
+        with self.wake_lock:  # check-and-post as one step: two taps, one tag
+            prev = self.woken.get(key)
+            now = time.time()
+            if prev and now - prev[1] < WAKE_DEDUPE and self.s.one(
+                    "SELECT id FROM messages WHERE id=?", (prev[0],)):
+                return {"posted": False, "id": prev[0], "room": stream["name"], "owner": role,
+                        "why": f"{role} was already tagged for {ref} "
+                               f"{int(now - prev[1]) // 60} min ago"}
+            repo, _, number = ref.partition("#")
+            url = (f"https://github.com/{BOARD_ORG}/{repo}/issues/{number}" if number
+                   else f"https://github.com/{BOARD_ORG}/{repo}/issues")
+            # Hebrew first (founder-profile: every line starts with a Hebrew
+            # word); one mention only, built here — no caller text goes in.
+            content = f"תקוע אצלך @**{bot['full_name']}**: {ref} {url}"
+            mid = self.send(me, {"type": "stream", "to": stream["name"], "topic": ROOM_TOPIC,
+                                 "content": content})["id"]
+            self.woken[key] = (mid, now)
+        return {"posted": True, "id": mid, "room": stream["name"], "owner": role}
 
     # GET /messages
     def fetch(self, me: dict, p: dict) -> dict:
@@ -1660,6 +1766,12 @@ class Chat:
                            "DASHBOARD_SYNC_FAILED", 502, last_error=self.dashboard.last_error)
         if path == "dashboard/approve" and method == "POST":
             return self.dashboard.approve(p.get("id"), p.get("answer"), p.get("note"))
+        if path == "dashboard/pin" and method == "GET":
+            return self.dashboard.pin()
+        if path == "dashboard/pin" and method == "POST":
+            return self.dashboard.set_pin(me, p.get("goal"))
+        if path == "dashboard/wake" and method == "POST":
+            return self.wake(me, p)
         raise ApiError(f"Endpoint not found: {method} /api/v1/{path} is not served by this "
                        f"chat server (see chat/README.md for what it serves)",
                        "BAD_REQUEST", 404)
