@@ -1595,10 +1595,21 @@ def test_a_bot_never_wakes_its_own_role(wake, tmp_path):
     assert w.spawner.started == []
 
 
-def test_bot_dm_never_wakes(wake, tmp_path):
+def test_bot_dm_wakes_the_role_it_is_sent_to(wake, tmp_path):
+    """Issue #175: a DM from a role bot wakes the role like a tag (it was
+    refused before); the answer goes back as a DM, never into a room."""
     w = make_bots(wake, tmp_path)
-    d = w.on_message("CTO", bmsg(10, "COO", "CTO", stream=None), [])
-    assert d["action"] == "skip" and "never by DM" in d["reason"]
+    d = w.on_message("CTO", bmsg(10, "COO", "CTO", "is the index right?", stream=None), [])
+    assert d["action"] == "spawn" and d["origin"] == "bot:COO"
+    (argv, prompt, role), = w.spawner.started
+    assert role == "CTO" and "--as CTO send --dm COO" in prompt
+    assert argv[-2:] == ["--max-turns", str(wake.AGENT["bot_max_turns"])]
+
+
+def test_bot_dm_with_bot_wakes_off_wakes_nobody(wake, tmp_path):
+    w = make_bots(wake, tmp_path, on=False)
+    d = w.on_message("CTO", bmsg(10, "COO", "CTO", "is the index right?", stream=None), [])
+    assert d["action"] == "skip" and "bot wakes are off" in d["reason"]
     assert w.spawner.started == []
 
 
