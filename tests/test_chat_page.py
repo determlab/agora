@@ -1093,7 +1093,7 @@ def test_77_inline_code_and_mentions_render_as_elements_never_as_markup():
     kinds = [(k.get("tag"), k.get("cls"), k.get("dir"), k["text"]) for k in body["kids"]]
     assert kinds == [
         ("strong", "mention-name", "ltr", "@CTO"), (None, None, None, " שלום "),
-        ("code", "chip", "ltr", "x<y>"), (None, None, None, " <b>hi</b>\n"),
+        ("code", "chip copy", "ltr", "x<y>"), (None, None, None, " <b>hi</b>\n"),
         ("div", "codebox", "", "print(1)\nהעתק"), (None, None, None, "\nend")]
     # Every element's content is one text node: nothing was parsed.
     for k in body["kids"]:
