@@ -1378,6 +1378,8 @@ function createReport(name, r, s) {
 // typed, and a rename that could not be read back says so rather than
 // claiming the new name stuck.
 function renameReport(oldName, want, now) {
+  if (now && now.name === oldName && want !== oldName)
+    return "#" + oldName + ": השם לא שונה (השרת עדיין מחזיק #" + oldName + ")";
   if (now) return "#" + oldName + " שונה ל-#" + now.name;
   return "#" + oldName + ": השרת קיבל בקשה לשם #" + want
       + " (הדף לא יכול לקרוא את זה בחזרה: אינך חבר בו, או שהטעינה נכשלה)";

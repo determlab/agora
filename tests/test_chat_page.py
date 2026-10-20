@@ -697,8 +697,9 @@ def test_79_the_rename_read_back_never_claims_a_name_it_did_not_confirm():
       out.gone = renameReport("old", "new", undefined);
     """)
     assert got["read"] == "#old שונה ל-#new"
-    # What the server now holds wins over what was typed.
-    assert got["mismatch"] == "#old שונה ל-#old"
+    # What the server now holds wins over what was typed, and a rename the
+    # server did not apply is not reported as a success.
+    assert got["mismatch"] == "#old: השם לא שונה (השרת עדיין מחזיק #old)"
     assert got["gone"].startswith("#old: השרת קיבל בקשה לשם #new (הדף לא יכול לקרוא את זה בחזרה")
 
 
