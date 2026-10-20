@@ -137,6 +137,28 @@ def test_react(env):
     assert status == 400 and body["code"] == "REACTION_ALREADY_EXISTS"
 
 
+def test_react_by_name_only_stores_the_hex_code(env):
+    """#161: no emoji_code -> the server maps the name to Zulip's hex code, on
+    POST and on DELETE (the page sends the char, bot/zulip.py the name)."""
+    cto = env["cto"]
+    _, sent = cto("POST", "messages", type="stream", to="feature", topic="t", content="ok?")
+    mid = sent["id"]
+    for name in ("thumbs_up", "👍"):
+        status, body = cto("POST", f"messages/{mid}/reactions", emoji_name=name)
+        assert status == 200, body
+        _, got = cto("GET", "messages", anchor=mid, num_before=0, num_after=0)
+        [r] = got["messages"][0]["reactions"]
+        assert (r["emoji_name"], r["emoji_code"]) == (name, "1f44d")
+        status, body = cto("DELETE", f"messages/{mid}/reactions", emoji_name=name)
+        assert status == 200, body
+        _, got = cto("GET", "messages", anchor=mid, num_before=0, num_after=0)
+        assert got["messages"][0]["reactions"] == []
+    # DELETE by name removes a reaction added with the explicit code.
+    cto("POST", f"messages/{mid}/reactions", emoji_name="thumbs_up", emoji_code="1f44d")
+    status, _ = cto("DELETE", f"messages/{mid}/reactions", emoji_name="thumbs_up")
+    assert status == 200
+
+
 def test_unreact_removes_only_the_callers_own_reaction(env):
     """ops#249 batch 1: a reaction is a per-user toggle, not a message-wide
     flag — removing it never touches anyone else's."""
