@@ -281,6 +281,47 @@ def test_cli_invite_is_refused_while_321_is_off_and_never_takes_a_person(run, cl
         [tuple(r) for r in before]
 
 
+# -- who added and removed whom (issue #162) --------------------------------------
+
+def _log(run):
+    return [tuple(r) for r in run.store.q(
+        "SELECT stream_id, user_id, actor_id, op FROM membership_log ORDER BY id")]
+
+
+def test_an_invite_records_the_founder_as_actor_and_a_removal_records_too(run):
+    _create(run, "PM")
+    sid = run.store.stream_by_ref("PM")["stream_id"]
+    cto = run.bots["CTO"]["id"]
+    founder = run.api(run.founder)
+    founder("POST", "users/me/subscriptions", subscriptions=[{"name": "PM"}],
+            principals=[run.bots["CTO"]["email"]])
+    assert (sid, cto, run.founder["id"], "add") in _log(run)
+    founder("DELETE", "users/me/subscriptions", subscriptions=["PM"],
+            principals=[run.bots["CTO"]["email"]])
+    assert _log(run)[-1] == (sid, cto, run.founder["id"], "remove")
+    # nothing changed, nothing recorded
+    n = len(_log(run))
+    founder("DELETE", "users/me/subscriptions", subscriptions=["PM"],
+            principals=[run.bots["CTO"]["email"]])
+    assert len(_log(run)) == n
+
+
+def test_cli_read_members_json_prints_members_and_who_added_each(run, cli, capsys):
+    _create(run, "PM", run.bots["CTO"]["email"])
+    assert cli.main(["--as", "CTO", "read-members", "--room", "PM", "--json"]) == 0
+    body = json.loads(capsys.readouterr().out)
+    cto = next(m for m in body["members"] if m["email"] == run.bots["CTO"]["email"])
+    assert cto["added_by"] == run.founder["full_name"] and cto["added_at"]
+    assert [(h["op"], h["actor"]["email"]) for h in body["history"]
+            if h["member"]["email"] == run.bots["CTO"]["email"]] == \
+        [("add", run.founder["email"])]
+
+
+def test_cli_read_members_unknown_room_errors(run, cli, capsys):
+    assert cli.main(["--as", "CTO", "read-members", "--room", "nope", "--json"]) == 1
+    assert json.loads(capsys.readouterr().out)["ok"] is False
+
+
 # -- the whole path: the page's message, the server's members, wake's decision -----
 
 class _Spawner:

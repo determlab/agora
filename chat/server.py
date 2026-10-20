@@ -215,6 +215,10 @@ CREATE TABLE IF NOT EXISTS typing (
     stream_id INTEGER NOT NULL, topic TEXT COLLATE NOCASE NOT NULL,
     user_id INTEGER NOT NULL, started INTEGER NOT NULL, status TEXT NOT NULL DEFAULT 'typing',
     PRIMARY KEY (stream_id, topic, user_id));
+CREATE TABLE IF NOT EXISTS membership_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, ts INTEGER NOT NULL, stream_id INTEGER NOT NULL,
+    user_id INTEGER NOT NULL, actor_id INTEGER, op TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS membership_log_stream ON membership_log (stream_id, id);
 """
 
 
@@ -419,7 +423,40 @@ class Store:
         return self.x("INSERT INTO streams (name, invite_only) VALUES (?,?)",
                       (name, int(invite_only)))
 
-    def subscribe(self, user_id: int, stream_id: int) -> bool:
+    def log_membership(self, stream_id: int, user_id: int, actor_id: int | None,
+                       op: str) -> None:
+        """One row per member add or remove (issue #162): when, who did it
+        (``actor_id``; None when the server itself did, e.g. bootstrap), which
+        room, which member. ``op`` is ``add`` or ``remove``."""
+        self.x("INSERT INTO membership_log (ts, stream_id, user_id, actor_id, op) "
+               "VALUES (?,?,?,?,?)", (int(time.time()), stream_id, user_id, actor_id, op))
+
+    def unsubscribe(self, user_id: int, stream_id: int, actor_id: int | None = None) -> bool:
+        with self.tx():
+            gone = self.db.execute("DELETE FROM subscriptions WHERE user_id=? AND "
+                                   "stream_id=?", (user_id, stream_id)).rowcount > 0
+            if gone:
+                self.log_membership(stream_id, user_id, actor_id, "remove")
+            return gone
+
+    def membership_history(self, stream_id: int) -> list[dict]:
+        out = []
+        for r in self.q("SELECT * FROM membership_log WHERE stream_id=? ORDER BY id",
+                        (stream_id,)):
+            def who(uid):
+                u = self.one("SELECT email, full_name, is_bot FROM users WHERE id=?", (uid,)) \
+                    if uid is not None else None
+                return None if u is None else {"user_id": uid, "email": u["email"],
+                                               "full_name": u["full_name"],
+                                               "is_bot": bool(u["is_bot"])}
+            out.append({"id": r["id"], "ts": r["ts"], "op": r["op"],
+                        "member": who(r["user_id"]),
+                        "actor": who(r["actor_id"]) or {"user_id": None, "email": None,
+                                                        "full_name": "server",
+                                                        "is_bot": False}})
+        return out
+
+    def subscribe(self, user_id: int, stream_id: int, actor_id: int | None = None) -> bool:
         """Joining a stream must not make its earlier history unread: a new
         subscription gets a floor at that stream's newest message id right
         away, so only a message sent after the join counts. ``OR REPLACE``
@@ -431,6 +468,7 @@ class Store:
                                   (user_id, stream_id)).rowcount > 0
             if new:
                 self._set_floor_to_newest(user_id, stream_id)
+                self.log_membership(stream_id, user_id, actor_id, "add")
             return new
 
     def _set_floor_to_newest(self, user_id: int, stream_id: int) -> None:
@@ -1609,7 +1647,7 @@ class Chat:
                     raise ApiError(AGENTS_ROOM_READ_ONLY + " No bot is a member of it.",
                                    "AGENTS_ROOM_READ_ONLY")
                 for u in users:
-                    new = self.s.subscribe(u["id"], row["stream_id"])
+                    new = self.s.subscribe(u["id"], row["stream_id"], me["id"])
                     if new:
                         self._subscription_events(row, u, "add")
                     into = done if new else already
@@ -1627,8 +1665,7 @@ class Chat:
                     raise _no_stream(name)
                 n = 0
                 for u in users:
-                    gone = self.s.db.execute("DELETE FROM subscriptions WHERE user_id=? AND "
-                                             "stream_id=?", (u["id"], row["stream_id"])).rowcount
+                    gone = int(self.s.unsubscribe(u["id"], row["stream_id"], me["id"]))
                     if gone:
                         self._subscription_events(row, u, "remove")
                     n += gone
@@ -1750,7 +1787,8 @@ class Chat:
         if st and st.group(2) and method == "GET":
             sid = self._stream_by_id(me, int(st.group(1)))["stream_id"]
             return {"subscribers": [r[0] for r in self.s.q(
-                "SELECT user_id FROM subscriptions WHERE stream_id=? ORDER BY user_id", (sid,))]}
+                "SELECT user_id FROM subscriptions WHERE stream_id=? ORDER BY user_id", (sid,))],
+                    "history": self.s.membership_history(sid)}
         if st and not st.group(2) and method == "PATCH":
             return self.update_stream(me, int(st.group(1)), p)
         if st and not st.group(2) and method == "DELETE":

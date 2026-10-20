@@ -398,6 +398,36 @@ def cmd_archive(client: ZulipClient, stream: str, topic: str | None, archive: bo
     return 0
 
 
+def cmd_read_members(client: ZulipClient, room: str, as_json: bool = False) -> int:
+    """The room's members and its add/remove history, with who did each
+    (issue #162). An unknown room raises ZulipError (exit 1), never an empty
+    list. A member added before the history existed has ``added_by`` null."""
+    room = room.lstrip("#")
+    sid = client._request("GET", "get_stream_id", {"stream": room})["stream_id"]
+    got = client._request("GET", f"streams/{sid}/members")
+    users = {u["user_id"]: u for u in client._request("GET", "users").get("members", [])}
+    history = got.get("history", [])
+    members = []
+    for uid in got.get("subscribers", []):
+        u = users.get(uid, {})
+        adds = [h for h in history if h["op"] == "add" and h["member"]["user_id"] == uid]
+        last = adds[-1] if adds else None
+        members.append({"user_id": uid, "email": u.get("email"), "full_name": u.get("full_name"),
+                        "is_bot": u.get("is_bot"),
+                        "added_by": last["actor"]["full_name"] if last else None,
+                        "added_at": last["ts"] if last else None})
+    if as_json:
+        print(json.dumps({"ok": True, "room": room, "stream_id": sid, "members": members,
+                          "history": history}, ensure_ascii=False))
+        return 0
+    for m in members:
+        by = f"added by {m['added_by']}" if m["added_by"] else "no record of who added"
+        print(f"{m['full_name']} <{m['email']}>: {by}")
+    for h in history:
+        print(f"  {h['ts']} {h['op']} {h['member']['full_name']} by {h['actor']['full_name']}")
+    return 0
+
+
 def cmd_unread(client: ZulipClient, as_json: bool = False) -> int:
     """Unread counts per stream and topic (issue #168), from GET /unread."""
     data = client._request("GET", "unread")
@@ -519,6 +549,10 @@ def main(argv: list[str] | None = None) -> int:
     typing_p.add_argument("--stop", action="store_true",
                           help="clear it now, rather than waiting for the server's timeout")
     typing_p.add_argument("--json", action="store_true", help="one JSON object on stdout")
+    rm_p = sub.add_parser("read-members", help="print a room's members and who added or "
+                                               "removed each (issue #162)")
+    rm_p.add_argument("--room", required=True)
+    rm_p.add_argument("--json", action="store_true", help="one JSON object on stdout")
     mark = sub.add_parser("mark-read", help="mark a topic, or a whole stream, read")
     mark.add_argument("--stream", required=True)
     mark.add_argument("--topic", help="only this topic; every topic in the stream without it")
@@ -538,6 +572,13 @@ def main(argv: list[str] | None = None) -> int:
             try:
                 return cmd_archive(client, args.stream, args.topic,
                                    args.cmd == "archive", args.json)
+            except ZulipError as exc:
+                if args.json:
+                    print(json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False))
+                raise
+        if args.cmd == "read-members":
+            try:
+                return cmd_read_members(client, args.room, args.json)
             except ZulipError as exc:
                 if args.json:
                     print(json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False))
