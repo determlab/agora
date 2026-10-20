@@ -893,6 +893,18 @@ def test_spawner_resolves_argv0_and_keeps_the_message_on_stdin(wake, tmp_path, m
     for ch in ("&", "|", '"', "%"):
         assert not any(ch in a for a in seen["argv"])
     assert seen["proc"].stdin.data.decode("utf-8") == nasty
+    assert seen["kw"]["env"]["CLAUDE_CODE_DISABLE_TERMINAL_TITLE"] == "1"  # issue #172
+
+
+def test_main_names_the_console_window(wake, monkeypatch):
+    titles = []
+    monkeypatch.setattr(wake, "set_console_title", lambda: titles.append(wake.CONSOLE_TITLE))
+    monkeypatch.setattr(wake, "load_config", lambda: {
+        "caps": {}, "founder_id": 1, "cwd": ".", "bot_wakes": False, "bots": [],
+        "missing": [], "skipped": {}})
+    monkeypatch.setattr(wake, "run", lambda cfg, waker: 0)
+    assert wake.main([]) == 0
+    assert titles == ["agora-wake (do not close)"]
 
 
 def test_spawner_names_the_fix_when_claude_is_not_on_path(wake, tmp_path, monkeypatch):

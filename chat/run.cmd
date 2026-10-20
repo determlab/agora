@@ -1,4 +1,5 @@
 @echo off
+title agora - chat server (do not close)
 REM Our own chat server (issues #61, #72): set up and serve on http://127.0.0.1:8095.
 REM Ctrl+C to stop. Extra flags pass through, e.g.  run.cmd --port 8096 --no-update
 REM --dashboard-cmd (issue #81): the server runs this PC's ops dashboard every 5 minutes.
