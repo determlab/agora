@@ -463,3 +463,65 @@ def test_dry_run_prints_duty_decisions_and_changes_nothing(wake, tmp_path):
     assert json.loads(json.dumps(out[0]))["line"].startswith("duty PM wake spawn session ")
     assert w.spawner.started == []
     assert not (tmp_path / "state.json").exists() and log_lines(tmp_path, "PM") == []
+
+
+# -- agora #181: duty spawn finds claude off PATH; a failed spawn keeps the slot --
+
+def test_duty_spawn_without_claude_on_path_starts_from_the_configured_path(wake, tmp_path, monkeypatch):
+    claude = tmp_path / "npm" / "claude"
+    claude.parent.mkdir()
+    claude.write_text("#!/bin/sh\n")
+    claude.chmod(0o755)
+    monkeypatch.setattr(wake.shutil, "which", lambda name, path=None: None)  # the duty PATH has no claude
+    monkeypatch.setenv("CLAUDE_BIN", str(claude))
+    seen = {}
+
+    class Proc:
+        pid = 4242
+        stdin = type("S", (), {"write": lambda s, b: None, "close": lambda s: None})()
+
+    def popen(argv, **kw):
+        seen["argv"] = argv
+        return Proc()
+
+    monkeypatch.setattr(wake.subprocess, "Popen", popen)
+    write_duty(wake, "CTO", [item("x")])
+    w = make(wake, tmp_path, spawner=wake.Spawner(log_dir=tmp_path / "logs"))
+    out = w.duty_tick(["CTO"])
+    assert out[0]["action"] == "duty-wake"
+    assert seen["argv"][0] == str(claude)
+
+
+def test_resolve_program_looks_in_known_npm_folders(wake, tmp_path, monkeypatch):
+    claude = tmp_path / ".npm-global" / "bin" / "claude"
+    claude.parent.mkdir(parents=True)
+    claude.write_text("#!/bin/sh\n")
+    claude.chmod(0o755)
+    monkeypatch.setattr(wake.shutil, "which", lambda name, path=None: str(claude) if path else None)
+    monkeypatch.delenv("CLAUDE_BIN", raising=False)
+    monkeypatch.setattr(wake, "DOTENV", tmp_path / "no.env")
+    monkeypatch.setattr(wake.Path, "home", classmethod(lambda cls: tmp_path))
+    assert wake.resolve_program(["claude", "-p"]) == [str(claude), "-p"]
+
+
+def test_a_failed_duty_spawn_can_retry_at_the_next_check(wake, tmp_path):
+    clock = Clock()
+    ok = FakeSpawner()
+
+    class Flaky(FakeSpawner):
+        fail = True
+
+        def start(self, *a, **k):
+            if self.fail:
+                raise wake.SpawnError("cannot start 'claude': it is not on PATH")
+            return ok.start(*a, **k)
+
+    sp = Flaky()
+    write_duty(wake, "CTO", [item("x")])
+    w = make(wake, tmp_path, clock, spawner=sp)
+    assert w.duty_tick(["CTO"])[0]["action"] == "duty-skip"
+    assert w.state["duty"]["CTO"]["wakes"] == []
+    sp.fail = False
+    clock.t += wake.DUTY_CHECK_SECONDS
+    out = w.duty_tick(["CTO"])
+    assert out[0]["action"] == "duty-wake" and len(ok.started) == 1
