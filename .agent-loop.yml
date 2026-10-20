@@ -21,7 +21,7 @@ max_rounds: 4
 # What this buys is that routine work lands without the founder clicking merge.
 # What still stops: anything at a hard stop, and anything not yet approved at the
 # issue — `agent:go` is not the loop's to apply.
-auto_merge: true
+auto_merge: false
 merge_method: squash
 
 # Agora has no third-party runtime dependencies and is not packaged, so there is
