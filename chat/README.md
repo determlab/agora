@@ -151,6 +151,19 @@ reload never disagrees with what was on screen, and shows the total in the
 tab title as `(N) Agora`. From a shell: `python bot/zulip.py unread --json`
 and `python bot/zulip.py mark-read --stream S [--topic T]`.
 
+## What the message view renders (issue #156)
+
+Everything is built with `textContent`; a message is never parsed as markup.
+Per line, a block of its own:
+
+- `- item` or `* item` lines make a bullet list; `1. item` lines a numbered one.
+- A line with any Hebrew letter is `dir="rtl"`, any other line `dir="auto"`;
+  a list item follows the same rule, so an English word first does not flip it.
+- Inside a line: `code`, `@**Name**`, a bare `http(s)` URL, `repo#N` refs.
+- A ``` fence is a left-to-right code box with a copy button.
+
+An agent sends it as is: `python bot/zulip.py send ... --text $'- a\n- b'`.
+
 ## Accounts, by hand
 
     python chat/server.py bootstrap --json                      # an admin bot

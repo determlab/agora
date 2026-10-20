@@ -383,7 +383,8 @@ def test_the_page_never_renders_markup_from_a_string():
     # Message text, the quote inside it and its code all end in textContent.
     assert "fillBody(body, m.content)" in script and "fillBody(body, q.rest)" in script
     assert "n.textContent = part.replace(" in _function("fillBody")
-    assert "el.append(...inlineNodes(" in _function("fillBody")
+    assert "el.append(...bodyBlocks(" in _function("fillBody")
+    assert "append(...inlineNodes(" in _function("bodyBlocks")
     assert "n.textContent = p.text" in _function("inlineNodes")
     assert "qt.textContent = q.quote" in script
     assert '.textContent = q.sender' in script and '.textContent = m.sender_full_name' in script
@@ -1083,21 +1084,26 @@ def test_77_inline_code_and_mentions_render_as_elements_never_as_markup():
         {"kind": "text", "text": " <img src=x onerror=alert(1)>"}]
     assert got["none"] == [[{"kind": "text", "text": "no marks `` @**"}],
                            [{"kind": "text", "text": "`a\nb`"}]]
-    dom = _js(("textDir", "inlineParts", "inlineNodes", "fillBody"), r"""
+    dom = _js(("textDir", "hasHebrew", "inlineParts", "inlineNodes", "bodyBlocks", "fillBody"), r"""
       const el = document.createElement("div");
       fillBody(el, "@**CTO** שלום `x<y>` <b>hi</b>\n```py\nprint(1)\n```\nend");
       out.body = dump(el);
     """, prelude=FAKE_DOM)
     body = dom["body"]
     assert body["dir"] == "rtl"
-    kinds = [(k.get("tag"), k.get("cls"), k.get("dir"), k["text"]) for k in body["kids"]]
+    # Each line is its own block (#156); the inline parts sit inside it.
+    assert [(k["tag"], k["cls"], k["dir"]) for k in body["kids"]] == [
+        ("div", "line", "rtl"), ("div", "codebox", ""), ("div", "line", "auto")]
+    inline = body["kids"][0]["kids"]
+    kinds = [(k.get("tag"), k.get("cls"), k.get("dir"), k["text"]) for k in inline]
     assert kinds == [
         ("strong", "mention-name", "ltr", "@CTO"), (None, None, None, " שלום "),
-        ("code", "chip copy", "ltr", "x<y>"), (None, None, None, " <b>hi</b>\n"),
-        ("div", "codebox", "", "print(1)\nהעתק"), (None, None, None, "\nend")]
+        ("code", "chip copy", "ltr", "x<y>"), (None, None, None, " <b>hi</b>")]
+    assert body["kids"][1]["text"] == "print(1)\nהעתק"
+    assert body["kids"][2]["text"] == "end"
     # Every element's content is one text node: nothing was parsed.
-    for k in body["kids"]:
-        if "tag" in k and k["tag"] != "div":
+    for k in inline:
+        if "tag" in k:
             assert k["kids"] == [{"text": k["text"]}]
     css = _css()
     ment = _rule(".mention-name", css)
@@ -1779,19 +1785,21 @@ def test_85_links_render_as_real_anchor_elements_opening_in_a_new_tab():
 
 
 def test_85_a_hebrew_message_with_a_link_renders_as_dom_nodes_and_keeps_rtl_order():
-    dom = _js(("textDir", "inlineParts", "inlineNodes", "fillBody"), r"""
+    dom = _js(("textDir", "hasHebrew", "inlineParts", "inlineNodes", "bodyBlocks", "fillBody"), r"""
       const el = document.createElement("div");
       fillBody(el, "שלום https://example.com/x ops#94 עולם");
       out.body = dump(el);
     """, prelude=FAKE_DOM)
     body = dom["body"]
     assert body["dir"] == "rtl"
-    kinds = [(k.get("tag"), k.get("dir"), k["text"]) for k in body["kids"]]
+    assert [(k["tag"], k["dir"]) for k in body["kids"]] == [("div", "rtl")]
+    inline = body["kids"][0]["kids"]
+    kinds = [(k.get("tag"), k.get("dir"), k["text"]) for k in inline]
     assert kinds == [
         (None, None, "שלום "), ("a", "ltr", "https://example.com/x"), (None, None, " "),
         ("a", "ltr", "ops#94"), (None, None, " עולם")]
     # Every link's content is one text node: nothing was parsed as markup.
-    for k in body["kids"]:
+    for k in inline:
         if k.get("tag") == "a":
             assert k["kids"] == [{"text": k["text"]}]
     assert 'id="send-status"' not in PAGE.read_text(encoding="utf-8")
@@ -3362,7 +3370,7 @@ COPY_PRELUDE = FAKE_DOM + """
   const timers = [];
   const setTimeout = (f, ms) => { timers.push([f, ms]); return timers.length; };
 """
-COPY_FUNCS = ("textDir", "copyText", "inlineParts", "inlineNodes", "fillBody")
+COPY_FUNCS = ("textDir", "copyText", "hasHebrew", "inlineParts", "inlineNodes", "bodyBlocks", "fillBody")
 
 
 def test_173_a_fenced_block_is_an_ltr_box_with_a_copy_button_for_the_exact_text():

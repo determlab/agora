@@ -154,6 +154,8 @@ button.archived-name:hover { color: var(--text); }
 .msg.mine .bubble { background: var(--mine); border-color: transparent; }
 .msg.mention .bubble { background: var(--mention); border-color: var(--mention-line); }
 .body { white-space: pre-wrap; overflow-wrap: anywhere; }
+.body .line.blank { min-height: 1em; }
+.body ul, .body ol { margin: .15rem 0; padding-inline-start: 1.4rem; }
 /* A long message folds to 6 lines, its code blocks to 3, until "הצג עוד". */
 .body.folded { max-height: calc(6 * 1.45em); overflow: hidden; }
 .body.folded pre { max-height: calc(3 * 1.45em + .8rem); overflow: hidden; }
@@ -3297,6 +3299,52 @@ async function copyText(text, btn) {
   setTimeout(() => { btn.textContent = "העתק"; }, 2000);
 }
 
+// A line with any Hebrew letter reads right-to-left, wherever the letter is:
+// agents start a Hebrew line with an English word, a path or a link (#156).
+function hasHebrew(line) {
+  return /[\u0590-\u05FF\uFB1D-\uFB4F]/.test(String(line));
+}
+
+// One text segment (no code fence in it) as blocks: a run of "- " / "* "
+// lines is a ul, a run of "N. " lines an ol, every other line is a div. The
+// text of each is inlineNodes, so nothing a message says is parsed as markup.
+function bodyBlocks(text) {
+  const out = [];
+  const dirOf = (line) => (hasHebrew(line) ? "rtl" : "auto");
+  let list = null, kind = null, any = false;
+  for (const line of String(text).split("\n")) {
+    const b = /^ {0,3}[-*] +(.*\S.*)$/.exec(line);
+    const n = /^ {0,3}(\d+)\. +(.*\S.*)$/.exec(line);
+    const want = b ? "ul" : n ? "ol" : null;
+    if (want !== kind) {
+      if (list) list.dir = any ? "rtl" : "auto";
+      list = want ? document.createElement(want) : null;
+      if (list) {
+        if (n && n[1] !== "1") list.setAttribute("start", n[1]);
+        out.push(list);
+      }
+      kind = want;
+      any = false;
+    }
+    if (list) {
+      const item = (b || n)[b ? 1 : 2];
+      const li = document.createElement("li");
+      li.dir = dirOf(item);
+      any = any || hasHebrew(item);
+      li.append(...inlineNodes(item));
+      list.append(li);
+    } else {
+      const div = document.createElement("div");
+      div.className = line ? "line" : "line blank";
+      div.dir = dirOf(line);
+      div.append(...inlineNodes(line));
+      out.push(div);
+    }
+  }
+  if (list) list.dir = any ? "rtl" : "auto";
+  return out;
+}
+
 function fillBody(el, text) {
   // Code (``` fences) stays left-to-right inside a right-to-left message.
   el.dir = textDir(text);
@@ -3319,7 +3367,11 @@ function fillBody(el, text) {
       box.append(n, btn);
       el.append(box);
     } else {
-      el.append(...inlineNodes(i % 2 ? "```" + part : part));
+      // The line break next to a code box belongs to the box, not to a line.
+      let t = i % 2 ? "```" + part : part;
+      if (i > 0 && !(i % 2)) t = t.replace(/^\n/, "");
+      if (i < parts.length - 1 && !(i % 2)) t = t.replace(/\n$/, "");
+      if (t !== "" || parts.length === 1) el.append(...bodyBlocks(t));
     }
   });
 }
