@@ -1105,6 +1105,63 @@ def test_77_inline_code_and_mentions_render_as_elements_never_as_markup():
     assert "background: var(--code)" in _rule(".chip", css)
 
 
+# -- issue #156: lists in a message, and each line right-to-left by its own letters
+
+BODY_FUNCS = ("textDir", "hasHebrew", "inlineParts", "inlineNodes", "bodyBlocks", "fillBody")
+
+
+def _blocks(text: str) -> list:
+    return _js(BODY_FUNCS, """
+      const el = document.createElement("div");
+      fillBody(el, %s);
+      out.kids = el.childNodes.map(dump);
+    """ % json.dumps(text), prelude=FAKE_DOM)["kids"]
+
+
+def test_156_dash_and_star_lines_become_one_ul_with_an_li_each():
+    for text in ("- a\n- b", "* a\n* b"):
+        kids = _blocks(text)
+        assert [k["tag"] for k in kids] == ["ul"]
+        assert [(li["tag"], li["text"]) for li in kids[0]["kids"]] == [("li", "a"), ("li", "b")]
+
+
+def test_156_numbered_lines_become_one_ol():
+    kids = _blocks("1. a\n2. b")
+    assert [k["tag"] for k in kids] == ["ol"]
+    assert [li["text"] for li in kids[0]["kids"]] == ["a", "b"]
+
+
+def test_156_markup_in_an_item_stays_text_and_inline_marks_still_work():
+    kids = _blocks("- <b>x</b> `c` ops#94")
+    li = kids[0]["kids"][0]
+    assert li["text"] == "<b>x</b> c ops#94"
+    assert [k.get("tag") for k in li["kids"]] == [None, "code", None, "a"]
+    assert li["kids"][0] == {"text": "<b>x</b> "}
+
+
+def test_156_a_list_ends_at_a_plain_line_and_a_dash_without_a_space_is_text():
+    kids = _blocks("intro\n- a\n- b\nafter\n-x")
+    assert [k["tag"] for k in kids] == ["div", "ul", "div", "div"]
+    assert kids[3]["text"] == "-x"
+
+
+def test_156_a_line_with_any_hebrew_is_rtl_and_the_rest_is_auto():
+    kids = _blocks("ops#412 עובד עכשיו\ngit log")
+    assert [(k["tag"], k["dir"], k["text"]) for k in kids] == [
+        ("div", "rtl", "ops#412 עובד עכשיו"), ("div", "auto", "git log")]
+
+
+def test_156_each_list_item_follows_the_same_rule():
+    kids = _blocks("- git log\n- זה עובד")
+    assert [li["dir"] for li in kids[0]["kids"]] == ["auto", "rtl"]
+    assert kids[0]["dir"] == "rtl"
+
+
+def test_156_a_code_fence_stays_a_codebox_between_blocks():
+    kids = _blocks("שלום\n```\nx\n```\n- a")
+    assert [(k["tag"], k["cls"]) for k in kids] == [("div", "line"), ("div", "codebox"), ("ul", "")]
+
+
 def test_77_a_mentioned_bubble_is_filled_yellow_without_a_side_bar():
     rule = _rule(".msg.mention .bubble")
     assert "background: var(--mention)" in rule and "border-inline-start" not in rule
