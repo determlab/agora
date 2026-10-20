@@ -82,6 +82,18 @@ NEWEST = 1 << 62
 MAX_CONTENT = 10_000  # Zulip's own limit, in characters
 POLL_SECONDS = 50.0  # an idle long poll answers with a heartbeat after this
 QUEUE_TTL = 7 * 24 * 3600  # a queue nobody polled for this long is gone
+# A reaction sent with a name only gets Zulip's hex code for it: the page's
+# picker set (by Zulip name and by the char the page sends) and common aliases.
+REACTION_CODES = {
+    "thumbs_up": "1f44d", "+1": "1f44d", "👍": "1f44d",
+    "heart": "2764", "❤️": "2764", "❤": "2764",
+    "joy": "1f602", "😂": "1f602",
+    "open_mouth": "1f62e", "astonished": "1f62e", "😮": "1f62e",
+    "cry": "1f622", "😢": "1f622",
+    "pray": "1f64f", "folded_hands": "1f64f", "🙏": "1f64f",
+    "check": "2705", "check_mark": "2705", "✅": "2705",
+    "tada": "1f389", "🎉": "1f389",
+}
 # `@**all**` and its aliases notify everyone in the stream: for the hook's
 # wake rule that is a mention like any other.
 WILDCARDS = ("@**all**", "@**everyone**", "@**channel**", "@**stream**")
@@ -1264,7 +1276,8 @@ class Chat:
         name = p.get("emoji_name")
         if not name:
             raise ApiError("Missing 'emoji_name' argument", "REQUEST_VARIABLE_MISSING")
-        code, rtype = p.get("emoji_code") or name, p.get("reaction_type") or "unicode_emoji"
+        code = p.get("emoji_code") or REACTION_CODES.get(name, name)
+        rtype = p.get("reaction_type") or "unicode_emoji"
         with self.s.tx():
             try:
                 self.s.x("INSERT INTO reactions VALUES (?,?,?,?,?)",
@@ -1276,7 +1289,8 @@ class Chat:
                 "user": {"user_id": me["id"], "email": me["email"],
                          "full_name": me["full_name"]},
                 "emoji_name": name, "emoji_code": code, "reaction_type": rtype})
-        return {}
+        # The stored code, so the page's optimistic add joins the live event's chip.
+        return {"emoji_code": code, "reaction_type": rtype}
 
     # DELETE /messages/{id}/reactions (ops#249 batch 1): removes the
     # caller's own reaction, keyed the same way POST adds one — never by
@@ -1286,7 +1300,8 @@ class Chat:
         name = p.get("emoji_name")
         if not name:
             raise ApiError("Missing 'emoji_name' argument", "REQUEST_VARIABLE_MISSING")
-        code, rtype = p.get("emoji_code") or name, p.get("reaction_type") or "unicode_emoji"
+        code = p.get("emoji_code") or REACTION_CODES.get(name, name)
+        rtype = p.get("reaction_type") or "unicode_emoji"
         with self.s.tx():
             gone = self.s.db.execute(
                 "DELETE FROM reactions WHERE message_id=? AND user_id=? AND emoji_code=? "
