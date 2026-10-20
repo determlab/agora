@@ -270,6 +270,24 @@ def test_255_automatic_compose_focus_is_guarded_but_a_tap_driven_one_is_not():
     assert "box.focus();" in choose_pick and "isTouch" not in choose_pick
 
 
+def test_165_rooms_drawer_closes_by_x_backdrop_and_back_without_changing_room():
+    page = PAGE.read_text(encoding="utf-8")
+    script = _markup().script
+    assert 'id="side-close"' in page and 'id="side-backdrop"' in page
+    assert '#app.side-open #side-backdrop' in page
+    # all three close routes are wired
+    assert '$("side-close").addEventListener("click", closeSide)' in script
+    assert '$("side-backdrop").addEventListener("click", closeSide)' in script
+    assert 'addEventListener("popstate"' in script
+    # opening pushes the entry Back pops; closing by X/backdrop consumes it
+    assert "history.pushState" in _function("openSide")
+    assert "history.back()" in _function("closeSide")
+    # none of them selects a room
+    for name in ("openSide", "closeSide"):
+        assert "openRoom" not in _function(name)
+    assert 'classList.remove("side-open")' in script.split('addEventListener("popstate"')[1].split("\n")[0]
+
+
 def test_the_csp_hash_survives_a_crlf_checkout(tmp_path):
     crlf = tmp_path / "page.html"
     crlf.write_bytes(PAGE.read_bytes().replace(b"\r\n", b"\n").replace(b"\n", b"\r\n"))
@@ -2763,7 +2781,7 @@ def test_322_opening_a_room_reads_all_its_messages_across_old_topics(world):
       const S = {open: null, shown: new Set(), msgs: [], members: new Map(), streams: []};
       const isTouch = () => true;
       function refreshCount() {} function markRoomRead(id) { calls.push(["read", id]); }
-      function renderStreams() {} function seedTyping() {}
+      function renderStreams() {} function seedTyping() {} function closeSide() {}
       function addMessages(list) { S.msgs.push(...(list || [])); }
       const ROOM_TOPIC = "chat"; const AGENTS_ROOM = "סוכנים";
     """
