@@ -1372,7 +1372,7 @@ def test_77_a_toast_follows_each_action_and_says_success_only_when_the_server_di
 
 
 def test_reaction_chips_group_by_emoji_and_mark_mine():
-    got = _js(("renderReactions",), """
+    got = _js(("reactionGlyph", "renderReactions"), """
       const node = document.createElement("div");
       const box = document.createElement("div");
       box.className = "reactions";
@@ -1391,7 +1391,7 @@ def test_toggle_reaction_adds_then_removes_through_the_api():
     prelude = API_STUB + FAKE_DOM + """
       const S = {me: {user_id: 1, full_name: "Me"}};
     """
-    got = _js(("toggleReaction", "renderReactions"), """
+    got = _js(("toggleReaction", "reactionGlyph", "renderReactions"), """
       const node = document.createElement("div");
       const box = document.createElement("div");
       box.className = "reactions";
@@ -1428,7 +1428,7 @@ def test_toggle_reaction_does_not_double_count_a_live_event_that_wins_the_race()
         return {};
       }
     """
-    got = _js(("toggleReaction", "renderReactions", "onReaction"), """
+    got = _js(("toggleReaction", "reactionGlyph", "renderReactions", "onReaction"), """
       const node = document.createElement("div");
       const box = document.createElement("div");
       box.className = "reactions";
@@ -1445,7 +1445,7 @@ def test_toggle_reaction_does_not_double_count_a_live_event_that_wins_the_race()
 
 
 def test_a_live_reaction_event_updates_the_open_message_in_place():
-    got = _js(("onReaction", "renderReactions"), """
+    got = _js(("onReaction", "reactionGlyph", "renderReactions"), """
       const node = document.createElement("div");
       const box = document.createElement("div");
       box.className = "reactions";
@@ -1516,6 +1516,35 @@ def test_254_the_reaction_row_sits_under_the_message_text():
     assert got["order"] is True
     assert got["btnPresent"] is True
     assert got["chips"] == 0
+
+
+def test_zulip_api_reaction_shows_the_emoji_and_a_tap_toggles_its_name():
+    """#161: a bot/API reaction is {emoji_name: thumbs_up, emoji_code: 1f44d};
+    the chip shows the glyph, and tapping it sends Zulip's name (no duplicate)."""
+    prelude = API_STUB + FAKE_DOM + """
+      const S = {me: {user_id: 1, full_name: "Me"}};
+    """
+    got = _js(("toggleReaction", "reactionGlyph", "renderReactions"), """
+      const node = document.createElement("div");
+      const box = document.createElement("div");
+      box.className = "reactions";
+      node.append(box);
+      $("messages").querySelector = () => node;
+      const m = {id: 7, reactions: [
+        {emoji_name: "thumbs_up", emoji_code: "1f44d", reaction_type: "unicode_emoji", user_id: 2},
+        {emoji_name: "family", emoji_code: "1f468-200d-1f469", reaction_type: "unicode_emoji", user_id: 2},
+        {emoji_name: "weird", emoji_code: "zz", reaction_type: "unicode_emoji", user_id: 2},
+        {emoji_name: "party", emoji_code: "1f389", reaction_type: "realm_emoji", user_id: 2}]};
+      renderReactions(node, m);
+      out.chips = box.children.map((c) => c.textContent);
+      box.children[0].on.click();
+      await new Promise((r) => setTimeout(r, 0));
+      out.call = calls[0];
+      out.after = box.children.map((c) => c.textContent);
+    """, prelude=prelude)
+    assert got["chips"] == ["\U0001F44D 1", "\U0001F468‍\U0001F469 1", "weird 1", "party 1"]
+    assert got["call"] == ["POST", "messages/7/reactions", {"emoji_name": "thumbs_up"}]
+    assert got["after"][0] == "\U0001F44D 2" and len(got["after"]) == 4
 
 
 # -- ops#249 batch 1: the typing / "working on it" indicator

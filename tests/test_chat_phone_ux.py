@@ -77,7 +77,7 @@ def _template_js() -> str:
 
 
 MSG_FUNCS = ("el", "isLong", "textDir", "parseQuote", "inlineParts", "inlineNodes", "fillBody",
-             "roleOf", "initial", "renderReactions", "wireReactBtn", "tapMessage", "messageNode")
+             "roleOf", "initial", "reactionGlyph", "renderReactions", "wireReactBtn", "tapMessage", "messageNode")
 
 
 def _msg_prelude(extra: str = "") -> str:

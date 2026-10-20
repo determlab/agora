@@ -3492,8 +3492,13 @@ async function toggleReaction(m, name) {
       // exact reaction from the live event while the POST was in flight.
       // Appending unconditionally here would double it.
       if (!mine()) {
-        m.reactions = [...(m.reactions || []), {emoji_name: name, emoji_code: name,
-                       reaction_type: "unicode_emoji", user_id: S.me.user_id,
+        // Reuse the code/type of the same-named reaction already on the
+        // message (Zulip's hex code), so the tap joins its chip, not a twin.
+        const twin = (m.reactions || []).find((r) => r.emoji_name === name);
+        m.reactions = [...(m.reactions || []), {emoji_name: name,
+                       emoji_code: twin ? twin.emoji_code : name,
+                       reaction_type: twin ? twin.reaction_type : "unicode_emoji",
+                       user_id: S.me.user_id,
                        user: {id: S.me.user_id, full_name: S.me.full_name}}];
       }
     }
@@ -3522,6 +3527,18 @@ function onReaction(ev) {
   if (node) renderReactions(node, m);
 }
 
+// Zulip-API reactions carry a name ("thumbs_up") and a hex code ("1f44d",
+// multi-part joined with "-"); show the emoji, else fall back to the name.
+// A page-added reaction's code is the emoji char itself (not hex) -> name.
+function reactionGlyph(r) {
+  if (r.reaction_type === "unicode_emoji" && /^[0-9a-f]+(-[0-9a-f]+)*$/i.test(r.emoji_code || "")) {
+    try {
+      return String.fromCodePoint(...r.emoji_code.split("-").map((h) => parseInt(h, 16)));
+    } catch (e) { /* out-of-range code point: fall through to the name */ }
+  }
+  return r.emoji_name;
+}
+
 function renderReactions(node, m) {
   const box = node.querySelector(".reactions");
   // The add-reaction button lives in this same row (ops#254); only the
@@ -3532,7 +3549,7 @@ function renderReactions(node, m) {
   for (const r of m.reactions || []) {
     const key = r.emoji_code + "|" + r.reaction_type;
     let g = groups.get(key);
-    if (!g) { g = {name: r.emoji_name, count: 0, mine: false}; groups.set(key, g); }
+    if (!g) { g = {name: r.emoji_name, glyph: reactionGlyph(r), count: 0, mine: false}; groups.set(key, g); }
     g.count++;
     if (S.me && r.user_id === S.me.user_id) g.mine = true;
   }
@@ -3540,7 +3557,7 @@ function renderReactions(node, m) {
     const chip = document.createElement("button");
     chip.type = "button";
     chip.className = "reaction-chip" + (g.mine ? " mine" : "");
-    chip.textContent = g.name + " " + g.count;
+    chip.textContent = g.glyph + " " + g.count;
     chip.title = g.mine ? "הסירו את הריאקציה שלכם" : "הוסיפו את הריאקציה הזו";
     chip.addEventListener("click", () => toggleReaction(m, g.name));
     box.append(chip);
