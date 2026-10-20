@@ -472,7 +472,7 @@ def test_duty_spawn_without_claude_on_path_starts_from_the_configured_path(wake,
     claude.parent.mkdir()
     claude.write_text("#!/bin/sh\n")
     claude.chmod(0o755)
-    monkeypatch.setattr(wake.shutil, "which", lambda name: None)  # the duty PATH has no claude
+    monkeypatch.setattr(wake.shutil, "which", lambda name, path=None: None)  # the duty PATH has no claude
     monkeypatch.setenv("CLAUDE_BIN", str(claude))
     seen = {}
 

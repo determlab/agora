@@ -896,7 +896,9 @@ def test_spawner_resolves_argv0_and_keeps_the_message_on_stdin(wake, tmp_path, m
 
 
 def test_spawner_names_the_fix_when_claude_is_not_on_path(wake, tmp_path, monkeypatch):
-    monkeypatch.setattr(wake.shutil, "which", lambda name: None)
+    monkeypatch.setattr(wake.shutil, "which", lambda name, path=None: None)
+    monkeypatch.delenv("CLAUDE_BIN", raising=False)
+    monkeypatch.setattr(wake, "DOTENV", tmp_path / "no.env")
     monkeypatch.setattr(wake.subprocess, "Popen", lambda *a, **k: pytest.fail("spawned"))
     with pytest.raises(wake.SpawnError, match="not on PATH.*Install"):
         wake.Spawner(log_dir=tmp_path).start(["claude", "-p"], "hi", "CTO")

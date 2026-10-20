@@ -426,16 +426,34 @@ class SpawnError(RuntimeError):
     and how to fix it; the wake loop logs it and goes on."""
 
 
+def _claude_folders() -> list[str]:
+    """Known places an npm install puts ``claude``, for a process whose PATH
+    lacks them (the duty tick under the daemon, agora #181)."""
+    home = Path.home()
+    folders = [home / ".npm-global" / "bin", home / ".local" / "bin", home / ".claude" / "local",
+               home / "AppData" / "Roaming" / "npm", Path("/usr/local/bin"), Path("/opt/homebrew/bin")]
+    return [str(f) for f in folders]
+
+
 def resolve_program(argv: list[str]) -> list[str]:
     """``argv`` with ``argv[0]`` as a full path. On Windows ``claude`` is an
     npm ``claude.cmd`` shim, and CreateProcess finds a .cmd only by its full
-    path. Only argv[0] changes: the message text is never in argv (a .cmd runs
-    through cmd.exe, which parses its arguments), and there is no shell=True."""
+    path. Looked up on PATH, then at ``CLAUDE_BIN`` (environment or bot/.env),
+    then in the known npm folders. Only argv[0] changes: the message text is
+    never in argv (a .cmd runs through cmd.exe, which parses its arguments),
+    and there is no shell=True."""
     found = shutil.which(argv[0])
+    if found is None and argv[0] == "claude":
+        configured = os.environ.get("CLAUDE_BIN") or _dotenv(DOTENV).get("CLAUDE_BIN")
+        if configured and Path(configured).is_file():
+            found = configured
+        else:
+            found = shutil.which(argv[0], path=os.pathsep.join(_claude_folders()))
     if found is None:
         raise SpawnError(f"cannot start {argv[0]!r}: it is not on PATH. Install it "
-                         f"(npm install -g @anthropic-ai/claude-code) or add its "
-                         f"folder to PATH, then restart wake.py.")
+                         f"(npm install -g @anthropic-ai/claude-code), add its "
+                         f"folder to PATH, or set CLAUDE_BIN=<full path> in bot/.env, "
+                         f"then restart wake.py.")
     return [found, *argv[1:]]
 
 
@@ -1567,7 +1585,6 @@ class Waker:
         if registry_live(role, _any_pid_alive) or self.role(role).get("session"):
             return self._duty_decide(role, "skip", "session open")
         due = new + again
-        ds["wakes"].append(now)  # a failed spawn counts too: no retry every minute
         self.role(role)["session"] = {
             "id": str(uuid.uuid4()), "stream": own_stream(role), "started_at": now,
             "last_founder_at": None, "pid": None, "origin": "duty"}
@@ -1577,6 +1594,7 @@ class Waker:
             self.role(role)["session"] = None
             self.save()
             return self._duty_decide(role, "skip", f"spawn failed: {exc}")
+        ds["wakes"].append(now)  # only a started session uses the slot; a failed spawn retries at the next check
         for it in new:
             seen[it["key"]] = {"at": now, "rewoken": False}
         for it in again:
