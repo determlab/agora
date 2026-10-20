@@ -117,7 +117,7 @@ button.archived-name:hover { color: var(--text); }
 #main { display: flex; flex-direction: column; min-width: 0; min-height: 0; height: 100%; position: relative; }
 #top { display: flex; align-items: center; gap: .5rem; padding: .5rem 1rem;
   border-bottom: 1px solid var(--line); background: var(--panel); }
-#menu-btn { display: none; }
+#menu-btn, #side-close, #side-backdrop { display: none; }
 #room-title { font-weight: 600; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* Live status: a green dot when the event queue answers, amber and blinking
    while it reconnects, red when it is down. */
@@ -258,7 +258,7 @@ dialog .buttons { display: flex; justify-content: flex-end; gap: .5rem; margin-t
     transition: transform .15s; box-shadow: 0 0 12px rgba(0, 0, 0, .3); }
   #app.side-open #side { transform: none; }
   /* agora#165: the dimmed area beside the open drawer, and the X inside it. */
-  #app.side-open #side-backdrop[hidden] { display: block; position: absolute; inset: 0; z-index: 4; background: rgba(0, 0, 0, .4); }
+  #app.side-open #side-backdrop { display: block; position: absolute; inset: 0; z-index: 4; background: rgba(0, 0, 0, .4); }
   #side-close { display: inline-block; float: inline-end; }
   #menu-btn { display: inline-block; }
   /* ops#325: one top bar row — menu, the room name, the live dot (its text
@@ -649,7 +649,7 @@ a.ref:hover { text-decoration: underline; }
   </div>
   <nav id="side">
     <div id="brand"><span id="logo" dir="ltr">agora</span>
-      <button type="button" id="side-close" class="icon" aria-label="סגירה" hidden>&times;</button></div>
+      <button type="button" id="side-close" class="icon" aria-label="סגירה">&times;</button></div>
     <div id="me-row">
       <span id="me-avatar" class="avatar small role-human" aria-hidden="true"></span>
       <span id="who" dir="auto"></span>
@@ -666,7 +666,7 @@ a.ref:hover { text-decoration: underline; }
       <ul id="archived"></ul>
     </div>
   </nav>
-  <div id="side-backdrop" hidden></div>
+  <div id="side-backdrop"></div>
   <main id="main">
     <div id="top">
       <button type="button" id="menu-btn" class="icon" aria-label="חדרים">&#9776;</button>

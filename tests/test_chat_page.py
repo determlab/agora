@@ -274,7 +274,10 @@ def test_165_rooms_drawer_closes_by_x_backdrop_and_back_without_changing_room():
     page = PAGE.read_text(encoding="utf-8")
     script = _markup().script
     assert 'id="side-close"' in page and 'id="side-backdrop"' in page
-    assert '#app.side-open #side-backdrop' in page
+    assert '#app.side-open #side-backdrop {' in page
+    # the global [hidden]{display:none !important} would hide them for good
+    assert 'id="side-close" class="icon" aria-label="סגירה">' in page
+    assert '<div id="side-backdrop"></div>' in page
     # all three close routes are wired
     assert '$("side-close").addEventListener("click", closeSide)' in script
     assert '$("side-backdrop").addEventListener("click", closeSide)' in script
