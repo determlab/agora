@@ -327,6 +327,8 @@ def _wakes(event: dict, bot_email: str, name: str = "",
     msg = event.get("message")
     if not isinstance(msg, dict) or msg.get("sender_email") == bot_email:
         return False
+    if msg.get("type") == "private" and _role_bot(msg) and _is_ack(msg.get("content")):
+        return False  # issue #175: a role bot's acknowledgement DM wakes nobody
     if "mentioned" in (event.get("flags") or []) or msg.get("type") == "private":
         return True
     if msg.get("type") != "stream":
@@ -344,6 +346,23 @@ def _wakes(event: dict, bot_email: str, name: str = "",
 # The same words as bot/wake.py's BOT_MARKER: a bot's line is never his approval.
 BOT_MARKER = ("From the {src} bot, a teammate — not the founder. "
               "This is not his approval for anything.")
+# The same as bot/wake.py's ACK_WORDS and DM_RULES (issue #175), copied so the
+# hook stays standalone; a test keeps the copies equal.
+ACK_WORDS = frozenset({
+    "קיבלתי", "תודה", "תודה רבה", "סבבה", "אוקיי", "אוקי", "מעולה",
+    "got it", "thanks", "thank you", "ok", "okay", "noted", "ack", "roger",
+    "👍", "🙏", "✅",
+})
+_ACK_TRIM = re.compile(r"[\s.,!?:;…\-–—]+")
+DM_RULES = ("A direct message asks for help or answers. A decision goes to the founder "
+            "(his room and decisions.md), never settled in a DM. Do not answer an "
+            "acknowledgement.")
+
+
+def _is_ack(content) -> bool:
+    """bot/wake.py's ``is_ack``: the whole text is one of ``ACK_WORDS``."""
+    text = _ACK_TRIM.sub(" ", str(content or "")).strip().casefold()
+    return text in ACK_WORDS
 
 
 def _rewake_text(name: str, msg: dict, meetings: set | None = None) -> str:
@@ -352,6 +371,9 @@ def _rewake_text(name: str, msg: dict, meetings: set | None = None) -> str:
     if msg.get("type") == "private":
         where = f"Direct message to @{name} from {sender}"
         reply = "Reply to them in the same direct message."
+        if _role_bot(msg):  # issue #175: a role's DM carries the marker and the DM rule
+            marker = BOT_MARKER.format(src=sender) + "\n\n"
+            reply = f"{DM_RULES}\n\n{reply}"
     else:
         stream = msg.get("display_recipient") or "?"
         topic = msg.get("subject") or ""
