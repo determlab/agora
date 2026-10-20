@@ -457,6 +457,27 @@ def resolve_program(argv: list[str]) -> list[str]:
     return [found, *argv[1:]]
 
 
+CONSOLE_TITLE = "agora-wake (do not close)"
+
+
+def set_console_title(title: str = CONSOLE_TITLE) -> None:
+    """Name this window (issue #172). Windows only; a failure is ignored, the
+    title is cosmetic."""
+    if sys.platform != "win32":
+        return
+    try:
+        import ctypes
+        ctypes.windll.kernel32.SetConsoleTitleW(title)
+    except (AttributeError, OSError):
+        pass
+
+
+def child_env() -> dict[str, str]:
+    """The environment of every claude child: its terminal-title escape would
+    rename the shared console window to ``claude`` (issue #172)."""
+    return {**os.environ, "CLAUDE_CODE_DISABLE_TERMINAL_TITLE": "1"}
+
+
 class Spawner:
     """Starts the agent with the prompt on stdin. ``alive`` and ``stop`` take
     a pid and its create time so they still work after a restart, when no
@@ -473,7 +494,7 @@ class Spawner:
         with open(self.log_dir / f"{role}.log", "ab") as log:
             try:
                 proc = subprocess.Popen(argv, cwd=cwd or AGENT["cwd"], stdin=subprocess.PIPE,
-                                        stdout=log, stderr=subprocess.STDOUT)
+                                        env=child_env(), stdout=log, stderr=subprocess.STDOUT)
             except OSError as exc:
                 raise SpawnError(f"cannot start {argv[0]!r} for {role}: {exc}. Check that "
                                  f"it runs by hand and that the cwd exists.") from exc
@@ -1884,6 +1905,7 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps({**waker.status(), "missing_bots": cfg["missing"],
                               "skipped": cfg["skipped"]}, ensure_ascii=False))
             return 0
+        set_console_title()
         return run(cfg, waker)
     except ZulipError as exc:
         if args.json:
