@@ -3992,10 +3992,12 @@ async function listMembers() {
   const path = "streams/" + s.stream_id + "/members";
   // The box shows the very requests this list is read from.
   $("members-api").textContent = "GET /api/v1/users\nGET /api/v1/" + path;
-  let ids;
+  let ids, history = [];
   try {
     await loadUsers();
-    ids = new Set((await api("GET", path)).subscribers);
+    const got = await api("GET", path);
+    ids = new Set(got.subscribers);
+    history = got.history || [];
   } catch (e) {
     report("members-status", "לא ניתן לטעון את החברים: " + e.message, true);
     return;
@@ -4019,6 +4021,16 @@ async function listMembers() {
       mail.dir = "ltr";
       mail.textContent = u.email;
       name.append(full, mail);
+      // Who added this member and when (issue #162), from the membership log.
+      const adds = history.filter((h) => h.op === "add" && h.member && h.member.user_id === u.user_id);
+      const added = adds[adds.length - 1];
+      const by = document.createElement("span");
+      by.className = "muted member-added";
+      by.dir = "auto";
+      by.textContent = added
+        ? "נוסף ע״י " + added.actor.full_name + " · " + new Date(added.ts * 1000).toLocaleString("he-IL")
+        : "אין רישום מי הוסיף";
+      name.append(by);
       const tag = document.createElement("span");
       tag.className = "tag";
       tag.textContent = u.is_bot ? "בוט" : "אדם";
