@@ -2956,6 +2956,12 @@ function mk(id, extra) { return els[id] = Object.assign({
   setAttribute(k, v) { this.attrs[k] = v; },
   addEventListener(t, f) { this.listeners[t] = f; }}, extra); }
 mk("mic-btn"); mk("compose", {hidden: false}); mk("send-error"); mk("mic-note");
+mk("send-btn", {hidden: false, disabled: false});
+const S = {sending: false, dictating: false};
+global.document = {visibilityState: "visible", addEventListener() {}};
+// node 22 has a getter-only global `navigator`: a plain assignment is dropped.
+function setNav(v) { Object.defineProperty(globalThis, "navigator", {value: v, configurable: true, writable: true}); }
+setNav({});
 for (const e of Object.values(els)) e.classList.owner = e;
 const $ = (id) => els[id];
 // Every road out of the page: the page's own send() and the network itself.
@@ -3087,8 +3093,7 @@ def test_the_privacy_note_is_a_visible_line_when_the_mic_is_offered():
 # DICTATION_STUB minus its fake send(): these tests drive the page's own send().
 DICTATION_SEND_STUB = DICTATION_STUB.replace(
     'function send() { sent.push(["send", els.compose.value]); }\n', "") + """
-mk("send-btn", {hidden: false, disabled: false});
-const S = {sending: false, open: {stream_id: 1}};
+S.open = {stream_id: 1};
 const ROOM_TOPIC = "t";
 async function api(m, p, body) { sent.push(["api", body.content]); return {id: 7}; }
 function toast() {} function sendTyping() {}
@@ -3096,7 +3101,7 @@ let lastTypingSent = 0; const isTouch = () => true;
 els.compose.focus = () => {}; els.compose.setRangeText = () => {};
 mk("tag-note");
 const listeners = {};
-global.document = {visibilityState: "visible", addEventListener(t, f) { listeners[t] = f; }};
+document.addEventListener = (t, f) => { listeners[t] = f; };
 let locks = [];
 function fakeLock() { const l = {released: false, release() { this.released = true; return Promise.resolve(); }};
   locks.push(l); return Promise.resolve(l); }
@@ -3106,7 +3111,7 @@ function fakeLock() { const l = {released: false, release() { this.released = tr
 def test_send_is_disabled_and_ignored_while_the_mic_is_on_and_back_when_it_stops():
     out = _js(("setupDictation", "send"), """
       global.window = {SpeechRecognition: FakeSR};
-      global.navigator = {};
+      setNav({});
       $("compose").value = "שלום";
       setupDictation();
       $("mic-btn").listeners.click();
@@ -3126,22 +3131,22 @@ def test_send_is_disabled_and_ignored_while_the_mic_is_on_and_back_when_it_stops
 def test_the_screen_wake_lock_is_held_while_recording_and_released_after():
     out = _js(("setupDictation",), """
       global.window = {SpeechRecognition: FakeSR};
-      global.navigator = {wakeLock: {request: (k) => { out.kind = k; return fakeLock(); }}};
+      setNav({wakeLock: {request: (k) => { out.kind = k; return fakeLock(); }}});
       setupDictation();
       $("mic-btn").listeners.click();
-      await Promise.resolve();
+      await new Promise((r) => setImmediate(r));
       out.held = locks.length === 1 && !locks[0].released;
       // The phone hides the page; the browser drops the lock; the page comes back.
       locks[0].released = true;
       document.visibilityState = "visible";
       listeners.visibilitychange();
-      await Promise.resolve();
+      await new Promise((r) => setImmediate(r));
       out.reacquired = locks.length === 2 && !locks[1].released;
       made[0].onend();
-      await Promise.resolve();
+      await new Promise((r) => setImmediate(r));
       out.releasedAfter = locks[1].released;
       listeners.visibilitychange();       // not recording: no new lock
-      await Promise.resolve();
+      await new Promise((r) => setImmediate(r));
       out.total = locks.length;
     """, DICTATION_SEND_STUB)
     assert out == {"kind": "screen", "held": True, "reacquired": True,
@@ -3151,12 +3156,12 @@ def test_the_screen_wake_lock_is_held_while_recording_and_released_after():
 def test_recording_works_without_the_wake_lock_api_and_when_it_refuses():
     out = _js(("setupDictation",), """
       global.window = {SpeechRecognition: FakeSR};
-      global.navigator = {};
+      setNav({});
       setupDictation();
       $("mic-btn").listeners.click();
       out.noApi = [made[0].started, $("send-error").text];
       made[0].onend();
-      global.navigator = {wakeLock: {request: () => Promise.reject(new Error("NotAllowedError"))}};
+      setNav({wakeLock: {request: () => Promise.reject(new Error("NotAllowedError"))}});
       $("mic-btn").listeners.click();
       await new Promise((r) => setImmediate(r));
       out.refused = [made[1].started, $("send-error").text];
