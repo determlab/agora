@@ -191,7 +191,7 @@ def test_the_page_shows_the_agents_room_read_only():
       const S = {{open: null, shown: new Set(), msgs: [], members: new Map(), streams: []}};
       const isTouch = () => true;
       function refreshCount() {{}} function markRoomRead() {{}}
-      function renderStreams() {{}} function seedTyping() {{}}
+      function renderStreams() {{}} function seedTyping() {{}} function closeSide() {{}}
       function addMessages() {{}}
       const ROOM_TOPIC = "chat"; const AGENTS_ROOM = "{AGENTS_ROOM}";
     """
