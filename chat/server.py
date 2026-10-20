@@ -1289,7 +1289,8 @@ class Chat:
                 "user": {"user_id": me["id"], "email": me["email"],
                          "full_name": me["full_name"]},
                 "emoji_name": name, "emoji_code": code, "reaction_type": rtype})
-        return {}
+        # The stored code, so the page's optimistic add joins the live event's chip.
+        return {"emoji_code": code, "reaction_type": rtype}
 
     # DELETE /messages/{id}/reactions (ops#249 batch 1): removes the
     # caller's own reaction, keyed the same way POST adds one — never by

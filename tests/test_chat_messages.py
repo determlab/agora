@@ -137,6 +137,14 @@ def test_react(env):
     assert status == 400 and body["code"] == "REACTION_ALREADY_EXISTS"
 
 
+def test_react_returns_the_stored_code_and_type(env):
+    cto = env["cto"]
+    _, sent = cto("POST", "messages", type="stream", to="feature", topic="t", content="ok?")
+    status, body = cto("POST", f"messages/{sent['id']}/reactions", emoji_name="👍")
+    assert status == 200, body
+    assert (body["emoji_code"], body["reaction_type"]) == ("1f44d", "unicode_emoji")
+
+
 def test_react_by_name_only_stores_the_hex_code(env):
     """#161: no emoji_code -> the server maps the name to Zulip's hex code, on
     POST and on DELETE (the page sends the char, bot/zulip.py the name)."""

@@ -3472,12 +3472,20 @@ function wireReactBtn(btn, m) {
   btn.addEventListener("click", () => openReactPicker(btn, m));
 }
 
-async function toggleReaction(m, name) {
-  const mine = () => (m.reactions || []).find((r) => r.user_id === S.me.user_id && r.emoji_name === name);
+// `key` ({code, type}) is a chip's group key: the chip matches my reaction by
+// code+type, since my picker char ("👍") and a bot's "thumbs_up" share a code.
+// The picker passes no key and matches by the name it sends.
+async function toggleReaction(m, name, key) {
+  const mine = (code, type) => (m.reactions || []).find((r) => r.user_id === S.me.user_id
+      && (code !== undefined ? r.emoji_code === code && r.reaction_type === type
+          : key ? r.emoji_code === key.code && r.reaction_type === key.type
+          : r.emoji_name === name));
   const had = mine();
   try {
     if (had) {
-      await api("DELETE", "messages/" + m.id + "/reactions", {emoji_name: name});
+      await api("DELETE", "messages/" + m.id + "/reactions",
+                {emoji_name: had.emoji_name, emoji_code: had.emoji_code,
+                 reaction_type: had.reaction_type});
       // Re-checked after the await, never against `had`: the live event for
       // this same removal may already have arrived and rebuilt the array
       // while the request was in flight (the sender is a subscriber of its
@@ -3487,17 +3495,18 @@ async function toggleReaction(m, name) {
       const now = mine();
       if (now) m.reactions = m.reactions.filter((r) => r !== now);
     } else {
-      await api("POST", "messages/" + m.id + "/reactions", {emoji_name: name});
+      const res = await api("POST", "messages/" + m.id + "/reactions", {emoji_name: name});
+      // The code/type the server stored, so this add and the live event for
+      // it are the same reaction (never a second chip).
+      const code = (res && res.emoji_code) || name;
+      const type = (res && res.reaction_type) || "unicode_emoji";
       // Same race the other way: onReaction() may have already added this
       // exact reaction from the live event while the POST was in flight.
       // Appending unconditionally here would double it.
-      if (!mine()) {
-        // Reuse the code/type of the same-named reaction already on the
-        // message (Zulip's hex code), so the tap joins its chip, not a twin.
-        const twin = (m.reactions || []).find((r) => r.emoji_name === name);
+      if (!mine(code, type)) {
         m.reactions = [...(m.reactions || []), {emoji_name: name,
-                       emoji_code: twin ? twin.emoji_code : name,
-                       reaction_type: twin ? twin.reaction_type : "unicode_emoji",
+                       emoji_code: code,
+                       reaction_type: type,
                        user_id: S.me.user_id,
                        user: {id: S.me.user_id, full_name: S.me.full_name}}];
       }
@@ -3549,7 +3558,7 @@ function renderReactions(node, m) {
   for (const r of m.reactions || []) {
     const key = r.emoji_code + "|" + r.reaction_type;
     let g = groups.get(key);
-    if (!g) { g = {name: r.emoji_name, glyph: reactionGlyph(r), count: 0, mine: false}; groups.set(key, g); }
+    if (!g) { g = {name: r.emoji_name, key: {code: r.emoji_code, type: r.reaction_type}, glyph: reactionGlyph(r), count: 0, mine: false}; groups.set(key, g); }
     g.count++;
     if (S.me && r.user_id === S.me.user_id) g.mine = true;
   }
@@ -3559,7 +3568,7 @@ function renderReactions(node, m) {
     chip.className = "reaction-chip" + (g.mine ? " mine" : "");
     chip.textContent = g.glyph + " " + g.count;
     chip.title = g.mine ? "הסירו את הריאקציה שלכם" : "הוסיפו את הריאקציה הזו";
-    chip.addEventListener("click", () => toggleReaction(m, g.name));
+    chip.addEventListener("click", () => toggleReaction(m, g.name, g.key));
     box.append(chip);
   }
   if (btn) box.append(btn);

@@ -1521,7 +1521,8 @@ def test_254_the_reaction_row_sits_under_the_message_text():
 def test_zulip_api_reaction_shows_the_emoji_and_a_tap_toggles_its_name():
     """#161: a bot/API reaction is {emoji_name: thumbs_up, emoji_code: 1f44d};
     the chip shows the glyph, and tapping it sends Zulip's name (no duplicate)."""
-    prelude = API_STUB + FAKE_DOM + """
+    prelude = API_STUB.replace(
+        "return {};", 'return {emoji_code: "1f44d", reaction_type: "unicode_emoji"};') + FAKE_DOM + """
       const S = {me: {user_id: 1, full_name: "Me"}};
     """
     got = _js(("toggleReaction", "reactionGlyph", "renderReactions"), """
@@ -1545,6 +1546,57 @@ def test_zulip_api_reaction_shows_the_emoji_and_a_tap_toggles_its_name():
     assert got["chips"] == ["\U0001F44D 1", "\U0001F468‍\U0001F469 1", "weird 1", "party 1"]
     assert got["call"] == ["POST", "messages/7/reactions", {"emoji_name": "thumbs_up"}]
     assert got["after"][0] == "\U0001F44D 2" and len(got["after"]) == 4
+
+
+def test_161_chip_tap_removes_my_reaction_matched_by_code_not_name():
+    """m1: bot thumbs_up + my picker 👍 share code 1f44d; tapping the chip
+    sends DELETE with my own reaction's emoji_name."""
+    prelude = API_STUB + FAKE_DOM + """
+      const S = {me: {user_id: 1, full_name: "Me"}};
+    """
+    got = _js(("toggleReaction", "reactionGlyph", "renderReactions"), """
+      const node = document.createElement("div");
+      const box = document.createElement("div");
+      box.className = "reactions";
+      node.append(box);
+      $("messages").querySelector = () => node;
+      const m = {id: 7, reactions: [
+        {emoji_name: "thumbs_up", emoji_code: "1f44d", reaction_type: "unicode_emoji", user_id: 2},
+        {emoji_name: "👍", emoji_code: "1f44d", reaction_type: "unicode_emoji", user_id: 1}]};
+      renderReactions(node, m);
+      box.children[0].on.click();
+      await new Promise((r) => setTimeout(r, 0));
+      out.call = calls[0];
+      out.left = m.reactions.map((r) => r.user_id);
+    """, prelude=prelude)
+    assert got["call"][:2] == ["DELETE", "messages/7/reactions"]
+    assert got["call"][2]["emoji_name"] == "👍"
+    assert got["left"] == [2]
+
+
+def test_161_optimistic_add_uses_the_servers_code_so_the_live_event_adds_no_chip():
+    """m2: react returns the stored code; the later live event (1f44d) is the
+    same reaction, not a second one."""
+    prelude = FAKE_DOM + """
+      const S = {me: {user_id: 1, full_name: "Me"}};
+      async function api() { return {emoji_code: "1f44d", reaction_type: "unicode_emoji"}; }
+    """
+    got = _js(("toggleReaction", "reactionGlyph", "renderReactions", "onReaction"), """
+      const node = document.createElement("div");
+      const box = document.createElement("div");
+      box.className = "reactions";
+      node.append(box);
+      $("messages").querySelector = () => node;
+      const m = {id: 7, reactions: []};
+      S.msgs = [m];
+      await toggleReaction(m, "👍");
+      onReaction({type: "reaction", op: "add", message_id: 7, user_id: 1, emoji_name: "👍",
+                 emoji_code: "1f44d", reaction_type: "unicode_emoji", user: {full_name: "Me"}});
+      out.n = m.reactions.length;
+      out.chip = box.textContent;
+    """, prelude=prelude)
+    assert got["n"] == 1
+    assert got["chip"] == "👍 1"
 
 
 # -- ops#249 batch 1: the typing / "working on it" indicator
