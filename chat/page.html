@@ -117,7 +117,7 @@ button.archived-name:hover { color: var(--text); }
 #main { display: flex; flex-direction: column; min-width: 0; min-height: 0; height: 100%; position: relative; }
 #top { display: flex; align-items: center; gap: .5rem; padding: .5rem 1rem;
   border-bottom: 1px solid var(--line); background: var(--panel); }
-#menu-btn { display: none; }
+#menu-btn, #side-close, #side-backdrop { display: none; }
 #room-title { font-weight: 600; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* Live status: a green dot when the event queue answers, amber and blinking
    while it reconnects, red when it is down. */
@@ -257,6 +257,9 @@ dialog .buttons { display: flex; justify-content: flex-end; gap: .5rem; margin-t
   #side { position: absolute; top: env(safe-area-inset-top, 0px); bottom: 0; right: 0; width: 16rem; z-index: 5; transform: translateX(100%);
     transition: transform .15s; box-shadow: 0 0 12px rgba(0, 0, 0, .3); }
   #app.side-open #side { transform: none; }
+  /* agora#165: the dimmed area beside the open drawer, and the X inside it. */
+  #app.side-open #side-backdrop { display: block; position: absolute; inset: 0; z-index: 4; background: rgba(0, 0, 0, .4); }
+  #side-close { display: inline-block; float: inline-end; }
   #menu-btn { display: inline-block; }
   /* ops#325: one top bar row — menu, the room name, the live dot (its text
      is the dot's title); invite, members, bell and theme sit in the side menu
@@ -645,7 +648,8 @@ a.ref:hover { text-decoration: underline; }
     <button type="button" id="view-dash" class="btn">לוח</button>
   </div>
   <nav id="side">
-    <div id="brand"><span id="logo" dir="ltr">agora</span></div>
+    <div id="brand"><span id="logo" dir="ltr">agora</span>
+      <button type="button" id="side-close" class="icon" aria-label="סגירה">&times;</button></div>
     <div id="me-row">
       <span id="me-avatar" class="avatar small role-human" aria-hidden="true"></span>
       <span id="who" dir="auto"></span>
@@ -662,6 +666,7 @@ a.ref:hover { text-decoration: underline; }
       <ul id="archived"></ul>
     </div>
   </nav>
+  <div id="side-backdrop"></div>
   <main id="main">
     <div id="top">
       <button type="button" id="menu-btn" class="icon" aria-label="חדרים">&#9776;</button>
@@ -3168,7 +3173,7 @@ async function openRoom(streamId, stream) {
   // Read before markRoomRead clears it: where the "חדש" line goes (ops#325).
   const unreadN = S.unread instanceof Map ? S.unread.get(streamId) || 0 : 0;
   markRoomRead(streamId);
-  $("app").classList.remove("side-open");
+  closeSide();
   renderStreams();
   seedTyping(streamId);
   let got;
@@ -4120,7 +4125,23 @@ document.addEventListener("keydown", (e) => {
 
 // -- chrome: sidebar on a narrow screen, the dashboard switch, theme, keys
 
-$("menu-btn").addEventListener("click", () => $("app").classList.toggle("side-open"));
+// agora#165: the rooms drawer on a phone opens with a history entry so Back
+// closes it; X and the backdrop close it by consuming that same entry. None of
+// the three touches the open room.
+function openSide() {
+  if ($("app").classList.contains("side-open")) return;
+  $("app").classList.add("side-open");
+  try { history.pushState({side: 1}, ""); } catch (e) { /* no history: X and backdrop still close it */ }
+}
+function closeSide() {
+  if (!$("app").classList.contains("side-open")) return;
+  $("app").classList.remove("side-open");
+  if (history.state && history.state.side) history.back();
+}
+addEventListener("popstate", () => $("app").classList.remove("side-open"));
+$("menu-btn").addEventListener("click", () => ($("app").classList.contains("side-open") ? closeSide() : openSide()));
+$("side-close").addEventListener("click", closeSide);
+$("side-backdrop").addEventListener("click", closeSide);
 
 // Titles set once, here, rather than written into the markup: every other
 // string on this page that is not static Hebrew chrome goes through
