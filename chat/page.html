@@ -195,6 +195,9 @@ button.archived-name:hover { color: var(--text); }
 #new-pill { position: absolute; left: 50%; transform: translateX(-50%); bottom: 10rem;
   border: 0; border-radius: 999px; padding: .3rem .9rem; background: var(--accent);
   color: var(--accent-text); box-shadow: 0 2px 6px rgba(0, 0, 0, .25); }
+#readonly-note { border-top: 1px solid var(--line); background: var(--panel); margin: 0;
+                 padding: .75rem 1rem; text-align: center; }
+#write[hidden] { display: none; }
 #write { border-top: 1px solid var(--line); background: var(--panel); padding: .5rem 1rem;
   padding-bottom: calc(.5rem + env(safe-area-inset-bottom, 0px)); }
 #compose-row { display: flex; gap: .5rem; align-items: flex-end; }
@@ -673,6 +676,7 @@ a.ref:hover { text-decoration: underline; }
     <div id="messages"></div>
     <button type="button" id="new-pill" hidden>הודעות חדשות &#8595;</button>
     <div id="typing" dir="auto" aria-live="polite"></div>
+    <p id="readonly-note" class="muted" dir="rtl" hidden>רק קריאה: כאן רואים כל הודעה פרטית בין הסוכנים.</p>
     <div id="write">
       <div id="compose-row">
         <div id="compose-wrap">
@@ -1304,6 +1308,16 @@ function membersLabel(n) {
 // ops#322: every message in a room goes to this one topic (chat/server.py's
 // ROOM_TOPIC). There is no topic anywhere on the page.
 const ROOM_TOPIC = "chat";
+// Issue #175: every DM between role agents, copied by the server. Nobody
+// posts here (the server refuses it), so the page shows no write box: a box
+// that sends nowhere is the control that reaches nobody.
+const AGENTS_ROOM = "סוכנים";
+
+function setReadOnly(on) {
+  $("write").hidden = on;
+  $("readonly-note").hidden = !on;
+  $("invite-btn").disabled = on || !S.open;
+}
 
 // The server's room-name rule, said before the server is asked: letters of
 // any script, digits, space and - _ . only, at most 60. "" when it is fine.
@@ -3113,6 +3127,7 @@ function closeRoom() {
   $("members-btn").disabled = true;
   $("invite-btn").disabled = true;
   $("members-btn").textContent = membersLabel(null);
+  setReadOnly(false);
   renderTyping();
 }
 
@@ -3145,6 +3160,7 @@ async function openRoom(streamId, stream) {
   $("room-title").textContent = "#" + stream;
   $("members-btn").disabled = false;
   $("invite-btn").disabled = false;
+  setReadOnly(stream === AGENTS_ROOM);
   $("members-btn").textContent = membersLabel(null);
   refreshCount(streamId);
   // Read before markRoomRead clears it: where the "חדש" line goes (ops#325).
@@ -3166,7 +3182,7 @@ async function openRoom(streamId, stream) {
   S.newFrom = firstNewId(got.messages, unreadN, S.me ? S.me.user_id : null);
   addMessages(got.messages, true);
   scrollToNew();
-  if (!isTouch()) $("compose").focus();
+  if (!isTouch()) $("compose").focus();  // hidden in #סוכנים: a no-op there
 }
 
 // The first of the last `n` messages from someone else (the unread count

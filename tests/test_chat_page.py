@@ -2684,9 +2684,9 @@ def test_322_opening_a_room_reads_all_its_messages_across_old_topics(world):
       function refreshCount() {} function markRoomRead(id) { calls.push(["read", id]); }
       function renderStreams() {} function seedTyping() {}
       function addMessages(list) { S.msgs.push(...(list || [])); }
-      const ROOM_TOPIC = "chat";
+      const ROOM_TOPIC = "chat"; const AGENTS_ROOM = "סוכנים";
     """
-    got = _js(("membersLabel", "openRoom", "firstNewId", "scrollToNew"), """
+    got = _js(("membersLabel", "openRoom", "firstNewId", "scrollToNew", "setReadOnly"), """
       await openRoom(4, "feature");
       out.calls = calls; out.title = $("room-title").textContent; out.open = S.open;
       out.buttons = [$("members-btn").disabled, $("invite-btn").disabled];

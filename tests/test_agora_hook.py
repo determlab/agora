@@ -1057,3 +1057,43 @@ def test_the_caps_defaults_are_wakes(hook):
     finally:
         sys.path.remove(str(HOOK.parent.parent / "bot"))
     assert hook._caps() == (wake.BOT_TOPIC_TURNS_PER_HOUR, wake.BOT_TURNS_PER_DAY)
+
+
+# -- issue #175 (CTO r2 m1): a live session's hook keeps the DM rules too --------
+
+def _dm(content: str, email: str = CTO_BOT, who: str = "CTO") -> dict:
+    return {"type": "message", "id": 900, "flags": [], "message": {
+        "id": 9, "type": "private", "display_recipient": [], "content": content,
+        "sender_email": email, "sender_full_name": who}}
+
+
+def test_the_hook_dm_rules_are_wakes(hook):
+    spec = importlib.util.spec_from_file_location(
+        "wake_for_dm_rules_test", HOOK.parent.parent / "bot" / "wake.py")
+    sys.path.insert(0, str(HOOK.parent.parent / "bot"))
+    try:
+        wake = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(wake)
+    finally:
+        sys.path.remove(str(HOOK.parent.parent / "bot"))
+    assert hook.ACK_WORDS == wake.ACK_WORDS
+    assert hook.DM_RULES == wake.DM_RULES
+    assert hook.BOT_MARKER == wake.BOT_MARKER
+    for text in ("קיבלתי", " Thanks! ", "👍", "בשמחה", "כן", "ok, but the test fails"):
+        assert hook._is_ack(text) == wake.is_ack(text)
+
+
+def test_a_role_bot_acknowledgement_dm_wakes_nobody_in_a_live_session(hook):
+    assert hook._wakes(_dm("קיבלתי"), BOT, "COO") is False
+    assert hook._wakes(_dm("תודה!"), BOT, "COO") is False
+    assert hook._wakes(_dm("בשמחה"), BOT, "COO") is True        # not an ack: a real reply
+    assert hook._wakes(_dm("קיבלתי", "founder@zulip.localhost", "Founder"), BOT, "COO") is True
+    assert hook._wakes(_dm("ok", WATCHDOG, "Watchdog"), BOT, "COO") is True   # not a role bot
+
+
+def test_a_role_bot_dm_comes_marked_with_the_dm_rule(hook):
+    text = hook._rewake_text("COO", _dm("please review #12")["message"])
+    assert text.startswith(hook.BOT_MARKER.format(src="CTO"))
+    assert hook.DM_RULES in text and "please review #12" in text
+    founder = hook._rewake_text("COO", _dm("go", "founder@zulip.localhost", "Founder")["message"])
+    assert "not the founder" not in founder and hook.DM_RULES not in founder

@@ -10,6 +10,7 @@ Rooms (ops#322): a room is a stream whose messages all go to one fixed topic,
 Usage:
   python bot/zulip.py send --room coo --text "..."
   python bot/zulip.py --as PM send --dm founder --text "..." [--json]   # sends one private message to the founder
+  python bot/zulip.py --as COO send --dm PM --text "..." [--json]       # one DM to a role (#175); it wakes PM
   python bot/zulip.py read --room coo [--since ID] [--json]     # the whole room, every old topic too
   python bot/zulip.py wait --room coo [--seconds N] [--json]    # exit 2 with the next message there
   python bot/zulip.py invite --room coo --who CTO --json        # refused: the founder invites from the page
@@ -165,27 +166,63 @@ def cmd_send(client: ZulipClient, stream: str, topic: str, text: str,
     return 0
 
 
+# Issue #175: the roles a role bot may DM. Never the PA: it is the founder's
+# own assistant, not part of the company (CLAUDE.md), so no role writes to it.
+DM_ROLES = ("COO", "CTO", "PM", "CMO", "CPSO")
+
+
+def _dm_refused(who: str, error: str, as_json: bool) -> int:
+    if as_json:
+        print(json.dumps({"ok": False, "dm": who, "error": error}, ensure_ascii=False))
+    print(f"refused: {error} Nothing was sent.", file=sys.stderr)
+    return 2
+
+
+def _dm_target(client: ZulipClient, who: str) -> tuple[str, Any] | str:
+    """(label, Zulip recipient) for ``--dm``, or the refusal text. The founder
+    by ``FOUNDER_ZULIP_ID`` (issue #150); a role by its bot's email in
+    ``ZULIP_<ROLE>_EMAIL`` (issue #175), the same line wake.py reads, so the
+    address is never a display name a bot could pick."""
+    env = _dotenv(DOTENV)
+    if who == "founder":
+        raw = os.environ.get("FOUNDER_ZULIP_ID") or env.get("FOUNDER_ZULIP_ID", "")
+        if not raw.isdigit():
+            return "FOUNDER_ZULIP_ID is not set to a number (environment or bot/.env)."
+        return "founder", int(raw)
+    role = who.upper()
+    if role == "PA":
+        return ("the PA is the founder's own assistant, not part of the company: no role "
+                "DMs it. Write to the founder with --dm founder.")
+    if role not in DM_ROLES:
+        return (f"--dm takes 'founder' or one of {', '.join(DM_ROLES)}, not {who!r}.")
+    key = f"ZULIP_{role}_EMAIL"
+    email = os.environ.get(key) or env.get(key, "")
+    if not email:
+        return (f"{key} is not set (environment or bot/.env), so the {role} bot's address "
+                f"is unknown. Add the line {key}=... to bot/.env (the same line wake.py "
+                f"reads).")
+    if email.lower() == client.email.lower():
+        return f"that is yourself ({role}): a DM goes to another role."
+    return role, email
+
+
 def cmd_send_dm(client: ZulipClient, who: str, text: str, as_json: bool = False) -> int:
-    """``send --dm founder`` (issue #150): one private message to the founder,
-    addressed by ``FOUNDER_ZULIP_ID``. Any other recipient is refused."""
-    if who != "founder":
-        print(f"refused: --dm takes only 'founder', not {who!r}. Nothing was sent.",
-              file=sys.stderr)
-        return 2
-    raw = os.environ.get("FOUNDER_ZULIP_ID") or _dotenv(DOTENV).get("FOUNDER_ZULIP_ID", "")
-    if not raw.isdigit():
-        print("refused: FOUNDER_ZULIP_ID is not set to a number (environment or bot/.env). "
-              "Nothing was sent.", file=sys.stderr)
-        return 2
-    sent = client.send_message([int(raw)], text, type_="private")
+    """``send --dm founder`` (issue #150) or ``send --dm <ROLE>`` (issue #175):
+    one private message. A role's DM wakes that role (bot/wake.py) unless it is
+    only an acknowledgement, and the founder sees it in the room "סוכנים"."""
+    target = _dm_target(client, who)
+    if isinstance(target, str):
+        return _dm_refused(who, target, as_json)
+    label, to = target
+    sent = client.send_message([to], text, type_="private")
     msg_id = sent.get("id")
     if not msg_id:
-        print(f"refused: Zulip answered without a message id: {sent}", file=sys.stderr)
-        return 1
+        return _dm_refused(label, f"Zulip answered without a message id: {sent}", as_json)
     if as_json:
-        print(json.dumps({"ok": True, "id": msg_id, "dm": "founder"}, ensure_ascii=False))
+        print(json.dumps({"ok": True, "id": msg_id, "dm": label}, ensure_ascii=False))
     else:
-        print(f"sent direct message to the founder id={msg_id}")
+        where = "the founder" if label == "founder" else f"the {label} bot"
+        print(f"sent direct message to {where} id={msg_id}")
     return 0
 
 
@@ -421,10 +458,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--as", dest="as_name",
                         help="bot to act as, e.g. COO -> ZULIP_COO_EMAIL / _API_KEY")
     sub = parser.add_subparsers(dest="cmd", required=True)
-    send = sub.add_parser("send", help="post to a room (or a stream and topic); --dm founder sends one private message to the founder")
+    send = sub.add_parser("send", help="post to a room (or a stream and topic); --dm founder|ROLE sends one private message")
     to = send.add_mutually_exclusive_group(required=True)
     to.add_argument("--dm", metavar="WHO",
-                    help="'founder' only: sends one private message to the founder")
+                    help="'founder' or a role (" + ", ".join(DM_ROLES) + "): one private "
+                         "message; a role's DM wakes that role")
     to.add_argument("--room", help="the room; the message goes to its one topic")
     to.add_argument("--stream")
     send.add_argument("--topic", help="with --stream only")

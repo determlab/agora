@@ -88,6 +88,15 @@ WILDCARDS = ("@**all**", "@**everyone**", "@**channel**", "@**stream**")
 # ops#242: a human message here mentions every bot subscribed to it, without
 # needing @all — a bot's own message does not, so bots never wake each other.
 ALL_HANDS_STREAM = "All hands"
+# Issue #175: role bots DM each other, and the founder's condition is that
+# nothing happens out of his sight. Every bot-to-bot DM is copied here, a
+# room only people are in, that nobody posts to: a post here would reach no
+# role (no bot is a member), and a control that reaches nobody is D3.
+AGENTS_ROOM = "סוכנים"
+AGENTS_ROOM_READ_ONLY = (f"#{AGENTS_ROOM} is read-only: it shows the role agents' direct "
+                         "messages to each other. A role writes to another role with "
+                         "`python bot/zulip.py --as <ROLE> send --dm <ROLE> --text ...`; "
+                         "the founder writes in that role's own room.")
 DASHBOARD_EVERY = 300.0  # seconds between --dashboard-cmd runs (RFC-002 §1)
 DASHBOARD_TIMEOUT = 300.0  # a run past this stores nothing (dashboard.py --json --no-tokens takes ~113 s here)
 DASHBOARD_STALE = 7200  # a document older than this is `stale`
@@ -1023,6 +1032,11 @@ class Chat:
                 refs = _json_list(to)
                 if len(refs) != 1:
                     raise ApiError("'to' must name exactly one stream")
+                # Before the membership check: a bot is never in #סוכנים, and
+                # "no such stream" would send it looking for one.
+                named = self.s.stream_by_ref(refs[0])
+                if named is not None and named["name"] == AGENTS_ROOM:
+                    raise ApiError(AGENTS_ROOM_READ_ONLY, "AGENTS_ROOM_READ_ONLY")
                 stream = self.s.visible_stream(me, refs[0])
                 # ops#322: a room has one fixed topic; an old caller's topic is kept.
                 topic = p.get("topic", p.get("subject")) or ROOM_TOPIC
@@ -1045,17 +1059,45 @@ class Chat:
                                (me["id"], "private", content, now))
                 for uid in {me["id"], *(u["id"] for u in users)}:
                     self.s.x("INSERT INTO recipients VALUES (?,?)", (mid, uid))
+                others = [u for u in users if u["id"] != me["id"]]
+                if me["is_bot"] and others and all(u["is_bot"] for u in others):
+                    self._publish_message(self._agents_room_copy(me, others, content, now))
             else:
                 raise ApiError(f"Invalid message type '{kind}': use 'stream' or 'private'")
-            row = self.s.one("SELECT * FROM messages WHERE id=?", (mid,))
-
-            def build(user):
-                # `flags` on the event itself: that is where the hook's
-                # _wakes() looks for "mentioned".
-                return {"type": "message", "message": self.message_json(row, user),
-                        "flags": self.flags(row, user)}
-            self._publish("message", row, build)
+            self._publish_message(self.s.one("SELECT * FROM messages WHERE id=?", (mid,)))
         return {"id": mid}
+
+    def _publish_message(self, row) -> None:
+        def build(user):
+            # `flags` on the event itself: that is where the hook's
+            # _wakes() looks for "mentioned".
+            return {"type": "message", "message": self.message_json(row, user),
+                    "flags": self.flags(row, user)}
+        self._publish("message", row, build)
+
+    def _agents_room(self):
+        """#סוכנים (issue #175), made on the first bot-to-bot DM. Every person
+        is a member, joined here so one added later is too; no bot ever is
+        (``subscribe`` refuses one), so a copy wakes no role."""
+        row = self.s.stream_by_ref(AGENTS_ROOM)
+        if row is None:
+            row = self.s.one("SELECT * FROM streams WHERE stream_id=?",
+                             (self.s.create_stream(AGENTS_ROOM, invite_only=True),))
+        for u in self.s.q("SELECT * FROM users WHERE is_bot=0"):
+            if self.s.subscribe(u["id"], row["stream_id"]):
+                self._subscription_events(row, dict(u), "add")
+        return row
+
+    def _agents_room_copy(self, me: dict, to: list[dict], content: str, now: int):
+        """The copy of one bot-to-bot DM in #סוכנים, sent by the same bot. The
+        first line names who it went to, in Hebrew first (the page is RTL)."""
+        room = self._agents_room()
+        names = ", ".join(u["full_name"] for u in to)
+        cid = self.s.x("INSERT INTO messages (sender_id, type, stream_id, subject, content,"
+                       " timestamp) VALUES (?,?,?,?,?,?)",
+                       (me["id"], "stream", room["stream_id"], ROOM_TOPIC,
+                        f"הודעה פרטית אל {names}:\n{content}", now))
+        return self.s.one("SELECT * FROM messages WHERE id=?", (cid,))
 
     def wake(self, me: dict, p: dict) -> dict:
         """agora#174: the stuck row's "wake" button. Posts one line, as the
@@ -1548,6 +1590,9 @@ class Chat:
                     raise ApiError(f"A bot cannot join #{row['name']} by itself: the founder "
                                    "invites it with the page's Invite button",
                                    "INVITE_NOT_ALLOWED")
+                if row["name"] == AGENTS_ROOM and any(u["is_bot"] for u in users):
+                    raise ApiError(AGENTS_ROOM_READ_ONLY + " No bot is a member of it.",
+                                   "AGENTS_ROOM_READ_ONLY")
                 for u in users:
                     new = self.s.subscribe(u["id"], row["stream_id"])
                     if new:
