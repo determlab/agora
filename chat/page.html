@@ -1135,7 +1135,7 @@ function renderQr(container, text) {
 }
 
 const S = {
-  creds: null, gen: 0, queue: null, lastEvent: -1, me: null, sending: false, dashboard: null,
+  creds: null, gen: 0, queue: null, lastEvent: -1, me: null, sending: false, dictating: false, dashboard: null,
   // ops#322: a room is a stream on the server; its old topics are history,
   // shown as one conversation, and every new message goes to ROOM_TOPIC.
   streams: [],          // the rooms: [{stream_id, name}]
@@ -3612,6 +3612,8 @@ function insertText(text) {
 async function send() {
   // One send at a time: Enter pressed twice must not post twice.
   if (S.sending) return;
+  // agora#164: the mic is still writing into the box; send waits for it to stop.
+  if (S.dictating) return;
   const box = $("compose");
   const text = box.value;
   if (!text.trim()) return;
@@ -3640,7 +3642,7 @@ async function send() {
   } finally {
     S.sending = false;
     box.disabled = false;
-    $("send-btn").disabled = false;
+    $("send-btn").disabled = !!S.dictating;
     fitCompose();
     if (!isTouch()) box.focus();
   }
@@ -3779,7 +3781,34 @@ function setupDictation() {
   // Phones never show a title tooltip, so the privacy note is a visible line too.
   $("mic-note").hidden = false;
   let rec = null, base = "", finals = "", written = "";
-  const setOn = (on) => { btn.classList.toggle("on", on); btn.setAttribute("aria-pressed", String(on)); };
+  // agora#164: while the mic is on, Send is off (one message holds the whole
+  // dictation) and the screen stays awake. No Wake Lock API, or a refusal:
+  // recording goes on without it, silently.
+  let lock = null;
+  async function holdScreen() {
+    if (lock || !S.dictating || !navigator.wakeLock) return;
+    try {
+      const got = await navigator.wakeLock.request("screen");
+      if (S.dictating && !lock) lock = got; else got.release();
+    } catch (err) { /* battery saver or no permission: record without it */ }
+  }
+  function freeScreen() {
+    const l = lock; lock = null;
+    if (l) l.release().catch(() => {});
+  }
+  // The browser drops the lock when the page is hidden: take it back on return.
+  document.addEventListener("visibilitychange", () => {
+    if (!S.dictating || document.visibilityState !== "visible") return;
+    if (lock && lock.released !== true) return;
+    lock = null;
+    holdScreen();
+  });
+  const setOn = (on) => {
+    btn.classList.toggle("on", on); btn.setAttribute("aria-pressed", String(on));
+    S.dictating = on;
+    $("send-btn").disabled = on || S.sending;
+    if (on) holdScreen(); else freeScreen();
+  };
   function show(interim) {
     // The box changed under us (sent and cleared, or typed in): rebase on it.
     if (box.value !== written) { base = box.value; finals = ""; }
