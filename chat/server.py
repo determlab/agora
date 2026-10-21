@@ -1081,9 +1081,15 @@ class Chat:
         for row in log["lines"]:
             if row.get("action") != "claim" or not str(row.get("time") or "").startswith(iso(day0)[:10]):
                 continue
-            where = row.get("where") or ("local" if row.get("machine") else None)
-            if where in ("local", "pc", "cloud"):
-                claims.setdefault(str(row.get("target")), "cloud" if where == "cloud" else "local")
+            # The log has no where/machine: the actor says it. PC = claim.py + result won
+            # (a lost claim is not a claim); cloud = actor cloud.
+            if row.get("actor") == "claim.py" and row.get("result") == "won":
+                where = "local"
+            elif row.get("actor") == "cloud":
+                where = "cloud"
+            else:
+                continue
+            claims.setdefault(str(row.get("target")), where)
         counts = {"local": sum(1 for w in claims.values() if w == "local"),
                   "cloud": sum(1 for w in claims.values() if w == "cloud")}
         return {"generated_at": iso(now), "roles": roles,

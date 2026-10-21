@@ -123,14 +123,16 @@ def test_agents_coders_running_and_todays_claims(agents):
             "zones": [{"key": k, "parts": []} for k in ("local", "runner", "cloud")]}
     (tmp_path / "pool-view.json").write_text(json.dumps(view), encoding="utf-8")
     day = _iso(now)[:10]
-    lines = [{"time": f"{day}T01:00:00Z", "actor": "pool", "action": "claim", "target": "agora#204",
-              "result": "ok", "where": "cloud"},
-             {"time": f"{day}T02:00:00Z", "actor": "pool", "action": "claim", "target": "ops#9",
-              "result": "ok", "machine": "PC1"},
-             {"time": f"{day}T03:00:00Z", "actor": "pool", "action": "claim", "target": "ops#9",
-              "result": "ok", "machine": "PC1"},
-             {"time": "2020-01-01T03:00:00Z", "actor": "pool", "action": "claim", "target": "old#1",
-              "result": "ok", "machine": "PC1"}]
+    lines = [{"time": f"{day}T01:00:00Z", "actor": "cloud", "action": "claim", "target": "agora#204",
+              "result": "ok"},
+             {"time": f"{day}T02:00:00Z", "actor": "claim.py", "action": "claim", "target": "ops#9",
+              "result": "won"},
+             {"time": f"{day}T03:00:00Z", "actor": "claim.py", "action": "claim", "target": "ops#9",
+              "result": "won"},
+             {"time": f"{day}T04:00:00Z", "actor": "claim.py", "action": "claim", "target": "ops#10",
+              "result": "lost"},
+             {"time": "2020-01-01T03:00:00Z", "actor": "claim.py", "action": "claim", "target": "old#1",
+              "result": "won"}]
     (pool / f"log-{day}.jsonl").write_text("".join(json.dumps(r) + "\n" for r in lines), encoding="utf-8")
     status, body = api("GET", "agents")
     assert status == 200
