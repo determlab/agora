@@ -68,6 +68,8 @@ how old it is. A failed run stores nothing: the previous document stays and
 --json`. A queue registered with `dashboard` in its `event_types` gets
 `{"type":"dashboard","last_sync":…}` after each good sync.
 
+**Pool tab (agora#196).** The dashboard's "פול" tab renders one `pool-view/1` JSON file (stages, and where each part runs); Agora reads only that file. `GET /api/v1/dashboard/pool` returns `{"view","stale","age_s","errors"}` (`view` is null with one `errors` line when the file is unset, missing or invalid; `stale` is true past 15 minutes). `AGORA_POOL_VIEW` is the path of the file, read on every request; see `chat/pool_view.py` for the shape.
+
 **Approvals (ops#176).** Start `up` (or `serve`) with `--approve-cmd
 "<command>"` and `POST /api/v1/dashboard/approve` with `id`, `answer`
 (`yes`/`no`/`later`) and an optional `note` runs `<command> <id> <answer>

@@ -723,6 +723,10 @@ a.ref:hover { text-decoration: underline; }
       <button type="button" id="dash-tab-board" class="go active" role="tab" aria-selected="true">לוח</button>
       <button type="button" id="dash-tab-numbers" class="go" role="tab" aria-selected="false">מספרים</button>
       <button type="button" id="dash-tab-log" class="go" role="tab" aria-selected="false">יומן</button>
+      <button type="button" id="dash-tab-pool" class="go" role="tab" aria-selected="false">פול</button>
+    </div>
+    <div id="dash-pool" dir="rtl" hidden>
+      <div id="dash-pool-body" class="muted">…</div>
     </div>
     <div id="dash-log" hidden>
       <div class="nrow">
@@ -1617,7 +1621,7 @@ async function poll(gen) {
       else if (ev.type === "subscription") onSubscription(ev);
       // Not awaited: a dashboard refresh must never hold up the message poll
       // loop, and loadDashboard() only ever replaces S.dashboard wholesale.
-      else if (ev.type === "dashboard") loadDashboard();
+      else if (ev.type === "dashboard") { loadDashboard(); if (!$("dash-pool").hidden) loadPool(); }
     }
   }
 }
@@ -4324,19 +4328,101 @@ async function loadLog() {
 }
 $("dash-log-go").addEventListener("click", loadLog);
 
+// -- the פול tab (agora#196): renders the pool-view/1 file GET dashboard/pool
+// serves. View only; no timer of its own, it loads when the tab opens and on
+// every "dashboard" event. Times are UTC in the file, shown in NZ time.
+const NZ = new Intl.DateTimeFormat("he-IL", {timeZone: "Pacific/Auckland", day: "2-digit",
+  month: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false});
+const NZ_DAY = new Intl.DateTimeFormat("en-CA", {timeZone: "Pacific/Auckland"});
+const POOL_STAGES = {queue: "תור", working: "בעבודה", ci: "CI", review: "ביקורת",
+                     needs_human: "מחכה לאדם", merged: "מוזג"};
+const POOL_ZONES = {local: "המחשב", runner: "Runner", cloud: "ענן"};
+const POOL_OK = {true: "var(--ok, #2a9d4a)", false: "var(--bad, #d64545)"};
+
+function nzTime(s) { const d = s ? new Date(s) : null; return d && !isNaN(d) ? NZ.format(d) : "—"; }
+function ltr(text) { const s = el("span", null, text); s.dir = "ltr"; return s; }
+
+function poolChip(c, wide) {
+  const a = el("a", "nrow", null);
+  a.href = c.url; a.target = "_blank"; a.rel = "noopener";
+  if (wide) { a.style.borderInlineStart = "4px solid " + POOL_OK[false]; a.append(el("b", null, "סבב תיקון, ראשון בתור "));}
+  a.append(ltr(c.id), el("span", null, " " + (c.title || "")), el("span", "muted", " " + (c.note || "") + " " + nzTime(c.since)));
+  return a;
+}
+
+function renderPool(r) {
+  const root = el("div");
+  if (!r.view) { root.append(el("div", "error", (r.errors || []).join(" · ") || "אין נתונים")); return root; }
+  const v = r.view;
+  if (r.stale) {
+    const b = el("div", "error", "לא עודכן מאז "); b.setAttribute("role", "alert");
+    b.append(ltr(nzTime(v.generated_at))); b.style.fontWeight = "bold"; root.append(b);
+  }
+  if (v.alerts.length) {
+    const box = el("div", "error");
+    for (const a of v.alerts) box.append(el("div", null, a.text + (a.since ? " · " + nzTime(a.since) : "")));
+    root.append(box);
+  }
+  const stage = (k) => v.stages.find((s) => s.key === k).items;
+  const today = NZ_DAY.format(new Date());
+  const mergedToday = stage("merged").filter((c) => c.since && NZ_DAY.format(new Date(c.since)) === today).length;
+  const nums = el("div", "nrow");
+  nums.append(el("span", null, "מוזגו היום: " + mergedToday), el("span", null, "רצים עכשיו: " + v.summary.running),
+              el("span", "muted", "עדכון אחרון: "));
+  nums.lastChild.append(ltr(nzTime(v.generated_at)));
+  root.append(nums);
+  const runnerDown = v.zones.some((z) => z.key === "runner" && z.parts.some((p) => p.ok === false));
+  for (const s of v.stages) {
+    let items = s.items;
+    if (s.key === "queue") items = [...items.filter((c) => c.fix_round), ...items.filter((c) => !c.fix_round)];
+    const sec = el("section", "dash-card card wide");
+    const h = el("h3", null, POOL_STAGES[s.key] + " " + s.items.length);
+    const colour = !s.items.length ? "var(--muted, #888)" : s.key === "ci" && runnerDown ? POOL_OK[false] : "var(--accent, #1f6f78)";
+    h.style.borderInlineStart = "6px solid " + colour; h.style.paddingInlineStart = "6px";
+    sec.append(h);
+    const shown = s.key === "merged" ? items.slice(0, 6) : items;
+    for (const c of shown) sec.append(poolChip(c, s.key === "queue" && c.fix_round === true));
+    if (items.length > shown.length) sec.append(el("div", "muted", "+" + (items.length - shown.length) + " מוקדם יותר"));
+    root.append(sec);
+  }
+  for (const z of v.zones) {
+    const sec = el("section", "dash-card card");
+    sec.append(el("h3", null, POOL_ZONES[z.key]));
+    for (const p of z.parts) {
+      const row = el("div", "nrow");
+      const dot = el("span", null, "●"); dot.style.color = POOL_OK[p.ok] || "var(--muted, #888)";
+      row.append(dot, el("span", null, " " + p.name), el("span", "muted", " " + p.note));
+      sec.append(row);
+    }
+    root.append(sec);
+  }
+  return root;
+}
+
+async function loadPool() {
+  const body = $("dash-pool-body");
+  try {
+    body.className = "";
+    body.replaceChildren(renderPool(await api("GET", "dashboard/pool")));
+  } catch (e) { body.className = "error"; body.textContent = e.message; }
+}
+
 function showDashTab(name) {
-  const nums = name === "numbers", log = name === "log";
-  $("dash-board").hidden = nums || log;
+  const nums = name === "numbers", log = name === "log", pool = name === "pool";
+  $("dash-board").hidden = nums || log || pool;
   $("dash-numbers").hidden = !nums;
   $("dash-log").hidden = !log;
-  for (const [id, on] of [["dash-tab-board", !nums && !log], ["dash-tab-numbers", nums],
-                          ["dash-tab-log", log]]) {
+  $("dash-pool").hidden = !pool;
+  for (const [id, on] of [["dash-tab-board", !nums && !log && !pool], ["dash-tab-numbers", nums],
+                          ["dash-tab-log", log], ["dash-tab-pool", pool]]) {
     $(id).classList.toggle("active", on);
     $(id).setAttribute("aria-selected", String(on));
   }
   if (nums) loadNumbers();
   if (log) loadLog();
+  if (pool) loadPool();
 }
+$("dash-tab-pool").addEventListener("click", () => showDashTab("pool"));
 $("dash-tab-board").addEventListener("click", () => showDashTab("board"));
 $("dash-tab-numbers").addEventListener("click", () => showDashTab("numbers"));
 $("dash-tab-log").addEventListener("click", () => showDashTab("log"));
