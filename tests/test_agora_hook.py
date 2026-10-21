@@ -956,6 +956,23 @@ def test_the_pa_never_reads_a_multi_bot_room(tmp_path):
     assert not [c for c in fake.calls if c[1] == "/api/v1/users/me/subscriptions"]
 
 
+def test_register_adds_leader_rules_only_for_a_multi_bot_session(hook, monkeypatch, capsys):
+    # issue #149
+    monkeypatch.setattr(hook, "_payload", lambda: {"session_id": "s"})
+    monkeypatch.setattr(hook, "_identity", lambda sid, patience=0: {"name": "COO"})
+    monkeypatch.setattr(hook, "_post", lambda path, body: {})
+    monkeypatch.setattr(hook, "_zulip_creds", lambda name: ("http://z", BOT, "k"))
+    monkeypatch.setattr(hook, "_multi_bot_rooms", lambda creds: {"all hands"})
+    assert hook.do_register() == 0
+    ctx = json.loads(capsys.readouterr().out)["hookSpecificOutput"]["additionalContext"]
+    assert "leads the discussion" in ctx and "answered by the leader only" in ctx
+    assert 'no "agreed", no "waiting"' in ctx
+    monkeypatch.setattr(hook, "_multi_bot_rooms", lambda creds: set())
+    hook.do_register()
+    ctx = json.loads(capsys.readouterr().out)["hookSpecificOutput"]["additionalContext"]
+    assert "leads the discussion" not in ctx
+
+
 def test_multi_bot_rooms_come_from_room_membership(hook):
     creds = ("http://z", BOT, "k")
     answers = {"users": {"result": "success", "members": USERS},

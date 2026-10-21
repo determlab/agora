@@ -645,15 +645,25 @@ SKILL_LINE = ("Before substantive work (a draft, a review, a design, a plan), in
               "matching skill from your charter's skill list with the Skill tool, and "
               "name the skill in your answer.")
 
+# Issue #149: the hint for a multi-bot room; hooks/agora_hook.py has the same text.
+MEETING_RULES = (
+    "This room has several role bots. One role leads the discussion: the one who asked "
+    "the open question, else the PM.\n"
+    "A general question from the founder is answered by the leader only.\n"
+    "Any other role writes only when it adds something new: no repeat of a question, "
+    "no \"agreed\", no \"waiting\"."
+)
+
 # The one reason the PA is skipped outside #pa (ops#327, ops#322).
 PA_ONLY_HOME = "PA wakes only in #pa or a founder DM (ops#327)"
 
 
 def message_prompt(role: str, msg: dict[str, Any], first: bool,
                    history: str = "", others: list[str] | None = None,
-                   bot: str | None = None) -> str:
+                   bot: str | None = None, meeting: bool = False) -> str:
     """``bot``: the role whose bot sent ``msg``, or None for the founder. A
-    bot's message starts with the marker line (ops#321)."""
+    bot's message starts with the marker line (ops#321). ``meeting``: the room
+    has two or more role bots; the one-leader rules are added (issue #149)."""
     room = _where(msg, role)
     sender = msg.get("sender_full_name") or msg.get("sender_email") or "the founder"
     origin = "a direct message" if msg.get("type") != "stream" else f"the room #{room}"
@@ -676,8 +686,9 @@ def message_prompt(role: str, msg: dict[str, Any], first: bool,
         # Issue #175: a role's DM is answered by DM, never in a room.
         return (f"{body}{DM_RULES}\n\nAnswer the {bot} with:\n"
                 f'  python "{ZULIP_CLI}" --as {role} send --dm {bot} --text "..."\n')
+    rules = f"\n{MEETING_RULES}\n" if meeting else ""
     return (f"{body}Answer in the room #{room} with:\n  {_send_hint(role, room)}\n"
-            f"Copy the room name exactly as written here.\n")
+            f"Copy the room name exactly as written here.\n{rules}")
 
 
 def close_prompt(role: str, room: str) -> str:
@@ -1287,7 +1298,13 @@ class Waker:
 
     def _prompt(self, role: str, msg: dict[str, Any], first: bool, history: str = "") -> str:
         others = self.others.get((role, _where(msg, role)))
-        return message_prompt(role, msg, first, history, others, bot=self._bot_of(msg))
+        meeting = False
+        if self._in_meeting(role, msg) and safe_room(_where(msg, role)):
+            members = self._room_members(role, _where(msg, role))
+            bots = role_bots(members or []) - {"PA"}
+            meeting = role in bots and len(bots) >= 2
+        return message_prompt(role, msg, first, history, others, bot=self._bot_of(msg),
+                              meeting=meeting)
 
     def _handoff(self, role: str, msgs: list[dict[str, Any]]) -> tuple[str, int | str]:
         """The room's last HISTORY_MESSAGES messages before ``msgs``, as a
