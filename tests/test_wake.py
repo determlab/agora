@@ -2108,6 +2108,24 @@ def test_silent_wildcard_is_still_a_founder_line_in_a_meeting(wake, tmp_path):
         assert d["action"] == "spawn"
 
 
+def test_multi_bot_room_prompt_has_the_one_leader_rules(wake, tmp_path):
+    # issue #149
+    w = make(wake, tmp_path, members=_room_of("COO", "PM", "CMO"))
+    w.on_message("COO", msg(10, "why is it stuck?", stream="All hands"), [])
+    prompt = w.spawner.started[-1][1]
+    assert "One role leads the discussion: the one who asked the open question, else the PM." in prompt
+    assert "A general question from the founder is answered by the leader only." in prompt
+    assert 'no repeat of a question, no "agreed", no "waiting"' in prompt
+
+
+def test_single_bot_room_prompt_has_no_leader_rules(wake, tmp_path):
+    w = make(wake, tmp_path, members=_room_of("COO"))
+    w.on_message("COO", msg(10, "why is it stuck?", stream="All hands"), [])
+    prompt = w.spawner.started[-1][1]
+    assert "leads the discussion" not in prompt
+    assert wake.MEETING_RULES not in prompt
+
+
 def test_bot_wildcard_wakes_nobody(wake, tmp_path):
     w = make_bots(wake, tmp_path)
     w.members = _room_of("COO", "PM", "CMO")
