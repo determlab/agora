@@ -122,6 +122,9 @@ ANSWERS = ("yes", "no", "later")
 # is another program's job: the server holds no key and starts nothing.
 LIMITS_FILE = "limits.json"
 LIMITS_REQUEST_FILE = "limits-request.json"
+# agora#155: the Log view reads the daily JSONL log of OPS_POOL_ROOT, read-only.
+LOG_FILE = re.compile(r"log-\d{4}-\d{2}-\d{2}\.jsonl")
+LOG_LIMIT, LOG_LIMIT_MAX, LOG_MAX_DAYS = 200, 1000, 7
 NO_DATA_DIR = "no data folder configured: start the server with AGORA_DATA_DIR set to the folder"
 # agora#174: the board's pinned goal is one row in the database, so the phone
 # and the PC read the same pin and a restart keeps it.
@@ -900,6 +903,54 @@ class Chat:
             raise ApiError(f"the limits file {path} is not in the expected shape "
                            f"(see README.md, Numbers tab)", "LIMITS_BAD_SHAPE", 502)
         return groups
+
+    def log_view(self, p: dict) -> dict:
+        """agora#155: the last lines of the pool's daily JSONL log, newest first.
+
+        The folder is ``OPS_POOL_ROOT`` (read per request, no default path), the
+        files ``log-YYYY-MM-DD.jsonl``, one per UTC day. Day files are read
+        newest first, at most LOG_MAX_DAYS of them, until ``limit`` lines
+        (default 200) matched ``actor`` / ``target`` / ``errors=1``. A line that
+        is not a JSON object is counted in ``skipped``, never an error. An
+        unset or missing folder is an empty list with a ``hint``: an empty log
+        must not look like a broken one."""
+        root = os.environ.get("OPS_POOL_ROOT")
+        if not root or not os.path.isdir(root):
+            return {"lines": [], "skipped": 0,
+                    "hint": "set OPS_POOL_ROOT to the pool folder that holds log-YYYY-MM-DD.jsonl"
+                            + (f" (now: {root} is not a folder)" if root else " (it is not set)")}
+        limit = max(1, min(_int(p, "limit", LOG_LIMIT), LOG_LIMIT_MAX))
+        actor, target = p.get("actor") or "", p.get("target") or ""
+        errors_only = p.get("errors") in ("1", "true", 1, True)
+        days = sorted((n for n in os.listdir(root) if LOG_FILE.fullmatch(n)), reverse=True)
+        lines: list[dict] = []
+        skipped = 0
+        for name in days[:LOG_MAX_DAYS]:
+            try:
+                with open(os.path.join(root, name), encoding="utf-8", errors="replace") as f:
+                    raw = f.read().splitlines()
+            except OSError:
+                continue
+            for text in reversed(raw):
+                if not text.strip():
+                    continue
+                try:
+                    row = json.loads(text)
+                except ValueError:
+                    row = None
+                if not isinstance(row, dict):
+                    skipped += 1
+                    continue
+                if actor and row.get("actor") != actor:
+                    continue
+                if target and row.get("target") != target:
+                    continue
+                if errors_only and not (row.get("error") or row.get("result") in ("error", "failed")):
+                    continue
+                lines.append(row)
+                if len(lines) >= limit:
+                    return {"lines": lines, "skipped": skipped}
+        return {"lines": lines, "skipped": skipped}
 
     def numbers_request(self, p: dict) -> dict:
         """agora#154: write ``{key: value}`` as one request file. Every key
@@ -1900,6 +1951,8 @@ class Chat:
             return self.dashboard.approve(p.get("id"), p.get("answer"), p.get("note"))
         if path == "numbers" and method == "GET":
             return {"groups": self.limits()}
+        if path == "log" and method == "GET":
+            return self.log_view(p)
         if path == "numbers" and method == "POST":
             return self.numbers_request(p)
         if path == "dashboard/pin" and method == "GET":
