@@ -64,6 +64,17 @@ def test_log_view_filters_by_target_and_is_newest_first(logview):
     assert [r["time"] for r in body["lines"]] == ["2026-10-21T08:00:00Z", "2026-10-20T23:00:00Z"]
 
 
+def test_log_view_target_matches_supervisor_style_substring(logview):
+    api, root = logview
+    _write(root, "2026-10-21", [
+        _line("2026-10-21T08:00:00Z", "pool", "determlab/agora#155 PR #202 @7f88326"),
+        _line("2026-10-21T08:10:00Z", "pool", "determlab/ops#9 PR #3 @abc")])
+    for needle in ("determlab/agora#155", "#155"):
+        status, body = api("GET", "log", target=needle)
+        assert status == 200
+        assert [r["time"] for r in body["lines"]] == ["2026-10-21T08:00:00Z"]
+
+
 def test_log_view_errors_only(logview):
     api, root = logview
     _write(root, "2026-10-21", [

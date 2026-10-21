@@ -943,7 +943,7 @@ class Chat:
                     continue
                 if actor and row.get("actor") != actor:
                     continue
-                if target and row.get("target") != target:
+                if target and target not in str(row.get("target") or ""):
                     continue
                 if errors_only and not (row.get("error") or row.get("result") in ("error", "failed")):
                     continue
