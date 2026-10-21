@@ -12,3 +12,8 @@ bot/.wake/
 
 # chat/ — our own chat server (issue #61). The SQLite database is local state.
 chat/data/
+# any SQLite file anywhere is local state, never public (rfc-005 slice 1a)
+*.sqlite3
+*.sqlite3-journal
+*.sqlite3-wal
+*.sqlite3-shm
