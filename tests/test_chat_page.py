@@ -422,6 +422,22 @@ def test_the_page_has_no_inline_handlers_or_styles_the_csp_would_block():
         assert not [a for a in attrs if a.startswith("on")], (tag, attrs)
 
 
+def test_208_pool_and_agents_rows_are_stacked_cards_that_cannot_overflow():
+    text = PAGE.read_text(encoding="utf-8")
+    css = lambda sel: re.search(re.escape(sel) + r"\s*\{([^}]*)\}", text).group(1)
+    assert "min-width: 0" in css(".pchip > div") and "max-width: 100%" in css("a.pchip")
+    assert "-webkit-line-clamp: 2" in css(".pchip .pc-title")
+    note = css(".pchip .pc-note")
+    assert "white-space: nowrap" in note and "text-overflow: ellipsis" in note
+    assert "flex-wrap: wrap" in css(".prow")
+    chip = _function("poolChip")
+    assert "nrow" not in chip and '"תיקון"' in chip and "ltr(nzTime(c.since))" in chip
+    # the settings form keeps the 4-column grid; the pool/agents renderers no longer use it
+    assert "grid-template-columns: 1fr 7rem 5rem 8rem" in css(".nrow")
+    for fn in ("renderPool", "renderAgents"):
+        assert "nrow" not in _function(fn), fn
+
+
 # -- the @ picker's fixed names (the mention-button row is gone, ops#277)
 
 
