@@ -2287,6 +2287,23 @@ def test_146_a_role_alone_in_its_room_keeps_the_old_rules(wake, tmp_path):
     assert "meeting" not in w.on_message("CPSO", dm, [])
 
 
+def test_145_an_untagged_answer_after_the_asking_session_closed_wakes_the_pm(wake, tmp_path):
+    sp = FakeSpawner()
+    w = meeting(wake, tmp_path, bots=True)
+    w.spawner = sp
+    open_sessions(w, sp, ("PM",))
+    ask = msg(20, "question 1: which demo?", sender=MEETING_IDS["PM"], stream="All hands",
+              topic="chat")
+    w.on_message("PM", ask, [])
+    w.role("PM")["session"] = None  # its close line posted, the session ended
+    n = len(sp.started)
+    w.clock.t += 60
+    d = w.on_message("PM", msg(21, "א", stream="All hands", topic="chat"), [])
+    assert d["action"] == "spawn", d
+    assert len(sp.started) == n + 1 and "א" in sp.started[-1][1]
+    assert sp.started[-1][2] == "PM"
+
+
 # -- agora#163: a bot-loop stop ends on its own --------------------------------
 
 def _stopped_state(wake, path, at, turns=6, room="coo"):
