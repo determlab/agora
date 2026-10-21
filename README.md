@@ -198,6 +198,10 @@ Bound to `127.0.0.1` and deliberately unauthenticated. **The loopback bind is th
 boundary.** Anyone who can reach the port can speak as the chair, mute participants,
 and close the room. Do not put it on a LAN without something in front of it.
 
+## Numbers tab
+
+The chat dashboard's Numbers tab (`chat/server.py`, `AGORA_DATA_DIR`) lists the pool numbers from `limits.json` in that folder (`{"groups": [{"name", "numbers": [{"key", "name", "value", "unit", "min", "max"}]}]}`, see `tests/fixtures/limits.json`) and Save writes one `limits-request.json` there; an agent does the same with `POST /api/v1/numbers` and JSON `{key: value}` (answer: `written: true` and the path, or the key and its allowed range); another program applies the request.
+
 ## Layout
 
 ```

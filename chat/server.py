@@ -117,6 +117,12 @@ NO_DASHBOARD = "no dashboard command configured: start the server with --dashboa
 APPROVE_TIMEOUT = 30.0  # ops#176: a local, gh-free write — nowhere near dashboard.py's own timeout
 NO_APPROVE = "no approve command configured: start the server with --approve-cmd"
 ANSWERS = ("yes", "no", "later")
+# agora#154: the Numbers tab reads the limits file and writes one request file,
+# both in the data folder (AGORA_DATA_DIR). Applying the request
+# is another program's job: the server holds no key and starts nothing.
+LIMITS_FILE = "limits.json"
+LIMITS_REQUEST_FILE = "limits-request.json"
+NO_DATA_DIR = "no data folder configured: start the server with AGORA_DATA_DIR set to the folder"
 # agora#174: the board's pinned goal is one row in the database, so the phone
 # and the PC read the same pin and a restart keeps it.
 PIN_MAX = 200
@@ -864,14 +870,87 @@ class Chat:
     """The endpoints. Each returns the success body (without ``result``)."""
 
     def __init__(self, store: Store, poll_seconds: float = POLL_SECONDS,
-                 dashboard: Dashboard | None = None, allow_hosts: tuple[str, ...] = ()):
+                 dashboard: Dashboard | None = None, allow_hosts: tuple[str, ...] = (),
+                 data_dir: str | None = None):
         self.s = store
+        self.data_dir = data_dir
         self.poll_seconds = poll_seconds
         self.dashboard = dashboard or Dashboard(store)
         self.allow_hosts = allow_hosts
         self.woken: dict[tuple[str, str], tuple[int, float]] = {}  # (owner, ref) -> (message id, when)
         self.wake_lock = threading.Lock()
         self.pair_limiter = RateLimiter(PAIR_RATE_LIMIT, PAIR_RATE_WINDOW)
+
+    def limits(self) -> list[dict]:
+        """The groups of the limits file: ``{"groups": [{"name", "numbers":
+        [{"key", "name", "value", "unit", "min", "max"}]}]}``."""
+        if not self.data_dir:
+            raise ApiError(NO_DATA_DIR, "DATA_DIR_NOT_CONFIGURED")
+        path = os.path.join(self.data_dir, LIMITS_FILE)
+        try:
+            with open(path, encoding="utf-8") as f:
+                groups = json.load(f)["groups"]
+            for g in groups:
+                for n in g["numbers"]:
+                    n["key"], n["value"], n["min"], n["max"]
+        except OSError as e:
+            raise ApiError(f"cannot read the limits file {path}: {e.strerror or e}",
+                           "LIMITS_UNREADABLE", 404)
+        except (ValueError, KeyError, TypeError):
+            raise ApiError(f"the limits file {path} is not in the expected shape "
+                           f"(see README.md, Numbers tab)", "LIMITS_BAD_SHAPE", 502)
+        return groups
+
+    def numbers_request(self, p: dict) -> dict:
+        """agora#154: write ``{key: value}`` as one request file. Every key
+        must be in the limits file and every value inside its range; one bad
+        entry refuses the whole request. ``written`` is only ever true after
+        the file is on disk."""
+        known = {n["key"]: n for g in self.limits() for n in g["numbers"]}
+        if not p:
+            raise ApiError("Nothing to save: send {key: value} for at least one number",
+                           "REQUEST_VARIABLE_MISSING")
+        changes = {}
+        for key, raw in p.items():
+            n = known.get(key)
+            if n is None:
+                raise ApiError(f"Unknown number {key!r}: the known ones are "
+                               f"{', '.join(sorted(known))}", "UNKNOWN_NUMBER", key=key)
+            lo, hi, unit = n["min"], n["max"], n.get("unit") or ""
+            allowed = f"{lo:g} to {hi:g} {unit}".strip()
+            value = raw
+            if isinstance(raw, str):
+                try:
+                    value = float(raw.strip())
+                except ValueError:
+                    value = None
+            if isinstance(value, bool) or not isinstance(value, (int, float)) \
+                    or value != value or value in (float("inf"), float("-inf")):
+                raise ApiError(f"{key}: {raw!r} is not a number; allowed {allowed}",
+                               "NUMBER_OUT_OF_RANGE", key=key, min=lo, max=hi)
+            whole = isinstance(n["value"], int) and not isinstance(n["value"], bool)
+            if whole and value != int(value):
+                raise ApiError(f"{key}: {raw!r} must be a whole number; allowed {allowed}",
+                               "NUMBER_OUT_OF_RANGE", key=key, min=lo, max=hi)
+            if not lo <= value <= hi:
+                raise ApiError(f"{key}: {value:g} is out of range; allowed {allowed}",
+                               "NUMBER_OUT_OF_RANGE", key=key, min=lo, max=hi)
+            changes[key] = int(value) if whole else value
+        path = os.path.join(self.data_dir, LIMITS_REQUEST_FILE)
+        doc = {"requested_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+               "changes": changes}
+        tmp = f"{path}.{secrets.token_hex(4)}.tmp"
+        try:
+            with open(tmp, "w", encoding="utf-8", newline="\n") as f:
+                json.dump(doc, f, indent=2)
+                f.write("\n")
+            os.replace(tmp, path)  # atomic: the applier never reads half a file
+        except OSError as e:
+            with contextlib.suppress(OSError):
+                os.remove(tmp)
+            raise ApiError(f"could not write {path}: {e.strerror or e}; nothing was saved",
+                           "NUMBERS_WRITE_FAILED", 500)
+        return {"written": True, "path": path, "changes": changes}
 
     def message_json(self, row, me: dict) -> dict:
         s = self.s
@@ -1819,6 +1898,10 @@ class Chat:
                            "DASHBOARD_SYNC_FAILED", 502, last_error=self.dashboard.last_error)
         if path == "dashboard/approve" and method == "POST":
             return self.dashboard.approve(p.get("id"), p.get("answer"), p.get("note"))
+        if path == "numbers" and method == "GET":
+            return {"groups": self.limits()}
+        if path == "numbers" and method == "POST":
+            return self.numbers_request(p)
         if path == "dashboard/pin" and method == "GET":
             return self.dashboard.pin()
         if path == "dashboard/pin" and method == "POST":
@@ -2014,7 +2097,17 @@ class Handler(BaseHTTPRequestHandler):
             length = self._body_length()
             if length:
                 body = self.rfile.read(length).decode("utf-8", "replace")
-                params.update(urllib.parse.parse_qsl(body, keep_blank_values=True))
+                if "json" in self.headers.get("Content-Type", ""):
+                    # agora#154: an agent's POST /numbers is {key: value}.
+                    try:
+                        obj = json.loads(body)
+                    except ValueError:
+                        obj = None
+                    if not isinstance(obj, dict):
+                        raise ApiError("The JSON body must be an object: {key: value}")
+                    params.update(obj)
+                else:
+                    params.update(urllib.parse.parse_qsl(body, keep_blank_values=True))
             self._check_origin()
             if url.path == "/" and method == "GET":
                 self._serve_page()  # static, no auth: it holds no data
@@ -2060,7 +2153,8 @@ def make_server(db: str, port: int = 8095, poll_seconds: float = POLL_SECONDS,
                 seed_ids: int | None = None, dashboard_cmd: str | None = None,
                 dashboard_every: float = DASHBOARD_EVERY,
                 approve_cmd: str | None = None,
-                allow_hosts: tuple[str, ...] | list[str] = ()) -> ThreadingHTTPServer:
+                allow_hosts: tuple[str, ...] | list[str] = (),
+                data_dir: str | None = None) -> ThreadingHTTPServer:
     """A server bound to 127.0.0.1 only; ``port=0`` picks a free one. With
     ``dashboard_cmd`` its sync thread starts too (first run at once). With
     ``approve_cmd`` (ops#176), POST /dashboard/approve is served; without it,
@@ -2073,7 +2167,8 @@ def make_server(db: str, port: int = 8095, poll_seconds: float = POLL_SECONDS,
     dashboard = Dashboard(store, dashboard_cmd, dashboard_every, approve_cmd=approve_cmd)
     hosts = tuple(allow_host(h) for h in allow_hosts)
     handler = type("ChatHandler", (Handler,), {
-        "chat": Chat(store, poll_seconds, dashboard, allow_hosts=hosts),
+        "chat": Chat(store, poll_seconds, dashboard, allow_hosts=hosts,
+                     data_dir=data_dir or os.environ.get("AGORA_DATA_DIR")),
         "allow_hosts": hosts})
     server = Server((HOST, port), handler)
     server.daemon_threads = True

@@ -1,0 +1,22 @@
+{
+  "groups": [
+    {
+      "name": "Intake",
+      "numbers": [
+        {"key": "max_open_issues", "name": "How many issues may wait in the queue", "value": 20,
+         "unit": "issues", "min": 1, "max": 100},
+        {"key": "claim_ttl_hours", "name": "How long a claim holds before it is free again", "value": 2.5,
+         "unit": "hours", "min": 0.5, "max": 24}
+      ]
+    },
+    {
+      "name": "Build",
+      "numbers": [
+        {"key": "max_parallel_runs", "name": "How many runs go at the same time", "value": 3,
+         "unit": "runs", "min": 1, "max": 8},
+        {"key": "review_rounds", "name": "How many review rounds before a person is asked", "value": 4,
+         "unit": "rounds", "min": 1, "max": 10}
+      ]
+    }
+  ]
+}
