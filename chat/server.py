@@ -64,6 +64,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import zlib
+from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 HOST = "127.0.0.1"
@@ -125,6 +126,11 @@ LIMITS_REQUEST_FILE = "limits-request.json"
 # agora#155: the Log view reads the daily JSONL log of OPS_POOL_ROOT, read-only.
 LOG_FILE = re.compile(r"log-\d{4}-\d{2}-\d{2}\.jsonl")
 LOG_LIMIT, LOG_LIMIT_MAX, LOG_MAX_DAYS = 200, 1000, 7
+# agora#204: the Agents tab. The wake daemon touches bot/.wake/wake.lock every
+# tick (30 s); past AGENTS_ALIVE_S without a touch it is not running. Token
+# data older than AGENTS_TOKENS_STALE_H hours shows a warning line.
+AGENTS_ALIVE_S = 180
+AGENTS_TOKENS_STALE_H = 2
 NO_DATA_DIR = "no data folder configured: start the server with AGORA_DATA_DIR set to the folder"
 # agora#174: the board's pinned goal is one row in the database, so the phone
 # and the PC read the same pin and a restart keeps it.
@@ -620,6 +626,39 @@ def _known_op(op, operand) -> bool:
         op == "is" and operand in ("mentioned", "private", "dm"))
 
 
+def role_state(rs: dict | None) -> str:
+    """agora#204: a role's state from its bot/.wake/state.json entry. No
+    session is ``closed``; a session with messages waiting is ``working``;
+    a session with none is ``resting``."""
+    sess = rs.get("session") if isinstance(rs, dict) else None
+    if not sess:
+        return "closed"
+    return "working" if isinstance(sess, dict) and sess.get("pending") else "resting"
+
+
+def tokens_view(state: dict) -> dict:
+    """agora#204: the token block of a ``Dashboard.state()`` answer, with a
+    ``stale`` flag and its ``reason``: ``no-data`` (the document has no tokens),
+    ``old`` (the token file is over AGENTS_TOKENS_STALE_H hours old) or
+    ``sync-old`` (the dashboard itself has not synced for that long)."""
+    doc = state.get("doc") if isinstance(state.get("doc"), dict) else {}
+    brief = doc.get("brief") if isinstance(doc.get("brief"), dict) else {}
+    bt = brief.get("tokens") if isinstance(brief.get("tokens"), dict) else {}
+    data = doc.get("tokens") if isinstance(doc.get("tokens"), dict) else None
+    age = bt.get("age_h")
+    age = age if isinstance(age, (int, float)) and not isinstance(age, bool) else None
+    if data is None and not bt:
+        reason = "no-data"
+    elif age is not None and age > AGENTS_TOKENS_STALE_H:
+        reason = "old"
+    elif state.get("stale"):
+        reason = "sync-old"
+    else:
+        reason = None
+    plan = doc.get("plan") if isinstance(doc.get("plan"), dict) else None
+    return {"data": data, "plan": plan, "age_h": age, "stale": reason is not None, "reason": reason}
+
+
 class Dashboard:
     """The sync thread (issue #81, RFC-002 §1): runs ``--dashboard-cmd``
     every ``every`` seconds and on ``POST /dashboard/sync``, and keeps each
@@ -951,6 +990,105 @@ class Chat:
                 if len(lines) >= limit:
                     return {"lines": lines, "skipped": skipped}
         return {"lines": lines, "skipped": skipped}
+
+    def pool_view(self) -> dict:
+        """agora#196: read per request, no cache; pool_view.py sits next to this file."""
+        spec = importlib.util.spec_from_file_location(
+            "pool_view", os.path.join(os.path.dirname(os.path.abspath(__file__)), "pool_view.py"))
+        pv = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(pv)
+        return pv.load(os.environ.get("AGORA_POOL_VIEW"), pv.utcnow())
+
+    def agents(self) -> dict:
+        """agora#204: one answer for the Agents tab: ``roles`` (company roles of
+        bot/wake.py AGENT), ``coders`` (the pool's running runs), ``daemon``
+        (the wake daemon) and ``tokens``, with ``generated_at``. Read-only. A
+        source that cannot be read leaves its part empty and adds a line to
+        ``errors``; it never fails the whole answer. Days are UTC days."""
+        now = int(time.time())
+        day0 = now - now % 86400
+        iso = lambda t: datetime.fromtimestamp(t, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        errors: list[str] = []
+        bot_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "bot")
+        wake_dir = os.environ.get("AGORA_WAKE_DIR") or os.path.join(bot_dir, ".wake")
+        models: dict = {}
+        homes: dict = {}
+        try:
+            spec = importlib.util.spec_from_file_location("agora_wake_view",
+                                                          os.path.join(bot_dir, "wake.py"))
+            wake = importlib.util.module_from_spec(spec)
+            sys.path.insert(0, bot_dir)
+            try:
+                spec.loader.exec_module(wake)
+            finally:
+                sys.path.remove(bot_dir)
+            models, homes = wake.AGENT["models"], wake.AGENT.get("home_streams", {})
+        except Exception as e:  # a role list that cannot load must not hide the other parts
+            errors.append(f"cannot read bot/wake.py AGENT: {e}")
+        state_path = os.path.join(wake_dir, "state.json")
+        wstate: dict = {}
+        try:
+            with open(state_path, encoding="utf-8") as f:
+                loaded = json.load(f)
+            wstate = loaded if isinstance(loaded, dict) else {}
+        except (OSError, ValueError) as e:
+            errors.append(f"cannot read {state_path}: {getattr(e, 'strerror', None) or e}")
+        wroles = wstate.get("roles") if isinstance(wstate.get("roles"), dict) else {}
+        duty = wstate.get("duty") if isinstance(wstate.get("duty"), dict) else {}
+        roles = []
+        for name, model in models.items():
+            if name == "PA":  # personal assistant: not a company role, never shown
+                continue
+            bot = self.s.one("SELECT id FROM users WHERE is_bot=1 AND full_name=? COLLATE NOCASE",
+                             (name,))
+            last = self.s.one("SELECT m.timestamp AS ts, s.name AS room FROM messages m "
+                              "LEFT JOIN streams s ON s.stream_id = m.stream_id "
+                              "WHERE m.sender_id=? ORDER BY m.id DESC LIMIT 1",
+                              (bot["id"],)) if bot else None
+            today = self.s.one("SELECT COUNT(*) AS n FROM messages WHERE sender_id=? AND timestamp>=?",
+                               (bot["id"], day0))["n"] if bot else 0
+            wakes = (duty.get(name) or {}).get("wakes") if isinstance(duty.get(name), dict) else None
+            roles.append({
+                "name": name, "model": model, "home": homes.get(name),
+                "state": role_state(wroles.get(name)),
+                "last_room": last["room"] if last else None,
+                "last_at": iso(last["ts"]) if last else None,
+                "messages_today": today,
+                "self_wakes_today": sum(1 for t in wakes or []
+                                        if isinstance(t, (int, float)) and t >= day0)})
+        mtimes: dict[str, float | None] = {}
+        for fname in ("state.json", "wake.lock"):
+            try:
+                mtimes[fname] = os.stat(os.path.join(wake_dir, fname)).st_mtime
+            except OSError:
+                mtimes[fname] = None
+        lock = mtimes["wake.lock"]
+        daemon = {"alive": lock is not None and now - lock <= AGENTS_ALIVE_S,
+                  "lock_at": iso(lock) if lock else None,
+                  "state_at": iso(mtimes["state.json"]) if mtimes["state.json"] else None}
+        pv = self.pool_view()
+        if not pv["view"]:
+            errors.extend(pv["errors"])
+        stages = {s["key"]: s["items"] for s in (pv["view"] or {}).get("stages", [])}
+        coders = [{"id": c["id"], "title": c["title"], "url": c["url"], "where": c.get("where"),
+                   "since": c.get("since"), "model": c.get("model") or None}
+                  for c in stages.get("working", [])]
+        # Today's claims in the daily log: one per ticket, PC or cloud.
+        log = self.log_view({"limit": LOG_LIMIT_MAX})
+        if log.get("hint"):
+            errors.append(log["hint"])
+        claims: dict[str, str] = {}
+        for row in log["lines"]:
+            if row.get("action") != "claim" or not str(row.get("time") or "").startswith(iso(day0)[:10]):
+                continue
+            where = row.get("where") or ("local" if row.get("machine") else None)
+            if where in ("local", "pc", "cloud"):
+                claims.setdefault(str(row.get("target")), "cloud" if where == "cloud" else "local")
+        counts = {"local": sum(1 for w in claims.values() if w == "local"),
+                  "cloud": sum(1 for w in claims.values() if w == "cloud")}
+        return {"generated_at": iso(now), "roles": roles,
+                "coders": {"running": coders, "today": counts}, "daemon": daemon,
+                "tokens": tokens_view(self.dashboard.state()), "errors": errors}
 
     def numbers_request(self, p: dict) -> dict:
         """agora#154: write ``{key: value}`` as one request file. Every key
@@ -1950,12 +2088,9 @@ class Chat:
         if path == "dashboard/approve" and method == "POST":
             return self.dashboard.approve(p.get("id"), p.get("answer"), p.get("note"))
         if path == "dashboard/pool" and method == "GET":
-            # agora#196: read per request, no cache; pool_view.py sits next to this file.
-            spec = importlib.util.spec_from_file_location(
-                "pool_view", os.path.join(os.path.dirname(os.path.abspath(__file__)), "pool_view.py"))
-            pv = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(pv)
-            return pv.load(os.environ.get("AGORA_POOL_VIEW"), pv.utcnow())
+            return self.pool_view()
+        if path == "agents" and method == "GET":
+            return self.agents()
         if path == "numbers" and method == "GET":
             return {"groups": self.limits()}
         if path == "log" and method == "GET":

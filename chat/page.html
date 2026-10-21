@@ -432,10 +432,6 @@ a.ref:hover { text-decoration: underline; }
 .qm td.n.warn { color: var(--wait); }
 .qm td.o { color: var(--muted); }
 .qm a { color: inherit; }
-.bf-tok { display: grid; grid-template-columns: auto 1fr auto; gap: 6px 10px; align-items: center; font-size: 14px; }
-.bf-tok .who { font-weight: 600; }
-.bf-tok .val { font-variant-numeric: tabular-nums; white-space: nowrap; color: var(--muted); font-size: 13px; }
-.bf-tok .pbar { min-width: 40px; }
 .bf-line { font-size: 14px; display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
 .bf-line .lbl { font-weight: 600; }
 .bf-sec > .lbl { font-size: 13px; font-weight: 700; color: var(--muted); }
@@ -724,6 +720,10 @@ a.ref:hover { text-decoration: underline; }
       <button type="button" id="dash-tab-numbers" class="go" role="tab" aria-selected="false">מספרים</button>
       <button type="button" id="dash-tab-log" class="go" role="tab" aria-selected="false">יומן</button>
       <button type="button" id="dash-tab-pool" class="go" role="tab" aria-selected="false">פול</button>
+      <button type="button" id="dash-tab-agents" class="go" role="tab" aria-selected="false">סוכנים</button>
+    </div>
+    <div id="dash-agents" dir="rtl" hidden>
+      <div id="dash-agents-body" class="muted">…</div>
     </div>
     <div id="dash-pool" dir="rtl" hidden>
       <div id="dash-pool-body" class="muted">…</div>
@@ -757,7 +757,6 @@ a.ref:hover { text-decoration: underline; }
       <section class="dash-card card wide" id="dash-timeline"><h3></h3><div class="dash-body"><div class="muted">טוען…</div></div></section>
       <section class="dash-card card wide" id="dash-gantt"><h3></h3><div class="dash-body"><div class="muted">טוען…</div></div></section>
       <section class="dash-card card" id="dash-roles"><h3></h3><div class="dash-body"><div class="muted">טוען…</div></div></section>
-      <section class="dash-card card" id="dash-tokens"><h3></h3><div class="dash-body"><div class="muted">טוען…</div></div></section>
       <section class="dash-card card" id="dash-queue"><h3></h3><div class="dash-body"><div class="muted">טוען…</div></div></section>
       <section class="dash-card card" id="dash-prs"><h3></h3><div class="dash-body"><div class="muted">טוען…</div></div></section>
       <section class="dash-card card" id="dash-week"><h3></h3><div class="dash-body"><div class="muted">טוען…</div></div></section>
@@ -1535,6 +1534,7 @@ async function connect(gen) {
   await loadUnread();
   if (S.open) await openRoom(S.open.stream_id, S.open.stream);
   await loadDashboard();  // once on load, and again on every reconnect through here
+  loadDashTab(dashTabNow);  // a reload opens the dashboard tab you were on (its data needs the key)
   setLive("live", "מחובר");
 }
 
@@ -1621,7 +1621,7 @@ async function poll(gen) {
       else if (ev.type === "subscription") onSubscription(ev);
       // Not awaited: a dashboard refresh must never hold up the message poll
       // loop, and loadDashboard() only ever replaces S.dashboard wholesale.
-      else if (ev.type === "dashboard") { loadDashboard(); if (!$("dash-pool").hidden) loadPool(); }
+      else if (ev.type === "dashboard") { loadDashboard(); if (!$("dash-pool").hidden) loadPool(); if (!$("dash-agents").hidden) loadAgents(); }
     }
   }
 }
@@ -1679,6 +1679,7 @@ function joinDetail(...parts) { return parts.filter((p) => p !== null && p !== u
 // not lose their place.
 function rerenderDash(focusCls) {
   if (S.dashboard) renderDashboard(S.dashboard);
+  if (S.agents) mountAgents(S.agents);
   const b = focusCls ? $("dash").querySelector("." + focusCls) : null;
   if (b) b.focus();
 }
@@ -2488,7 +2489,6 @@ function setCount(id, n) {
 // Every number carries its word; the page adds no logic of its own beyond
 // wording, so a wrong row is fixed in dashboard.py, not here.
 const OWNER_CLS = {"חמי": "own-founder", "CTO": "own-cto", "PM": "own-pm"};
-const TOK_WHO_HE = {coders_pc: "קודרים במחשב"};
 
 function ageText(h) {
   if (h == null) return "";
@@ -2542,37 +2542,6 @@ function briefMoving(rows) {
   const items = rows.map((m) => briefRow(m.where ? "a" : "none", m.where || "", m.ref, m.url, m.what,
     m.age_h != null ? "לפני " + ageText(m.age_h) : (m.min != null ? m.min + " דק׳" : ""), m.title));
   sec.append(cutList(ul, items, "bf-moving", 5));
-  return sec;
-}
-
-function briefTokens(t, now) {
-  if (now === undefined) now = Date.now();
-  const sec = briefSection("טוקנים · 24 שעות אחרונות", t.total != null ? "סה״כ " + fmtTok(t.total) : null);
-  const plan = el("div", "bf-line");
-  for (const [k, label] of [["plan_5h", "תוכנית 5 שעות"], ["plan_7d", "תוכנית שבועית"]]) {
-    const w = t[k];
-    const s = el("span");
-    s.append(el("span", "lbl", label + ": "),
-             document.createTextNode(w && !w.expired ? w.percent + "% · " + resetText(k === "plan_5h" ? "5h" : "7d", w.resets_at, now)
-                                                     : "אין נתון"));
-    plan.append(s);
-  }
-  sec.append(plan);
-  if (t.total == null) { sec.append(noData("tokens.json missing: the watchdog writes it hourly")); return sec; }
-  const grid = el("div", "bf-tok");
-  for (const r of t.rows || []) {
-    const bar = el("div", "pbar");
-    const i = el("i");
-    i.style.width = Math.round((r.share || 0) * 100) + "%";
-    bar.append(i);
-    grid.append(el("span", "who", TOK_WHO_HE[r.who] || r.who), bar,
-                el("span", "val", r.weighted == null ? "לא נמדד" : fmtTok(r.weighted) + " · " + Math.round((r.share || 0) * 100) + "%"));
-  }
-  grid.append(el("span", "who", "קודרים בענן"), el("span"), el("span", "val", "לא נמדד"));
-  sec.append(grid);
-  const note = el("div", "muted", "משוקלל: קריאה מהמטמון ×0.1, פלט ×5. זה דירוג, לא חשבון."
-    + (t.age_h >= 2 ? " נמדד לפני " + ageText(t.age_h) + "." : ""));
-  sec.append(note);
   return sec;
 }
 
@@ -2906,12 +2875,6 @@ function renderBrief(b, now, doc, pin) {
   // ops#414 adds the owner to doc.stuck itself; until then the brief's rows carry it.
   const stuck = Array.isArray(doc.stuck) && doc.stuck.length && doc.stuck.every((r) => r && r.owner) ? doc.stuck : (b.stuck || []);
   wrap.append(boardGoalsSec(goals, pin && pin.goal), boardRunning(doc.live, b), briefStuck(stuck), boardQueues(doc.queues));
-  if (b.tokens) wrap.append(briefTokens(b.tokens, now));
-  else {
-    const sec = briefSection("טוקנים", null);
-    sec.append(noData("doc.brief.tokens missing"));
-    wrap.append(sec);
-  }
   return wrap;
 }
 
@@ -2933,7 +2896,6 @@ function renderDashboard(d) {
   // already says 0. It stays during an Undo window.
   $("dash-approvals").hidden = !(Array.isArray(doc.next_moves) && doc.next_moves.length) && !approvalsPending;
   setCount("dash-approvals", Array.isArray(doc.next_moves) ? doc.next_moves.length : null);
-  mountCard("dash-tokens", renderTokens(doc.tokens, doc.plan));
   mountCard("dash-waiting", renderWaiting(doc.stuck));
   setCount("dash-waiting", (doc.stuck || []).filter((r) => r.check === "NEEDSHUMAN").length);
   mountCard("dash-roles", renderRoles(doc.roles));
@@ -4199,7 +4161,7 @@ const DASH_TITLES = {
   "dash-live": "הרובוטים עכשיו", "dash-approvals": "מחכה לך", "dash-waiting": "ריצות שממתינות לך",
   "dash-roles": "מי עובד על מה", "dash-queue": "התור לפי עדיפות", "dash-prs": "בקשות מיזוג פתוחות",
   "dash-week": "השבוע", "dash-products": "מוצרים", "dash-stuck": "תקוע",
-  "dash-progress": "התמונה הגדולה", "dash-tokens": "טוקנים", "dash-timeline": "ציר הזמן של היום",
+  "dash-progress": "התמונה הגדולה", "dash-timeline": "ציר הזמן של היום",
   "dash-gantt": "התקדמות לפי יעדים",
 };
 for (const [id, title] of Object.entries(DASH_TITLES)) {
@@ -4407,21 +4369,103 @@ async function loadPool() {
   } catch (e) { body.className = "error"; body.textContent = e.message; }
 }
 
-function showDashTab(name) {
-  const nums = name === "numbers", log = name === "log", pool = name === "pool";
-  $("dash-board").hidden = nums || log || pool;
-  $("dash-numbers").hidden = !nums;
-  $("dash-log").hidden = !log;
-  $("dash-pool").hidden = !pool;
-  for (const [id, on] of [["dash-tab-board", !nums && !log && !pool], ["dash-tab-numbers", nums],
-                          ["dash-tab-log", log], ["dash-tab-pool", pool]]) {
-    $(id).classList.toggle("active", on);
-    $(id).setAttribute("aria-selected", String(on));
+// -- the סוכנים tab (agora#204): GET agents, view only. Roles, the coders
+// running now, the wake daemon and the token block (moved here from the board).
+// Refreshes with the dashboard sync ("dashboard" event, every 300 s).
+const ROLE_STATE_HE = {working: "עובד", resting: "נח", closed: "סגור"};
+const TOK_STALE_HE = {"no-data": "אין נתוני טוקנים: tokens.json לא נקרא", "sync-old": "נתוני הטוקנים ישנים: הלוח לא סונכרן מעל שעתיים"};
+
+function modelChip(model) { return el("span", "chip", model || "?"); }
+
+function agentsTokens(t) {
+  const box = el("div");
+  if (t.stale) {
+    const w = el("div", "error", t.reason === "old" ? "נתוני הטוקנים ישנים: נמדדו לפני " + ageText(t.age_h) : (TOK_STALE_HE[t.reason] || "נתוני הטוקנים ישנים"));
+    w.setAttribute("role", "alert"); w.style.fontWeight = "bold";
+    box.append(w);
   }
-  if (nums) loadNumbers();
-  if (log) loadLog();
-  if (pool) loadPool();
+  box.append(renderTokens(t.data, t.plan));
+  return box;
 }
+
+function renderAgents(a) {
+  const root = el("div");
+  for (const e of a.errors || []) root.append(el("div", "muted", e));
+  const roles = el("section", "dash-card card wide");
+  roles.append(el("h3", null, "תפקידים"));
+  for (const r of a.roles) {
+    const row = el("div", "nrow");
+    row.append(el("b", null, r.name), modelChip(r.model), el("span", "chip " + r.state, ROLE_STATE_HE[r.state] || r.state),
+               el("span", "muted", r.last_at ? "הודעה אחרונה: #" + (r.last_room || "הודעה ישירה") + " " + nzTime(r.last_at) : "אין הודעות"),
+               el("span", "muted", "היום: " + r.messages_today));
+    roles.append(row);
+  }
+  const coders = el("section", "dash-card card wide");
+  coders.append(el("h3", null, "קודרים עכשיו"));
+  coders.append(el("div", "nrow", "היום: מחשב " + a.coders.today.local + " · ענן " + a.coders.today.cloud));
+  if (!a.coders.running.length) coders.append(el("div", "muted", "אין קודר רץ עכשיו"));
+  for (const c of a.coders.running) {
+    const row = el("a", "nrow");
+    row.href = c.url; row.target = "_blank"; row.rel = "noopener";
+    row.append(ltr(c.id), modelChip(c.model), el("span", null, c.where === "cloud" ? "ענן" : c.where === "local" ? "מחשב" : "—"),
+               el("span", "muted", "מאז " + nzTime(c.since)));
+    coders.append(row);
+  }
+  const d = a.daemon;
+  const daemon = el("section", "dash-card card wide");
+  daemon.append(el("h3", null, "דמון ההשכמה"));
+  const st = el("div", "nrow");
+  const word = el("b", d.alive ? "ok" : "error", d.alive ? "חי" : "לא רץ");
+  if (!d.alive) word.style.fontWeight = "bold";
+  const upd = el("span", "muted", " עדכון אחרון: ");
+  upd.append(ltr(nzTime(d.lock_at || d.state_at)));
+  st.append(word, upd);
+  daemon.append(st, el("div", "nrow", "השכמות עצמיות היום: " + a.roles.map((r) => r.name + " " + r.self_wakes_today).join(" · ")));
+  const tokens = el("section", "dash-card card wide");
+  tokens.append(el("h3", null, "טוקנים"), agentsTokens(a.tokens));
+  root.append(roles, coders, daemon, tokens);
+  return root;
+}
+
+function mountAgents(a) {
+  const body = $("dash-agents-body");
+  body.className = "";
+  body.replaceChildren(renderAgents(a));
+}
+
+async function loadAgents() {
+  const body = $("dash-agents-body");
+  try { S.agents = await api("GET", "agents"); mountAgents(S.agents); }
+  catch (e) { body.className = "error"; body.textContent = e.message; }
+}
+
+// A reload keeps the dashboard tab you were on (agora#204), as it keeps the view.
+const DASHTAB = "agora-dash-tab";
+const DASH_TABS = ["board", "numbers", "log", "pool", "agents"];
+let dashTabNow = "board";
+
+function loadDashTab(name) {
+  if (name === "numbers") loadNumbers();
+  if (name === "log") loadLog();
+  if (name === "pool") loadPool();
+  if (name === "agents") loadAgents();
+}
+
+function showDashTab(name, load) {
+  dashTabNow = name;
+  $("dash-board").hidden = name !== "board";
+  for (const t of DASH_TABS) {
+    if (t === "board") continue;
+    $("dash-" + t).hidden = name !== t;
+  }
+  for (const t of DASH_TABS) {
+    $("dash-tab-" + t).classList.toggle("active", name === t);
+    $("dash-tab-" + t).setAttribute("aria-selected", String(name === t));
+  }
+  try { localStorage.setItem(DASHTAB, name); } catch (e) { /* private window: the tab still switches */ }
+  if (load !== false) loadDashTab(name);
+}
+$("dash-tab-agents").addEventListener("click", () => showDashTab("agents"));
 $("dash-tab-pool").addEventListener("click", () => showDashTab("pool"));
 $("dash-tab-board").addEventListener("click", () => showDashTab("board"));
 $("dash-tab-numbers").addEventListener("click", () => showDashTab("numbers"));
@@ -4552,6 +4596,10 @@ try {
   if (v === "24h" || v === "7d") tokView = v;
 } catch (e) { /* no storage: the default view */ }
 setView((() => { try { return localStorage.getItem(VIEW); } catch (e) { return null; } })() === "dash" ? "dash" : "chat");
+try {
+  const t = localStorage.getItem(DASHTAB);
+  if (DASH_TABS.includes(t)) showDashTab(t, false);   // shown now, loaded once connect() has the key
+} catch (e) { /* no storage: the board */ }
 // ?pair=CODE (ops#236): the phone landed here from the QR. A real reload
 // would resubmit the one-time code, so the URL is cleaned with
 // history.replaceState, never location.reload/assign.
