@@ -1949,6 +1949,13 @@ class Chat:
                            "DASHBOARD_SYNC_FAILED", 502, last_error=self.dashboard.last_error)
         if path == "dashboard/approve" and method == "POST":
             return self.dashboard.approve(p.get("id"), p.get("answer"), p.get("note"))
+        if path == "dashboard/pool" and method == "GET":
+            # agora#196: read per request, no cache; pool_view.py sits next to this file.
+            spec = importlib.util.spec_from_file_location(
+                "pool_view", os.path.join(os.path.dirname(os.path.abspath(__file__)), "pool_view.py"))
+            pv = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(pv)
+            return pv.load(os.environ.get("AGORA_POOL_VIEW"), pv.utcnow())
         if path == "numbers" and method == "GET":
             return {"groups": self.limits()}
         if path == "log" and method == "GET":

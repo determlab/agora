@@ -5,6 +5,7 @@ REM Ctrl+C to stop. Extra flags pass through, e.g.  run.cmd --port 8096 --no-upd
 REM --dashboard-cmd (issue #81): the server runs this PC's ops dashboard every 5 minutes.
 REM --approve-cmd (ops#176): the approvals carousel's Yes/No/Later, same PC, same tools/.
 REM AGORA_ALLOW_HOST=NAME (ops#222): also answer as https://NAME, the `tailscale serve` name.
+REM AGORA_POOL_VIEW=FILE (agora#196): the pool-view/1 JSON file the dashboard's pool tab shows.
 REM Forward slashes: the server splits the command with shlex, which eats backslashes.
 setlocal
 set PY=%LOCALAPPDATA%\Programs\Python\Python312\python.exe
