@@ -297,6 +297,14 @@ dialog .buttons { display: flex; justify-content: flex-end; gap: .5rem; margin-t
 button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-visible {
   outline: 2px solid var(--accent); outline-offset: 2px; }
 .dhead { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+#dash-board, #dash-numbers { display: flex; flex-direction: column; gap: .75rem; }
+#dash-numbers[hidden], #dash-board[hidden] { display: none; }
+.dtabs { display: flex; gap: 6px; }
+.dtabs .go.active { background: var(--text); color: var(--panel); }
+.nrow { display: grid; grid-template-columns: 1fr 7rem 5rem 8rem; gap: 8px; align-items: center; }
+.nrow input { width: 100%; font: inherit; }
+.nrow input[aria-invalid="true"] { border-color: var(--error); }
+.nerr { color: var(--error); font-size: 13px; grid-column: 1 / -1; }
 .dhead h2 { margin: 0; font-size: 18px; }
 .kpis-in { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(150px, 100%), 1fr)); gap: 10px; }
 .kpi { border: 1px solid var(--line); border-inline-start: 5px solid var(--muted); border-radius: 10px;
@@ -711,6 +719,16 @@ a.ref:hover { text-decoration: underline; }
       <button type="button" id="dash-theme" class="icon" title="כהה / בהיר" aria-label="כהה / בהיר">&#9681;</button>
     </div>
     <div id="dash-updated" class="upd" role="status">טוען…</div>
+    <div class="dtabs" role="tablist">
+      <button type="button" id="dash-tab-board" class="go active" role="tab" aria-selected="true">לוח</button>
+      <button type="button" id="dash-tab-numbers" class="go" role="tab" aria-selected="false">מספרים</button>
+    </div>
+    <div id="dash-numbers" hidden>
+      <div id="dash-numbers-body" class="muted">…</div>
+      <button type="button" id="dash-numbers-save" class="go">שמור</button>
+      <span id="dash-numbers-msg" role="status"></span>
+    </div>
+    <div id="dash-board">
     <div class="cards">
       <section class="dash-card card wide" id="dash-approvals"><h3></h3><div class="dash-body"><div class="muted">טוען…</div></div></section>
     </div>
@@ -730,6 +748,7 @@ a.ref:hover { text-decoration: underline; }
       <section class="dash-card card" id="dash-week"><h3></h3><div class="dash-body"><div class="muted">טוען…</div></div></section>
       <section class="dash-card card" id="dash-products"><h3></h3><div class="dash-body"><div class="muted">טוען…</div></div></section>
       <section class="dash-card card" id="dash-progress"><h3></h3><div class="dash-body"><div class="muted">טוען…</div></div></section>
+    </div>
     </div>
   </aside>
   <aside id="members-panel" class="drawer" aria-labelledby="members-head">
@@ -4227,6 +4246,67 @@ $("dash-sync").addEventListener("click", async () => {
   // Reload either way: a failed sync still changes last_error, and the pill
   // must show what the server now holds, not what was asked (D3's shape).
   finally { await loadDashboard(); b.disabled = false; b.textContent = "סנכרן עכשיו"; }
+});
+
+// -- the Numbers tab (agora#154): the limits file's numbers by stage, and a
+// Save that writes one request file. It says "saved" only from the server's
+// written:true, and shows a refusal (with the allowed range) as it came.
+
+function renderNumbers(groups) {
+  const body = $("dash-numbers-body");
+  body.className = "";
+  body.replaceChildren(...groups.map((g) => {
+    const sec = el("section", "dash-card card");
+    sec.append(el("h3", null, g.name));
+    for (const n of g.numbers) {
+      const row = el("label", "nrow");
+      const inp = el("input");
+      inp.type = "number";
+      inp.step = "any";
+      inp.min = n.min;
+      inp.max = n.max;
+      inp.value = n.value;
+      inp.dataset.key = n.key;
+      inp.dataset.orig = String(n.value);
+      row.append(el("span", null, n.name), inp, el("span", "muted", n.unit || ""),
+                 el("span", "muted", n.min + " – " + n.max));
+      sec.append(row);
+    }
+    return sec;
+  }));
+}
+
+async function loadNumbers() {
+  const msg = $("dash-numbers-msg");
+  msg.textContent = "";
+  try { renderNumbers((await api("GET", "numbers")).groups); }
+  catch (e) { $("dash-numbers-body").textContent = e.message; }
+}
+
+function showDashTab(name) {
+  const nums = name === "numbers";
+  $("dash-board").hidden = nums;
+  $("dash-numbers").hidden = !nums;
+  for (const [id, on] of [["dash-tab-board", !nums], ["dash-tab-numbers", nums]]) {
+    $(id).classList.toggle("active", on);
+    $(id).setAttribute("aria-selected", String(on));
+  }
+  if (nums) loadNumbers();
+}
+$("dash-tab-board").addEventListener("click", () => showDashTab("board"));
+$("dash-tab-numbers").addEventListener("click", () => showDashTab("numbers"));
+
+$("dash-numbers-save").addEventListener("click", async () => {
+  const msg = $("dash-numbers-msg");
+  const changes = {};
+  for (const inp of $("dash-numbers-body").querySelectorAll("input[data-key]")) {
+    if (inp.value !== inp.dataset.orig) changes[inp.dataset.key] = inp.value;
+  }
+  if (!Object.keys(changes).length) { msg.textContent = "שום דבר לא שונה"; return; }
+  try {
+    const r = await api("POST", "numbers", changes);
+    msg.textContent = r.written === true ? "נשמר ב-" + r.path : "לא נשמר";
+  } catch (e) { msg.textContent = "לא נשמר: " + e.message; }
 });
 
 // The pill's "N min ago" moves on its own between syncs.
