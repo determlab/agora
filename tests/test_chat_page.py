@@ -2501,8 +2501,8 @@ def test_326_approvals_come_first_full_width_above_the_brief():
 def test_326_approvals_by_default_and_one_remembered_toggle_shows_the_other_twelve():
     first, more = _board_ids()
     assert first == ["dash-approvals"]
-    assert len(more) == 12 and set(first) | set(more) == {"dash-" + c for c in (
-        "approvals", "waiting", "live", "stuck", "timeline", "gantt", "roles", "tokens", "queue", "prs",
+    assert len(more) == 11 and set(first) | set(more) == {"dash-" + c for c in (   # agora#204: tokens moved to סוכנים
+        "approvals", "waiting", "live", "stuck", "timeline", "gantt", "roles", "queue", "prs",
         "week", "products", "progress")}
     [(_, btn)] = [(t, a) for t, a in _markup().elements if a.get("id") == "dash-more-btn"]
     assert btn["aria-controls"] == "dash-more" and btn["aria-expanded"] == "false"
@@ -3296,14 +3296,14 @@ BRIEF = {
                  "milestones": [{"repo": "shal", "title": "v0.4.0", "closed": 20, "total": 23, "percent": 87, "url": "m"}],
                  "stage1": {"due": "2026-12-08", "days_left": 52, "done": 1, "total": 3}},
 }
-BRIEF_FUNCS = ("ageText", "briefSection", "briefRow", "briefStuck", "briefMoving", "briefTokens",
+BRIEF_FUNCS = ("ageText", "briefSection", "briefRow", "briefStuck", "briefMoving",
                "briefProgress", "renderBrief", "boardGoals", "goalChip", "burnupSvg", "goalBody", "goalItem",
                "boardGoalsSec", "pinGoal", "wakeButton", "wakeOwner", "boardRunning", "queueCell", "boardQueues")
 
 
 def _brief(body: str, prelude: str = ""):
     return _js(DASH_FUNCS + BRIEF_FUNCS, body,
-               prelude=_dash_prelude() + _consts("OWNER_CLS", "TOK_WHO_HE", "SVG", "goalOpen", "WAKE_ROLES",
+               prelude=_dash_prelude() + _consts("OWNER_CLS", "SVG", "goalOpen", "WAKE_ROLES",
                                                  "wokenRows", "LIVE_STATE", "QUEUE_ROWS", "QUEUE_COLS") + prelude)
 
 
@@ -3452,16 +3452,83 @@ def test_174_queues_are_a_company_products_matrix_and_say_when_missing():
     assert got["note"] == "חברה: ops, agora" and "הנתון לא זמין עכשיו" in got["none"]
 
 
-def test_brief_tokens_label_every_number_and_say_the_cloud_is_not_measured():
+def test_204_the_board_has_no_token_block_and_the_agents_tab_has_it():
+    # agora#204: the tokens moved from לוח to סוכנים: neither the brief's
+    # block nor the "dash-tokens" card is on the board any more.
+    script = _markup().script
+    text = PAGE.read_text(encoding="utf-8")
+    assert "briefTokens" not in script and "dash-tokens" not in text and "dash-tokens" not in script
     got = _brief(f"""
       const b = {json.dumps(BRIEF, ensure_ascii=False)};
-      const sec = briefTokens(b.tokens, Date.parse("2026-10-17T04:00:00Z"));
-      out.text = sec.textContent;
+      out.text = renderBrief(b, 0, {{}}, null).textContent;
     """)
-    t = got["text"]
-    assert "תוכנית 5 שעות: 5% · מתאפס בעוד 4:40" in t and "תוכנית שבועית: 44%" in t
-    assert "30.0M · 90%" in t and "לא נמדד" in t and "קודרים בענן" in t and "קודרים במחשב" in t
-    assert "זה דירוג, לא חשבון" in t
+    assert "טוקנים" not in got["text"]
+    assert 'id="dash-tab-agents"' in text and ">סוכנים<" in text and 'id="dash-agents"' in text
+    assert "renderTokens(t.data, t.plan)" in script and 'api("GET", "agents")' in script
+
+
+AGENTS_DOC = {
+    "generated_at": "2026-10-21T08:00:00Z", "errors": [],
+    "roles": [
+        {"name": "COO", "model": "opus", "home": "coo", "state": "working", "last_room": "coo",
+         "last_at": "2026-10-21T07:50:00Z", "messages_today": 4, "self_wakes_today": 2},
+        {"name": "PM", "model": "sonnet", "home": "PM", "state": "closed", "last_room": None,
+         "last_at": None, "messages_today": 0, "self_wakes_today": 0}],
+    "coders": {"running": [{"id": "agora#204", "title": "t", "url": "https://x/204", "where": "cloud",
+                            "since": "2026-10-21T07:00:00Z", "model": None},
+                           {"id": "ops#9", "title": "t", "url": "https://x/9", "where": "local",
+                            "since": "2026-10-21T07:30:00Z", "model": "opus"}],
+               "today": {"local": 3, "cloud": 1}},
+    "daemon": {"alive": False, "lock_at": "2026-10-21T06:00:00Z", "state_at": "2026-10-21T06:00:00Z"},
+    "tokens": {"data": {"agents": {"COO": {"24h": {"weighted": 3e6}, "7d": {"weighted": 9e6}}}},
+               "plan": None, "age_h": 3.5, "stale": True, "reason": "old"},
+}
+
+
+def _agents(body: str):
+    return _js(DASH_FUNCS + ("ageText", "modelChip", "agentsTokens", "renderAgents"), body,
+               prelude=_dash_prelude() + _consts("ROLE_STATE_HE", "TOK_STALE_HE")
+               + 'function nzTime(s) { return s || "—"; }\n'
+                 'function ltr(t) { return el("span", null, t); }\n')
+
+
+def test_204_agents_tab_shows_roles_coders_daemon_and_the_token_block():
+    got = _agents(f"""
+      out.page = dump(renderAgents({json.dumps(AGENTS_DOC, ensure_ascii=False)}));
+    """)
+    page, text = got["page"], got["page"]["text"]
+    assert [c["text"] for c in _find(page, "chip")] == [
+        "opus", "עובד", "sonnet", "סגור",                 # roles: model chip, then state
+        "?", "opus"]                                      # coders: a run with no model shows ?
+    assert "מחשב 3 · ענן 1" in text and "לא רץ" in text and "COO 2 · PM 0" in text
+    assert "הודעה אחרונה: #coo" in text and "אין הודעות" in text
+    assert "ענן" in text and "מחשב" in text
+    assert _find(page, "tseg") and "טוקנים היום" in text      # the 24 h / 7 d toggle came with the block
+
+
+def test_204_stale_token_data_shows_a_warning_line_at_the_top_of_the_block():
+    got = _agents(f"""
+      const t = {json.dumps(AGENTS_DOC["tokens"])};
+      out.old = dump(agentsTokens(t));
+      out.fresh = dump(agentsTokens({{...t, stale: false, reason: null}}));
+      out.none = dump(agentsTokens({{data: null, plan: null, age_h: null, stale: true, reason: "no-data"}}));
+    """)
+    first = got["old"]["kids"][0]
+    assert "error" in first["cls"].split() and 'setAttribute("role", "alert")' in _function("agentsTokens")
+    assert first["text"] == "נתוני הטוקנים ישנים: נמדדו לפני 3.5 שע׳"
+    assert not any("error" in (k.get("cls") or "").split() for k in got["fresh"]["kids"])
+    assert "tok" in got["fresh"]["kids"][0]["cls"].split()
+    assert "tokens.json לא נקרא" in got["none"]["kids"][0]["text"]
+
+
+def test_204_a_reload_keeps_the_selected_dashboard_tab():
+    script = _markup().script
+    assert 'const DASHTAB = "agora-dash-tab";' in script
+    assert "localStorage.setItem(DASHTAB, name)" in _function("showDashTab")
+    assert "localStorage.getItem(DASHTAB)" in script and "showDashTab(t, false)" in script
+    assert "loadDashTab(dashTabNow)" in _function("connect")       # its data loads once the key is in
+    ev = script[script.index('ev.type === "dashboard"'):][:200]
+    assert "loadAgents()" in ev                                  # refreshed with every dashboard sync
 
 
 def test_brief_progress_shows_the_v1_rule_and_late_goals():
@@ -3487,7 +3554,7 @@ def test_brief_missing_says_so_and_empty_lists_say_so_in_words():
     assert "שום דבר לא תקוע" in got["empty"] and "שום דבר לא זז עכשיו" in got["empty"]
     assert "מחכה לך: שום דבר" in got["empty"]
     # agora#174, the approved order under "waiting for you": goals, running, stuck, queues, tokens
-    assert [t.split(" · ")[0] for t in got["order"]] == ["יעדים", "זז עכשיו", "תקוע", "תורים", "טוקנים"]
+    assert [t.split(" · ")[0] for t in got["order"]] == ["יעדים", "זז עכשיו", "תקוע", "תורים"]
 
 
 COPY_PRELUDE = FAKE_DOM + """

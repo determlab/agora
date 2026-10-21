@@ -70,6 +70,8 @@ how old it is. A failed run stores nothing: the previous document stays and
 
 **Pool tab (agora#196).** The dashboard's "פול" tab renders one `pool-view/1` JSON file (stages, and where each part runs); Agora reads only that file. `GET /api/v1/dashboard/pool` returns `{"view","stale","age_s","errors"}` (`view` is null with one `errors` line when the file is unset, missing or invalid; `stale` is true past 15 minutes). `AGORA_POOL_VIEW` is the path of the file, read on every request; see `chat/pool_view.py` for the shape.
 
+**Agents tab (agora#204).** The dashboard's "סוכנים" tab (view only) shows the company roles of `bot/wake.py` `AGENT` (no PA) with state closed / resting / working from `bot/.wake/state.json`, the pool's running coders, the wake daemon (alive when `bot/.wake/wake.lock` was touched in the last 3 minutes), and the token block that used to be on the board. `GET /api/v1/agents` returns `{"generated_at","roles","coders","daemon","tokens","errors"}`; `tokens.stale` is true (with a `reason`) when the token data is over 2 hours old. `AGORA_WAKE_DIR` overrides the `bot/.wake` folder. Days are UTC days.
+
 **Approvals (ops#176).** Start `up` (or `serve`) with `--approve-cmd
 "<command>"` and `POST /api/v1/dashboard/approve` with `id`, `answer`
 (`yes`/`no`/`later`) and an optional `note` runs `<command> <id> <answer>
