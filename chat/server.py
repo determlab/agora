@@ -15,6 +15,7 @@ Usage:
   python chat/server.py serve --port 8095 [--db PATH] [--seed-ids N] [--dashboard-cmd "COMMAND"]
                               [--approve-cmd "COMMAND"]
   python chat/server.py bootstrap --json [--from-env bot/.env] [--db PATH]
+  python chat/server.py human-load --config FILE --since YYYY-MM-DD --until YYYY-MM-DD [--out FILE] [--json]
 
 ``up`` (issue #72) is the one command: it seeds ids above Zulip's, makes
 the bots in bot/.env, the streams bot/setup_streams.py makes and their
@@ -64,6 +65,8 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import zlib
+from datetime import date, time as dtime, timedelta
+from pathlib import Path
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -2861,6 +2864,301 @@ def cmd_autostart(args) -> int:
     return 0
 
 
+# -- human-load: how much one human has to steer the agents (agora#215) -------
+
+HUMAN_LOAD_SCHEMA = 1
+LOAD_CATEGORIES = ("status_ask", "ping", "stall_report", "push", "pasted_output", "correction")
+LOAD_REQUIRED = ("human_user_id", "excluded_streams", "timezone", "phrase_families",
+                 "agent_phrases", "room_labels", "work_queue_view", "max_age_hours")
+LOAD_EXAMPLE = "chat/human-load.example.json"
+
+
+class LoadConfigError(Exception):
+    """Exit 2: the message names the key and the fix."""
+
+
+def load_config(path: str | None) -> dict:
+    path = path or os.environ.get("AGORA_CONFIG")
+    if not path:
+        raise LoadConfigError("no config: pass --config FILE or set AGORA_CONFIG "
+                              f"(start from {LOAD_EXAMPLE})")
+    try:
+        with open(path, encoding="utf-8") as f:
+            cfg = json.load(f)
+    except (OSError, ValueError) as e:
+        raise LoadConfigError(f"cannot read config {path}: {e}; fix the path or the JSON "
+                              f"(start from {LOAD_EXAMPLE})")
+    if not isinstance(cfg, dict):
+        raise LoadConfigError(f"config {path} must be a JSON object (see {LOAD_EXAMPLE})")
+    for key in LOAD_REQUIRED:
+        if key not in cfg:
+            raise LoadConfigError(f"config {path} is missing key '{key}': add it "
+                                  f"(see {LOAD_EXAMPLE})")
+    if not isinstance(cfg["human_user_id"], int) or isinstance(cfg["human_user_id"], bool):
+        raise LoadConfigError("config key 'human_user_id' must be an integer user id")
+    fams = cfg["phrase_families"]
+    if not isinstance(fams, dict):
+        raise LoadConfigError("config key 'phrase_families' must map category -> [regex]")
+    for cat in LOAD_CATEGORIES:
+        if not isinstance(fams.get(cat), list):
+            raise LoadConfigError(f"config key 'phrase_families.{cat}' is missing: add a list "
+                                  f"of regexes (it may be empty); categories are "
+                                  f"{', '.join(LOAD_CATEGORIES)}")
+    for k in ("asks", "stop_lines"):
+        if not isinstance(cfg["agent_phrases"].get(k), list):
+            raise LoadConfigError(f"config key 'agent_phrases.{k}' is missing: add a list "
+                                  f"of regexes (it may be empty)")
+    try:
+        from zoneinfo import ZoneInfo
+        cfg["_tz"] = ZoneInfo(cfg["timezone"])
+    except Exception as e:
+        raise LoadConfigError(f"config key 'timezone' ({cfg['timezone']!r}) is not an IANA "
+                              f"zone name here ({e}); use e.g. 'Pacific/Auckland' "
+                              f"(on Windows: python -m pip install tzdata)")
+    try:
+        cfg["_fam"] = [(c, [re.compile(x, re.I) for x in fams[c]]) for c in LOAD_CATEGORIES]
+        cfg["_asks"] = [re.compile(x, re.I) for x in cfg["agent_phrases"]["asks"]]
+        cfg["_stops"] = [re.compile(x, re.I) for x in cfg["agent_phrases"]["stop_lines"]]
+    except re.error as e:
+        raise LoadConfigError(f"a phrase in the config is not a valid regex ({e}); fix it")
+    return cfg
+
+
+_QUOTE_BLOCK = re.compile(r"^(?:@_\*\*[^\n]*:\n)?```quote\n.*?\n```[ \t]*\n?", re.S | re.M)
+_REPLY_PREFIX = re.compile(r"^\s*(?:@_?\*\*[^*\n]*\*\*[ \t,:]*)+")
+
+
+def own_words(text: str) -> str:
+    """What the human typed: a quoted block (with its "@_**Name** said:" header)
+    and a leading mention are somebody else's words or addressing."""
+    return _REPLY_PREFIX.sub("", _QUOTE_BLOCK.sub("", text or "")).strip()
+
+
+def classify(text: str, fams) -> str | None:
+    words = own_words(text)
+    for cat, pats in fams:
+        if any(p.search(words) for p in pats):
+            return cat
+    return None
+
+
+def open_read_only(path: str) -> sqlite3.Connection:
+    """The live server owns every write: this connection cannot make one."""
+    uri = Path(os.path.abspath(path)).as_uri() + "?mode=ro"
+    return sqlite3.connect(uri, uri=True)
+
+
+def _bump(d: dict, key, n: int = 1) -> None:
+    d[key] = d.get(key, 0) + n
+
+
+def _rate(num: int, den: int):
+    return round(num / den, 4) if den else None
+
+
+def _bucket() -> dict:
+    return {"human_messages": 0, "supervision": 0, "by_category": {}, "by_room": {}}
+
+
+def agent_side_block(cfg: dict, counts: dict) -> dict:
+    """Asks, stop lines (counted in the messages) plus the pool-view/1 file.
+    Ages are measured against the view's own ``generated_at``, so the same file
+    always gives the same answer. ``queue_idle_hours`` is a snapshot reading: the
+    hours since the oldest queued item, when the queue has items and nothing is
+    working; the view holds no history to sum a whole window from."""
+    here = os.path.dirname(os.path.abspath(__file__))
+    spec = importlib.util.spec_from_file_location("pool_view", os.path.join(here, "pool_view.py"))
+    pv = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(pv)
+    res = pv.load(cfg["work_queue_view"], datetime.now(timezone.utc))
+    if res["view"] is None:
+        raise LoadConfigError(f"config key 'work_queue_view' ({cfg['work_queue_view']}): "
+                              f"{res['errors'][0]}")
+    view = res["view"]
+    ref = pv.parse_time(view["generated_at"])
+    limits = cfg["max_age_hours"]
+    past = []
+    stages = {s["key"]: s["items"] for s in view["stages"]}
+    for stage, items in stages.items():
+        limit = limits.get(stage)
+        if limit is None:
+            continue
+        for it in items:
+            since = pv.parse_time(it.get("since"))
+            if since is None:
+                continue
+            age = (ref - since).total_seconds() / 3600
+            if age > limit:
+                past.append({"id": it["id"], "stage": stage, "age_hours": round(age, 2),
+                             "max_hours": limit})
+    idle = 0.0
+    if stages["queue"] and not stages["working"]:
+        sinces = [pv.parse_time(i.get("since")) for i in stages["queue"]]
+        sinces = [t for t in sinces if t]
+        if sinces:
+            idle = round((ref - min(sinces)).total_seconds() / 3600, 2)
+    return {"asks_to_human": counts["asks"], "bot_stop_lines": counts["stops"],
+            "items_past_max_age": {"count": len(past), "items": past},
+            "queue_idle_hours": idle,
+            "work_queue": {"generated_at": view["generated_at"], "stale": res["stale"]}}
+
+
+def human_load(db_path: str, cfg: dict, since: str, until: str) -> dict:
+    tz = cfg["_tz"]
+    d0, d1 = date.fromisoformat(since), date.fromisoformat(until)
+    lo = int(datetime.combine(d0, dtime.min, tz).timestamp())
+    hi = int(datetime.combine(d1 + timedelta(days=1), dtime.min, tz).timestamp())
+    excluded = {x.lower() for x in cfg["excluded_streams"]}
+    labels = cfg["room_labels"]
+    con = open_read_only(db_path)
+    try:
+        streams = {r[0]: r[1] for r in con.execute("SELECT stream_id, name FROM streams")}
+        bots = {r[0] for r in con.execute("SELECT id FROM users WHERE is_bot=1")}
+        rows = con.execute("SELECT sender_id, stream_id, content, timestamp FROM messages "
+                           "WHERE timestamp >= ? AND timestamp < ? ORDER BY id", (lo, hi)).fetchall()
+    finally:
+        con.close()
+    days: dict[str, dict] = {}
+    weeks: dict[str, dict] = {}
+    counts = {"asks": 0, "stops": 0}
+    for sender, sid, content, ts in rows:
+        name = streams.get(sid) if sid is not None else None
+        if name is not None and name.lower() in excluded:
+            continue
+        if sender in bots:
+            if any(p.search(content or "") for p in cfg["_asks"]):
+                counts["asks"] += 1
+            if any(p.search(content or "") for p in cfg["_stops"]):
+                counts["stops"] += 1
+            continue
+        if sender != cfg["human_user_id"]:
+            continue
+        room = "direct" if name is None else labels.get(name, name)
+        local = datetime.fromtimestamp(ts, tz)
+        iso = local.isocalendar()
+        cat = classify(content, cfg["_fam"])
+        for table, key in ((days, local.date().isoformat()),
+                           (weeks, f"{iso[0]}-W{iso[1]:02d}")):
+            b = table.setdefault(key, _bucket())
+            b["human_messages"] += 1
+            if cat:
+                b["supervision"] += 1
+                _bump(b["by_category"], cat)
+                _bump(b["by_room"], room)
+    total = _bucket()
+    for b in days.values():
+        total["human_messages"] += b["human_messages"]
+        total["supervision"] += b["supervision"]
+        for k in ("by_category", "by_room"):
+            for kk, n in b[k].items():
+                _bump(total[k], kk, n)
+    active = len(days)
+    out_days = [{"date": k, **b, "share": _rate(b["supervision"], b["human_messages"])}
+                for k, b in sorted(days.items())]
+    out_weeks = []
+    for k, b in sorted(weeks.items()):
+        n_days = sum(1 for d in days if f"{date.fromisoformat(d).isocalendar()[0]}-W"
+                     f"{date.fromisoformat(d).isocalendar()[1]:02d}" == k)
+        out_weeks.append({"week": k, **b, "active_days": n_days,
+                          "supervision_per_active_day": _rate(b["supervision"], n_days),
+                          "share": _rate(b["supervision"], b["human_messages"])})
+    return {
+        "schema": HUMAN_LOAD_SCHEMA,
+        "generated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "window": {"since": since, "until": until, "timezone": cfg["timezone"]},
+        "human_user_id": cfg["human_user_id"],
+        "totals": {"human_messages": total["human_messages"],
+                   "supervision": total["supervision"], "active_days": active,
+                   "supervision_per_active_day": _rate(total["supervision"], active),
+                   "share": _rate(total["supervision"], total["human_messages"]),
+                   "by_category": total["by_category"], "by_room": total["by_room"]},
+        "days": out_days, "weeks": out_weeks,
+        "agent_side": agent_side_block(cfg, counts),
+    }
+
+
+def validate_human_load(doc) -> list[str]:
+    """One line per broken field of a human-load schema v1 document; [] when valid."""
+    errs: list[str] = []
+
+    def need(obj, path, key, types):
+        v = obj.get(key) if isinstance(obj, dict) else None
+        if isinstance(v, bool) or not isinstance(v, types):
+            errs.append(f"{path}.{key}: required {types}")
+            return None
+        return v
+
+    if not isinstance(doc, dict):
+        return ["top level: must be an object"]
+    if doc.get("schema") != HUMAN_LOAD_SCHEMA:
+        return [f"schema: found {doc.get('schema')!r}, expected {HUMAN_LOAD_SCHEMA}"]
+    need(doc, "", "generated_at", str)
+    w = need(doc, "", "window", dict)
+    for k in ("since", "until", "timezone"):
+        need(w, "window", k, str)
+    need(doc, "", "human_user_id", int)
+    t = need(doc, "", "totals", dict)
+    for k in ("human_messages", "supervision", "active_days"):
+        need(t, "totals", k, int)
+    for k in ("supervision_per_active_day", "share"):
+        need(t, "totals", k, (int, float, type(None)))
+    for k in ("by_category", "by_room"):
+        need(t, "totals", k, dict)
+    for name, rate in (("days", "share"), ("weeks", "share")):
+        seq = need(doc, "", name, list) or []
+        for i, row in enumerate(seq):
+            p = f"{name}[{i}]"
+            need(row, p, "date" if name == "days" else "week", str)
+            for k in ("human_messages", "supervision"):
+                need(row, p, k, int)
+            need(row, p, rate, (int, float, type(None)))
+            for k in ("by_category", "by_room"):
+                need(row, p, k, dict)
+    a = need(doc, "", "agent_side", dict)
+    for k in ("asks_to_human", "bot_stop_lines"):
+        need(a, "agent_side", k, int)
+    need(a, "agent_side", "queue_idle_hours", (int, float))
+    m = need(a, "agent_side", "items_past_max_age", dict)
+    need(m, "agent_side.items_past_max_age", "count", int)
+    need(m, "agent_side.items_past_max_age", "items", list)
+    return errs
+
+
+def cmd_human_load(args) -> int:
+    try:
+        cfg = load_config(args.config)
+        for flag, v in (("--since", args.since), ("--until", args.until)):
+            try:
+                date.fromisoformat(v)
+            except ValueError:
+                raise LoadConfigError(f"{flag} {v!r} is not YYYY-MM-DD: pass a date like 2026-10-01")
+        doc = human_load(args.db, cfg, args.since, args.until)
+    except LoadConfigError as e:
+        print(f"human-load: {e}", file=sys.stderr)
+        return 2
+    except sqlite3.Error as e:
+        print(f"human-load: cannot read the database {args.db} ({e}); pass --db with the "
+              f"server's database file", file=sys.stderr)
+        return 1
+    out = args.out or cfg.get("output_file")
+    if out:
+        try:
+            with open(out, "w", encoding="utf-8") as f:
+                json.dump(doc, f, indent=2)
+        except OSError as e:
+            print(f"human-load: cannot write {out} ({e}); pass --out with a writable path",
+                  file=sys.stderr)
+            return 1
+    if args.json:
+        print(json.dumps(doc))
+    else:
+        t = doc["totals"]
+        print(f"supervision {t['supervision']} of {t['human_messages']} human messages "
+              f"over {t['active_days']} active days"
+              + (f" -> {out}" if out else " (no --out: nothing written)"))
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="server.py", description=__doc__.split("\n")[0])
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -2877,6 +3175,13 @@ def main(argv: list[str] | None = None) -> int:
     human.add_argument("--name", required=True)
     human.add_argument("--write-env", action="store_true",
                        help="append ZULIP_FOUNDER_EMAIL/_API_KEY to --env; never overwrites")
+    load = sub.add_parser("human-load", help="read-only report: how much the human supervises")
+    load.add_argument("--config", metavar="FILE", help="config JSON (else AGORA_CONFIG)")
+    load.add_argument("--since", required=True, metavar="YYYY-MM-DD")
+    load.add_argument("--until", required=True, metavar="YYYY-MM-DD")
+    load.add_argument("--out", metavar="FILE", help="write the report here (else config output_file)")
+    load.add_argument("--db", default=DEFAULT_DB)
+    load.add_argument("--json", action="store_true", help="print JSON (the agent path)")
     up = sub.add_parser("up", help="set everything up and serve (idempotent)")
     up.add_argument("--no-serve", action="store_true", help="set up, then exit")
     up.add_argument("--no-update", action="store_true",
@@ -2908,6 +3213,8 @@ def main(argv: list[str] | None = None) -> int:
         p.add_argument("--db", default=DEFAULT_DB)
         p.add_argument("--port", type=int, default=8095)
     args = parser.parse_args(argv)
+    if args.cmd == "human-load":
+        return cmd_human_load(args)
     site = f"http://{HOST}:{args.port}"
 
     if args.cmd == "bootstrap":

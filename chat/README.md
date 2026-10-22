@@ -199,3 +199,39 @@ With the server running and a bot subscribed to a stream (bootstrap, then
 `bot/durability_test.py` with `ZULIP_SITE=http://127.0.0.1:8095`,
 `ZULIP_BOT_EMAIL`, `ZULIP_BOT_API_KEY` and `ZULIP_CHANNEL=<its stream>`. It
 waits a real 3 minutes; it must print `PASS — all 6 messages received, in order`.
+
+## human-load: how much the human steers (agora#215)
+
+Read-only report of one configured human's supervision messages, per local day
+and ISO week, plus an agent-side block. It opens the database `mode=ro`, uses
+the standard library only, and writes nothing but the output file.
+
+    python chat/server.py human-load --config chat/human-load.example.json \
+        --since 2026-10-01 --until 2026-10-21 --json [--out FILE] [--db PATH]
+
+Exit 2 when a config key is missing or wrong; the message names the key and the
+fix. `--config` may be replaced by `AGORA_CONFIG`; the code has no default path.
+Metric: supervision messages / local days with at least one human message. A
+message counts in the first category (in the order below) whose regex matches
+what the human typed, after quote blocks and a leading `@_**Name**` are removed.
+
+Config keys (all required unless marked): `human_user_id` (int);
+`excluded_streams` (names, skipped entirely); `timezone` (IANA name);
+`phrase_families` (regex list for each of `status_ask`, `ping`, `stall_report`,
+`push`, `pasted_output`, `correction`; a list may be empty);
+`agent_phrases.asks` and `agent_phrases.stop_lines` (regexes over bot messages);
+`room_labels` (stream name -> label; direct messages are `direct`);
+`work_queue_view` (path of the `pool-view/1` file); `max_age_hours` (stage ->
+hours); `output_file` (optional, the same as `--out`). See
+`chat/human-load.example.json`.
+
+Schema v1 (`schema: 1`): `generated_at`, `window{since,until,timezone}`,
+`human_user_id`, `totals{human_messages,supervision,active_days,
+supervision_per_active_day,share,by_category,by_room}`, `days[]` (`date`) and
+`weeks[]` (`week`, `active_days`, `supervision_per_active_day`), each with
+`human_messages`, `supervision`, `share`, `by_category`, `by_room`; and
+`agent_side{asks_to_human,bot_stop_lines,items_past_max_age{count,items[]},
+queue_idle_hours,work_queue{generated_at,stale}}`. `queue_idle_hours` is a
+snapshot reading: hours since the oldest queued item when the queue has items
+and nothing is working. Ages use the view's own `generated_at`.
+`chat/server.py` exposes `validate_human_load(doc)` for readers.

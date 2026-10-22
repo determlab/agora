@@ -1,0 +1,20 @@
+{
+  "human_user_id": 1,
+  "excluded_streams": ["noise"],
+  "timezone": "Pacific/Auckland",
+  "phrase_families": {
+    "status_ask": ["\\bstatus\\b", "\\bany update\\b", "\\bwhere are we\\b"],
+    "ping": ["^\\s*ping\\b", "\\bare you there\\b"],
+    "stall_report": ["\\bstuck\\b", "\\bnot moving\\b", "\\bnothing happened\\b"],
+    "push": ["\\bgo on\\b", "\\bcontinue\\b", "\\bmove on\\b"],
+    "pasted_output": ["Traceback \\(most recent call last\\)", "^\\$ ", "\\bexit code \\d+"],
+    "correction": ["\\bnot what I asked\\b", "\\bI said\\b", "\\bwrong\\b"]
+  },
+  "agent_phrases": {
+    "asks": ["\\bneeds? your decision\\b", "\\bplease approve\\b"],
+    "stop_lines": ["^STOP\\b", "\\bI am stopping\\b"]
+  },
+  "room_labels": {"general": "main", "build": "build room"},
+  "work_queue_view": "tests/fixtures/pool-view.json",
+  "max_age_hours": {"queue": 4, "working": 2, "ci": 1, "review": 8, "needs_human": 12}
+}
