@@ -302,6 +302,14 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 .dtabs { display: flex; gap: 6px; }
 .dtabs .go.active { background: var(--text); color: var(--panel); }
 .nrow { display: grid; grid-template-columns: 1fr 7rem 5rem 8rem; gap: 8px; align-items: center; }
+.prow { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; min-width: 0; max-width: 100%; overflow-wrap: anywhere; }
+a.pchip { display: block; min-width: 0; max-width: 100%; box-sizing: border-box; padding: 6px 0; color: inherit; text-decoration: none; }
+.pchip > div { min-width: 0; max-width: 100%; }
+.pchip .pc-title { display: -webkit-box; -webkit-line-clamp: 2; line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; }
+.pchip .pc-note { font-size: 13px; display: flex; gap: 0.3em; min-width: 0; }
+.pchip .pc-note-text { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pchip .pc-note > [dir=ltr] { flex: none; }
+.pchip .pc-tag { color: var(--bad, #d64545); font-weight: bold; margin-inline-start: 8px; }
 .nrow input { width: 100%; font: inherit; }
 .nrow input[aria-invalid="true"] { border-color: var(--error); }
 .nerr { color: var(--error); font-size: 13px; grid-column: 1 / -1; }
@@ -4305,10 +4313,14 @@ function nzTime(s) { const d = s ? new Date(s) : null; return d && !isNaN(d) ? N
 function ltr(text) { const s = el("span", null, text); s.dir = "ltr"; return s; }
 
 function poolChip(c, wide) {
-  const a = el("a", "nrow", null);
+  const a = el("a", "pchip", null);
   a.href = c.url; a.target = "_blank"; a.rel = "noopener";
-  if (wide) { a.style.borderInlineStart = "4px solid " + POOL_OK[false]; a.append(el("b", null, "סבב תיקון, ראשון בתור "));}
-  a.append(ltr(c.id), el("span", null, " " + (c.title || "")), el("span", "muted", " " + (c.note || "") + " " + nzTime(c.since)));
+  const top = el("div"); top.append(ltr(c.id));
+  if (wide) { a.style.borderInlineStart = "4px solid " + POOL_OK[false]; a.style.paddingInlineStart = "6px"; top.append(el("span", "pc-tag", "תיקון")); }
+  const note = el("div", "muted pc-note");
+  if (c.note) { const nt = el("span", "pc-note-text", c.note); nt.dir = "auto"; note.append(nt); }
+  note.append(ltr(nzTime(c.since)));
+  a.append(top, el("div", "pc-title", c.title || ""), note);
   return a;
 }
 
@@ -4328,7 +4340,7 @@ function renderPool(r) {
   const stage = (k) => v.stages.find((s) => s.key === k).items;
   const today = NZ_DAY.format(new Date());
   const mergedToday = stage("merged").filter((c) => c.since && NZ_DAY.format(new Date(c.since)) === today).length;
-  const nums = el("div", "nrow");
+  const nums = el("div", "prow");
   nums.append(el("span", null, "מוזגו היום: " + mergedToday), el("span", null, "רצים עכשיו: " + v.summary.running),
               el("span", "muted", "עדכון אחרון: "));
   nums.lastChild.append(ltr(nzTime(v.generated_at)));
@@ -4351,7 +4363,7 @@ function renderPool(r) {
     const sec = el("section", "dash-card card");
     sec.append(el("h3", null, POOL_ZONES[z.key]));
     for (const p of z.parts) {
-      const row = el("div", "nrow");
+      const row = el("div", "prow");
       const dot = el("span", null, "●"); dot.style.color = POOL_OK[p.ok] || "var(--muted, #888)";
       row.append(dot, el("span", null, " " + p.name), el("span", "muted", " " + p.note));
       sec.append(row);
@@ -4394,7 +4406,7 @@ function renderAgents(a) {
   const roles = el("section", "dash-card card wide");
   roles.append(el("h3", null, "תפקידים"));
   for (const r of a.roles) {
-    const row = el("div", "nrow");
+    const row = el("div", "prow");
     row.append(el("b", null, r.name), modelChip(r.model), el("span", "chip " + r.state, ROLE_STATE_HE[r.state] || r.state),
                el("span", "muted", r.last_at ? "הודעה אחרונה: #" + (r.last_room || "הודעה ישירה") + " " + nzTime(r.last_at) : "אין הודעות"),
                el("span", "muted", "היום: " + r.messages_today));
@@ -4402,10 +4414,10 @@ function renderAgents(a) {
   }
   const coders = el("section", "dash-card card wide");
   coders.append(el("h3", null, "קודרים עכשיו"));
-  coders.append(el("div", "nrow", "היום: מחשב " + a.coders.today.local + " · ענן " + a.coders.today.cloud));
+  coders.append(el("div", "prow", "היום: מחשב " + a.coders.today.local + " · ענן " + a.coders.today.cloud));
   if (!a.coders.running.length) coders.append(el("div", "muted", "אין קודר רץ עכשיו"));
   for (const c of a.coders.running) {
-    const row = el("a", "nrow");
+    const row = el("a", "prow");
     row.href = c.url; row.target = "_blank"; row.rel = "noopener";
     row.append(ltr(c.id), modelChip(c.model), el("span", null, c.where === "cloud" ? "ענן" : c.where === "local" ? "מחשב" : "—"),
                el("span", "muted", "מאז " + nzTime(c.since)));
@@ -4414,13 +4426,13 @@ function renderAgents(a) {
   const d = a.daemon;
   const daemon = el("section", "dash-card card wide");
   daemon.append(el("h3", null, "דמון ההשכמה"));
-  const st = el("div", "nrow");
+  const st = el("div", "prow");
   const word = el("b", d.alive ? "ok" : "error", d.alive ? "חי" : "לא רץ");
   if (!d.alive) word.style.fontWeight = "bold";
   const upd = el("span", "muted", " עדכון אחרון: ");
   upd.append(ltr(nzTime(d.lock_at || d.state_at)));
   st.append(word, upd);
-  daemon.append(st, el("div", "nrow", "השכמות עצמיות היום: " + a.roles.map((r) => r.name + " " + r.self_wakes_today).join(" · ")));
+  daemon.append(st, el("div", "prow","השכמות עצמיות היום: " + a.roles.map((r) => r.name + " " + r.self_wakes_today).join(" · ")));
   const tokens = el("section", "dash-card card wide");
   tokens.append(el("h3", null, "טוקנים"), agentsTokens(a.tokens));
   root.append(roles, coders, daemon, tokens);
