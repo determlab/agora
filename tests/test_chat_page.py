@@ -427,8 +427,12 @@ def test_208_pool_and_agents_rows_are_stacked_cards_that_cannot_overflow():
     css = lambda sel: re.search(re.escape(sel) + r"\s*\{([^}]*)\}", text).group(1)
     assert "min-width: 0" in css(".pchip > div") and "max-width: 100%" in css("a.pchip")
     assert "-webkit-line-clamp: 2" in css(".pchip .pc-title")
-    note = css(".pchip .pc-note")
-    assert "white-space: nowrap" in note and "text-overflow: ellipsis" in note
+    assert "display: flex" in css(".pchip .pc-note")
+    note = css(".pchip .pc-note-text")
+    assert "min-width: 0" in note and "white-space: nowrap" in note
+    assert "overflow: hidden" in note and "text-overflow: ellipsis" in note
+    assert "flex: none" in css(".pchip .pc-note > [dir=ltr]")
+    assert 'nt.dir = "auto"' in _function("poolChip")
     assert "flex-wrap: wrap" in css(".prow")
     chip = _function("poolChip")
     assert "nrow" not in chip and '"תיקון"' in chip and "ltr(nzTime(c.since))" in chip
