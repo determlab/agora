@@ -1115,7 +1115,7 @@ def test_77_inline_code_and_mentions_render_as_elements_never_as_markup():
     assert body["dir"] == "rtl"
     # Each line is its own block (#156); the inline parts sit inside it.
     assert [(k["tag"], k["cls"], k["dir"]) for k in body["kids"]] == [
-        ("div", "line", "rtl"), ("div", "codebox", ""), ("div", "line", "auto")]
+        ("div", "bln", "rtl"), ("div", "codebox", ""), ("div", "bln", "auto")]
     inline = body["kids"][0]["kids"]
     kinds = [(k.get("tag"), k.get("cls"), k.get("dir"), k["text"]) for k in inline]
     assert kinds == [
@@ -1187,7 +1187,7 @@ def test_156_each_list_item_follows_the_same_rule():
 
 def test_156_a_code_fence_stays_a_codebox_between_blocks():
     kids = _blocks("שלום\n```\nx\n```\n- a")
-    assert [(k["tag"], k["cls"]) for k in kids] == [("div", "line"), ("div", "codebox"), ("ul", "")]
+    assert [(k["tag"], k["cls"]) for k in kids] == [("div", "bln"), ("div", "codebox"), ("ul", "")]
 
 
 def test_77_a_mentioned_bubble_is_filled_yellow_without_a_side_bar():

@@ -154,7 +154,7 @@ button.archived-name:hover { color: var(--text); }
 .msg.mine .bubble { background: var(--mine); border-color: transparent; }
 .msg.mention .bubble { background: var(--mention); border-color: var(--mention-line); }
 .body { white-space: pre-wrap; overflow-wrap: anywhere; }
-.body .line.blank { min-height: 1em; }
+.body .bln.blank { min-height: 1em; }
 .body ul, .body ol { margin: .15rem 0; padding-inline-start: 1.4rem; }
 /* A long message folds to 6 lines, its code blocks to 3, until "הצג עוד". */
 .body.folded { max-height: calc(6 * 1.45em); overflow: hidden; }
@@ -3354,7 +3354,7 @@ function bodyBlocks(text) {
       list.append(li);
     } else {
       const div = document.createElement("div");
-      div.className = line ? "line" : "line blank";
+      div.className = line ? "bln" : "bln blank";
       div.dir = dirOf(line);
       div.append(...inlineNodes(line));
       out.push(div);
