@@ -893,6 +893,18 @@ def test_spawner_resolves_argv0_and_keeps_the_message_on_stdin(wake, tmp_path, m
     for ch in ("&", "|", '"', "%"):
         assert not any(ch in a for a in seen["argv"])
     assert seen["proc"].stdin.data.decode("utf-8") == nasty
+    assert seen["kw"]["env"]["CLAUDE_CODE_DISABLE_TERMINAL_TITLE"] == "1"  # issue #172
+
+
+def test_main_names_the_console_window(wake, monkeypatch):
+    titles = []
+    monkeypatch.setattr(wake, "set_console_title", lambda: titles.append(wake.CONSOLE_TITLE))
+    monkeypatch.setattr(wake, "load_config", lambda: {
+        "caps": {}, "founder_id": 1, "cwd": ".", "bot_wakes": False, "bots": [],
+        "missing": [], "skipped": {}})
+    monkeypatch.setattr(wake, "run", lambda cfg, waker: 0)
+    assert wake.main([]) == 0
+    assert titles == ["agora-wake (do not close)"]
 
 
 def test_spawner_names_the_fix_when_claude_is_not_on_path(wake, tmp_path, monkeypatch):
@@ -2096,6 +2108,24 @@ def test_silent_wildcard_is_still_a_founder_line_in_a_meeting(wake, tmp_path):
         assert d["action"] == "spawn"
 
 
+def test_multi_bot_room_prompt_has_the_one_leader_rules(wake, tmp_path):
+    # issue #149
+    w = make(wake, tmp_path, members=_room_of("COO", "PM", "CMO"))
+    w.on_message("COO", msg(10, "why is it stuck?", stream="All hands"), [])
+    prompt = w.spawner.started[-1][1]
+    assert "One role leads the discussion: the one who asked the open question, else the PM." in prompt
+    assert "A general question from the founder is answered by the leader only." in prompt
+    assert 'no repeat of a question, no "agreed", no "waiting"' in prompt
+
+
+def test_single_bot_room_prompt_has_no_leader_rules(wake, tmp_path):
+    w = make(wake, tmp_path, members=_room_of("COO"))
+    w.on_message("COO", msg(10, "why is it stuck?", stream="All hands"), [])
+    prompt = w.spawner.started[-1][1]
+    assert "leads the discussion" not in prompt
+    assert wake.MEETING_RULES not in prompt
+
+
 def test_bot_wildcard_wakes_nobody(wake, tmp_path):
     w = make_bots(wake, tmp_path)
     w.members = _room_of("COO", "PM", "CMO")
@@ -2273,6 +2303,23 @@ def test_146_a_role_alone_in_its_room_keeps_the_old_rules(wake, tmp_path):
     # a DM is unchanged too
     dm = msg(12, "a DM", stream=None)
     assert "meeting" not in w.on_message("CPSO", dm, [])
+
+
+def test_145_an_untagged_answer_after_the_asking_session_closed_wakes_the_pm(wake, tmp_path):
+    sp = FakeSpawner()
+    w = meeting(wake, tmp_path, bots=True)
+    w.spawner = sp
+    open_sessions(w, sp, ("PM",))
+    ask = msg(20, "question 1: which demo?", sender=MEETING_IDS["PM"], stream="All hands",
+              topic="chat")
+    w.on_message("PM", ask, [])
+    w.role("PM")["session"] = None  # its close line posted, the session ended
+    n = len(sp.started)
+    w.clock.t += 60
+    d = w.on_message("PM", msg(21, "א", stream="All hands", topic="chat"), [])
+    assert d["action"] == "spawn", d
+    assert len(sp.started) == n + 1 and "א" in sp.started[-1][1]
+    assert sp.started[-1][2] == "PM"
 
 
 # -- agora#163: a bot-loop stop ends on its own --------------------------------

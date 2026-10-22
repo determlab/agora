@@ -15,6 +15,7 @@ Usage:
   python chat/server.py serve --port 8095 [--db PATH] [--seed-ids N] [--dashboard-cmd "COMMAND"]
                               [--approve-cmd "COMMAND"]
   python chat/server.py bootstrap --json [--from-env bot/.env] [--db PATH]
+  python chat/server.py human-load --config FILE --since YYYY-MM-DD --until YYYY-MM-DD [--out FILE] [--json]
 
 ``up`` (issue #72) is the one command: it seeds ids above Zulip's, makes
 the bots in bot/.env, the streams bot/setup_streams.py makes and their
@@ -64,6 +65,9 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import zlib
+from datetime import date, time as dtime, timedelta
+from pathlib import Path
+from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 HOST = "127.0.0.1"
@@ -117,6 +121,20 @@ NO_DASHBOARD = "no dashboard command configured: start the server with --dashboa
 APPROVE_TIMEOUT = 30.0  # ops#176: a local, gh-free write — nowhere near dashboard.py's own timeout
 NO_APPROVE = "no approve command configured: start the server with --approve-cmd"
 ANSWERS = ("yes", "no", "later")
+# agora#154: the Numbers tab reads the limits file and writes one request file,
+# both in the data folder (AGORA_DATA_DIR). Applying the request
+# is another program's job: the server holds no key and starts nothing.
+LIMITS_FILE = "limits.json"
+LIMITS_REQUEST_FILE = "limits-request.json"
+# agora#155: the Log view reads the daily JSONL log of OPS_POOL_ROOT, read-only.
+LOG_FILE = re.compile(r"log-\d{4}-\d{2}-\d{2}\.jsonl")
+LOG_LIMIT, LOG_LIMIT_MAX, LOG_MAX_DAYS = 200, 1000, 7
+# agora#204: the Agents tab. The wake daemon touches bot/.wake/wake.lock every
+# tick (30 s); past AGENTS_ALIVE_S without a touch it is not running. Token
+# data older than AGENTS_TOKENS_STALE_H hours shows a warning line.
+AGENTS_ALIVE_S = 180
+AGENTS_TOKENS_STALE_H = 2
+NO_DATA_DIR = "no data folder configured: start the server with AGORA_DATA_DIR set to the folder"
 # agora#174: the board's pinned goal is one row in the database, so the phone
 # and the PC read the same pin and a restart keeps it.
 PIN_MAX = 200
@@ -209,15 +227,16 @@ CREATE TABLE IF NOT EXISTS read_messages (
 CREATE TABLE IF NOT EXISTS read_floor (
     user_id INTEGER NOT NULL, stream_id INTEGER NOT NULL, floor_id INTEGER NOT NULL,
     PRIMARY KEY (user_id, stream_id));
-CREATE TABLE IF NOT EXISTS membership_log (
-    id INTEGER PRIMARY KEY AUTOINCREMENT, ts INTEGER NOT NULL, user_id INTEGER NOT NULL,
-    stream_id INTEGER NOT NULL, op TEXT NOT NULL, actor TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS pairs (
     user_id INTEGER PRIMARY KEY, code_hash TEXT NOT NULL, created INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS typing (
     stream_id INTEGER NOT NULL, topic TEXT COLLATE NOCASE NOT NULL,
     user_id INTEGER NOT NULL, started INTEGER NOT NULL, status TEXT NOT NULL DEFAULT 'typing',
     PRIMARY KEY (stream_id, topic, user_id));
+CREATE TABLE IF NOT EXISTS membership_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, ts INTEGER NOT NULL, stream_id INTEGER NOT NULL,
+    user_id INTEGER NOT NULL, actor_id INTEGER, op TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS membership_log_stream ON membership_log (stream_id, id);
 """
 
 
@@ -422,44 +441,60 @@ class Store:
         return self.x("INSERT INTO streams (name, invite_only) VALUES (?,?)",
                       (name, int(invite_only)))
 
-    def subscribe(self, user_id: int, stream_id: int, actor: str = "server") -> bool:
+    def log_membership(self, stream_id: int, user_id: int, actor_id: int | None,
+                       op: str) -> None:
+        """One row per member add or remove (issue #162): when, who did it
+        (``actor_id``; None when the server itself did, e.g. bootstrap), which
+        room, which member. ``op`` is ``add`` or ``remove``."""
+        self.x("INSERT INTO membership_log (ts, stream_id, user_id, actor_id, op) "
+               "VALUES (?,?,?,?,?)", (int(time.time()), stream_id, user_id, actor_id, op))
+
+    def unsubscribe(self, user_id: int, stream_id: int, actor_id: int | None = None) -> bool:
+        with self.tx():
+            gone = self.db.execute("DELETE FROM subscriptions WHERE user_id=? AND "
+                                   "stream_id=?", (user_id, stream_id)).rowcount > 0
+            if gone:
+                self.log_membership(stream_id, user_id, actor_id, "remove")
+            return gone
+
+    def removed_by_person(self, user_id: int, stream_id: int) -> bool:
+        """The newest ``membership_log`` row for this member in this room is a
+        removal by someone other than the server (``actor_id`` NULL)."""
+        row = self.one("SELECT op, actor_id FROM membership_log WHERE user_id=? AND "
+                       "stream_id=? ORDER BY id DESC LIMIT 1", (user_id, stream_id))
+        return bool(row) and row["op"] == "remove" and row["actor_id"] is not None
+
+    def membership_history(self, stream_id: int) -> list[dict]:
+        out = []
+        for r in self.q("SELECT * FROM membership_log WHERE stream_id=? ORDER BY id",
+                        (stream_id,)):
+            def who(uid):
+                u = self.one("SELECT email, full_name, is_bot FROM users WHERE id=?", (uid,)) \
+                    if uid is not None else None
+                return None if u is None else {"user_id": uid, "email": u["email"],
+                                               "full_name": u["full_name"],
+                                               "is_bot": bool(u["is_bot"])}
+            out.append({"id": r["id"], "ts": r["ts"], "op": r["op"],
+                        "member": who(r["user_id"]),
+                        "actor": who(r["actor_id"]) or {"user_id": None, "email": None,
+                                                        "full_name": "server",
+                                                        "is_bot": False}})
+        return out
+
+    def subscribe(self, user_id: int, stream_id: int, actor_id: int | None = None) -> bool:
         """Joining a stream must not make its earlier history unread: a new
         subscription gets a floor at that stream's newest message id right
         away, so only a message sent after the join counts. ``OR REPLACE``
         also covers a user who left and rejoined: an unsubscribe leaves the
         old floor row behind, and rejoining should reset it to now, not the
-        stale value from the earlier membership.
-
-        Every add is written to ``membership_log`` with its ``actor`` (the
-        email of whoever asked, ``server`` for setup), so a later setup can
-        tell a bot that is new from one a person removed."""
+        stale value from the earlier membership."""
         with self.tx():
             new = self.db.execute("INSERT OR IGNORE INTO subscriptions VALUES (?,?)",
                                   (user_id, stream_id)).rowcount > 0
             if new:
                 self._set_floor_to_newest(user_id, stream_id)
-                self._log_membership(user_id, stream_id, "add", actor)
+                self.log_membership(stream_id, user_id, actor_id, "add")
             return new
-
-    def unsubscribe(self, user_id: int, stream_id: int, actor: str) -> bool:
-        with self.tx():
-            gone = self.db.execute("DELETE FROM subscriptions WHERE user_id=? AND stream_id=?",
-                                   (user_id, stream_id)).rowcount > 0
-            if gone:
-                self._log_membership(user_id, stream_id, "remove", actor)
-            return gone
-
-    def _log_membership(self, user_id: int, stream_id: int, op: str, actor: str) -> None:
-        self.db.execute("INSERT INTO membership_log (ts, user_id, stream_id, op, actor) "
-                        "VALUES (?,?,?,?,?)", (int(time.time()), user_id, stream_id, op,
-                                               actor or "server"))
-
-    def removed_by_person(self, user_id: int, stream_id: int) -> bool:
-        """The newest ``membership_log`` row for this member in this room is a
-        removal by someone other than the server."""
-        row = self.one("SELECT op, actor FROM membership_log WHERE user_id=? AND stream_id=? "
-                       "ORDER BY id DESC LIMIT 1", (user_id, stream_id))
-        return bool(row) and row["op"] == "remove" and row["actor"] != "server"
 
     def _set_floor_to_newest(self, user_id: int, stream_id: int) -> None:
         floor = self.one("SELECT COALESCE(MAX(id), 0) FROM messages WHERE stream_id=?",
@@ -599,6 +634,39 @@ NARROW_OPS = "channel, stream, topic, sender, is:mentioned, is:private, is:dm"
 def _known_op(op, operand) -> bool:
     return op in ("channel", "stream", "topic", "subject", "sender") or (
         op == "is" and operand in ("mentioned", "private", "dm"))
+
+
+def role_state(rs: dict | None) -> str:
+    """agora#204: a role's state from its bot/.wake/state.json entry. No
+    session is ``closed``; a session with messages waiting is ``working``;
+    a session with none is ``resting``."""
+    sess = rs.get("session") if isinstance(rs, dict) else None
+    if not sess:
+        return "closed"
+    return "working" if isinstance(sess, dict) and sess.get("pending") else "resting"
+
+
+def tokens_view(state: dict) -> dict:
+    """agora#204: the token block of a ``Dashboard.state()`` answer, with a
+    ``stale`` flag and its ``reason``: ``no-data`` (the document has no tokens),
+    ``old`` (the token file is over AGENTS_TOKENS_STALE_H hours old) or
+    ``sync-old`` (the dashboard itself has not synced for that long)."""
+    doc = state.get("doc") if isinstance(state.get("doc"), dict) else {}
+    brief = doc.get("brief") if isinstance(doc.get("brief"), dict) else {}
+    bt = brief.get("tokens") if isinstance(brief.get("tokens"), dict) else {}
+    data = doc.get("tokens") if isinstance(doc.get("tokens"), dict) else None
+    age = bt.get("age_h")
+    age = age if isinstance(age, (int, float)) and not isinstance(age, bool) else None
+    if data is None and not bt:
+        reason = "no-data"
+    elif age is not None and age > AGENTS_TOKENS_STALE_H:
+        reason = "old"
+    elif state.get("stale"):
+        reason = "sync-old"
+    else:
+        reason = None
+    plan = doc.get("plan") if isinstance(doc.get("plan"), dict) else None
+    return {"data": data, "plan": plan, "age_h": age, "stale": reason is not None, "reason": reason}
 
 
 class Dashboard:
@@ -854,14 +922,240 @@ class Chat:
     """The endpoints. Each returns the success body (without ``result``)."""
 
     def __init__(self, store: Store, poll_seconds: float = POLL_SECONDS,
-                 dashboard: Dashboard | None = None, allow_hosts: tuple[str, ...] = ()):
+                 dashboard: Dashboard | None = None, allow_hosts: tuple[str, ...] = (),
+                 data_dir: str | None = None):
         self.s = store
+        self.data_dir = data_dir
         self.poll_seconds = poll_seconds
         self.dashboard = dashboard or Dashboard(store)
         self.allow_hosts = allow_hosts
         self.woken: dict[tuple[str, str], tuple[int, float]] = {}  # (owner, ref) -> (message id, when)
         self.wake_lock = threading.Lock()
         self.pair_limiter = RateLimiter(PAIR_RATE_LIMIT, PAIR_RATE_WINDOW)
+
+    def limits(self) -> list[dict]:
+        """The groups of the limits file: ``{"groups": [{"name", "numbers":
+        [{"key", "name", "value", "unit", "min", "max"}]}]}``."""
+        if not self.data_dir:
+            raise ApiError(NO_DATA_DIR, "DATA_DIR_NOT_CONFIGURED")
+        path = os.path.join(self.data_dir, LIMITS_FILE)
+        try:
+            with open(path, encoding="utf-8") as f:
+                groups = json.load(f)["groups"]
+            for g in groups:
+                for n in g["numbers"]:
+                    n["key"], n["value"], n["min"], n["max"]
+        except OSError as e:
+            raise ApiError(f"cannot read the limits file {path}: {e.strerror or e}",
+                           "LIMITS_UNREADABLE", 404)
+        except (ValueError, KeyError, TypeError):
+            raise ApiError(f"the limits file {path} is not in the expected shape "
+                           f"(see README.md, Numbers tab)", "LIMITS_BAD_SHAPE", 502)
+        return groups
+
+    def log_view(self, p: dict) -> dict:
+        """agora#155: the last lines of the pool's daily JSONL log, newest first.
+
+        The folder is ``OPS_POOL_ROOT`` (read per request, no default path), the
+        files ``log-YYYY-MM-DD.jsonl``, one per UTC day. Day files are read
+        newest first, at most LOG_MAX_DAYS of them, until ``limit`` lines
+        (default 200) matched ``actor`` / ``target`` / ``errors=1``. A line that
+        is not a JSON object is counted in ``skipped``, never an error. An
+        unset or missing folder is an empty list with a ``hint``: an empty log
+        must not look like a broken one."""
+        root = os.environ.get("OPS_POOL_ROOT")
+        if not root or not os.path.isdir(root):
+            return {"lines": [], "skipped": 0,
+                    "hint": "set OPS_POOL_ROOT to the pool folder that holds log-YYYY-MM-DD.jsonl"
+                            + (f" (now: {root} is not a folder)" if root else " (it is not set)")}
+        limit = max(1, min(_int(p, "limit", LOG_LIMIT), LOG_LIMIT_MAX))
+        actor, target = p.get("actor") or "", p.get("target") or ""
+        errors_only = p.get("errors") in ("1", "true", 1, True)
+        days = sorted((n for n in os.listdir(root) if LOG_FILE.fullmatch(n)), reverse=True)
+        lines: list[dict] = []
+        skipped = 0
+        for name in days[:LOG_MAX_DAYS]:
+            try:
+                with open(os.path.join(root, name), encoding="utf-8", errors="replace") as f:
+                    raw = f.read().splitlines()
+            except OSError:
+                continue
+            for text in reversed(raw):
+                if not text.strip():
+                    continue
+                try:
+                    row = json.loads(text)
+                except ValueError:
+                    row = None
+                if not isinstance(row, dict):
+                    skipped += 1
+                    continue
+                if actor and row.get("actor") != actor:
+                    continue
+                if target and target not in str(row.get("target") or ""):
+                    continue
+                if errors_only and not (row.get("error") or row.get("result") in ("error", "failed")):
+                    continue
+                lines.append(row)
+                if len(lines) >= limit:
+                    return {"lines": lines, "skipped": skipped}
+        return {"lines": lines, "skipped": skipped}
+
+    def pool_view(self) -> dict:
+        """agora#196: read per request, no cache; pool_view.py sits next to this file."""
+        spec = importlib.util.spec_from_file_location(
+            "pool_view", os.path.join(os.path.dirname(os.path.abspath(__file__)), "pool_view.py"))
+        pv = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(pv)
+        return pv.load(os.environ.get("AGORA_POOL_VIEW"), pv.utcnow())
+
+    def agents(self) -> dict:
+        """agora#204: one answer for the Agents tab: ``roles`` (company roles of
+        bot/wake.py AGENT), ``coders`` (the pool's running runs), ``daemon``
+        (the wake daemon) and ``tokens``, with ``generated_at``. Read-only. A
+        source that cannot be read leaves its part empty and adds a line to
+        ``errors``; it never fails the whole answer. Days are UTC days."""
+        now = int(time.time())
+        day0 = now - now % 86400
+        iso = lambda t: datetime.fromtimestamp(t, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        errors: list[str] = []
+        bot_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "bot")
+        wake_dir = os.environ.get("AGORA_WAKE_DIR") or os.path.join(bot_dir, ".wake")
+        models: dict = {}
+        homes: dict = {}
+        try:
+            spec = importlib.util.spec_from_file_location("agora_wake_view",
+                                                          os.path.join(bot_dir, "wake.py"))
+            wake = importlib.util.module_from_spec(spec)
+            sys.path.insert(0, bot_dir)
+            try:
+                spec.loader.exec_module(wake)
+            finally:
+                sys.path.remove(bot_dir)
+            models, homes = wake.AGENT["models"], wake.AGENT.get("home_streams", {})
+        except Exception as e:  # a role list that cannot load must not hide the other parts
+            errors.append(f"cannot read bot/wake.py AGENT: {e}")
+        state_path = os.path.join(wake_dir, "state.json")
+        wstate: dict = {}
+        try:
+            with open(state_path, encoding="utf-8") as f:
+                loaded = json.load(f)
+            wstate = loaded if isinstance(loaded, dict) else {}
+        except (OSError, ValueError) as e:
+            errors.append(f"cannot read {state_path}: {getattr(e, 'strerror', None) or e}")
+        wroles = wstate.get("roles") if isinstance(wstate.get("roles"), dict) else {}
+        duty = wstate.get("duty") if isinstance(wstate.get("duty"), dict) else {}
+        roles = []
+        for name, model in models.items():
+            if name == "PA":  # personal assistant: not a company role, never shown
+                continue
+            bot = self.s.one("SELECT id FROM users WHERE is_bot=1 AND full_name=? COLLATE NOCASE",
+                             (name,))
+            last = self.s.one("SELECT m.timestamp AS ts, s.name AS room FROM messages m "
+                              "LEFT JOIN streams s ON s.stream_id = m.stream_id "
+                              "WHERE m.sender_id=? ORDER BY m.id DESC LIMIT 1",
+                              (bot["id"],)) if bot else None
+            today = self.s.one("SELECT COUNT(*) AS n FROM messages WHERE sender_id=? AND timestamp>=?",
+                               (bot["id"], day0))["n"] if bot else 0
+            wakes = (duty.get(name) or {}).get("wakes") if isinstance(duty.get(name), dict) else None
+            roles.append({
+                "name": name, "model": model, "home": homes.get(name),
+                "state": role_state(wroles.get(name)),
+                "last_room": last["room"] if last else None,
+                "last_at": iso(last["ts"]) if last else None,
+                "messages_today": today,
+                "self_wakes_today": sum(1 for t in wakes or []
+                                        if isinstance(t, (int, float)) and t >= day0)})
+        mtimes: dict[str, float | None] = {}
+        for fname in ("state.json", "wake.lock"):
+            try:
+                mtimes[fname] = os.stat(os.path.join(wake_dir, fname)).st_mtime
+            except OSError:
+                mtimes[fname] = None
+        lock = mtimes["wake.lock"]
+        daemon = {"alive": lock is not None and now - lock <= AGENTS_ALIVE_S,
+                  "lock_at": iso(lock) if lock else None,
+                  "state_at": iso(mtimes["state.json"]) if mtimes["state.json"] else None}
+        pv = self.pool_view()
+        if not pv["view"]:
+            errors.extend(pv["errors"])
+        stages = {s["key"]: s["items"] for s in (pv["view"] or {}).get("stages", [])}
+        coders = [{"id": c["id"], "title": c["title"], "url": c["url"], "where": c.get("where"),
+                   "since": c.get("since"), "model": c.get("model") or None}
+                  for c in stages.get("working", [])]
+        # Today's claims in the daily log: one per ticket, PC or cloud.
+        log = self.log_view({"limit": LOG_LIMIT_MAX})
+        if log.get("hint"):
+            errors.append(log["hint"])
+        claims: dict[str, str] = {}
+        for row in log["lines"]:
+            if row.get("action") != "claim" or not str(row.get("time") or "").startswith(iso(day0)[:10]):
+                continue
+            # The log has no where/machine: the actor says it. PC = claim.py + result won
+            # (a lost claim is not a claim); cloud = actor cloud.
+            if row.get("actor") == "claim.py" and row.get("result") == "won":
+                where = "local"
+            elif row.get("actor") == "cloud":
+                where = "cloud"
+            else:
+                continue
+            claims.setdefault(str(row.get("target")), where)
+        counts = {"local": sum(1 for w in claims.values() if w == "local"),
+                  "cloud": sum(1 for w in claims.values() if w == "cloud")}
+        return {"generated_at": iso(now), "roles": roles,
+                "coders": {"running": coders, "today": counts}, "daemon": daemon,
+                "tokens": tokens_view(self.dashboard.state()), "errors": errors}
+
+    def numbers_request(self, p: dict) -> dict:
+        """agora#154: write ``{key: value}`` as one request file. Every key
+        must be in the limits file and every value inside its range; one bad
+        entry refuses the whole request. ``written`` is only ever true after
+        the file is on disk."""
+        known = {n["key"]: n for g in self.limits() for n in g["numbers"]}
+        if not p:
+            raise ApiError("Nothing to save: send {key: value} for at least one number",
+                           "REQUEST_VARIABLE_MISSING")
+        changes = {}
+        for key, raw in p.items():
+            n = known.get(key)
+            if n is None:
+                raise ApiError(f"Unknown number {key!r}: the known ones are "
+                               f"{', '.join(sorted(known))}", "UNKNOWN_NUMBER", key=key)
+            lo, hi, unit = n["min"], n["max"], n.get("unit") or ""
+            allowed = f"{lo:g} to {hi:g} {unit}".strip()
+            value = raw
+            if isinstance(raw, str):
+                try:
+                    value = float(raw.strip())
+                except ValueError:
+                    value = None
+            if isinstance(value, bool) or not isinstance(value, (int, float)) \
+                    or value != value or value in (float("inf"), float("-inf")):
+                raise ApiError(f"{key}: {raw!r} is not a number; allowed {allowed}",
+                               "NUMBER_OUT_OF_RANGE", key=key, min=lo, max=hi)
+            whole = isinstance(n["value"], int) and not isinstance(n["value"], bool)
+            if whole and value != int(value):
+                raise ApiError(f"{key}: {raw!r} must be a whole number; allowed {allowed}",
+                               "NUMBER_OUT_OF_RANGE", key=key, min=lo, max=hi)
+            if not lo <= value <= hi:
+                raise ApiError(f"{key}: {value:g} is out of range; allowed {allowed}",
+                               "NUMBER_OUT_OF_RANGE", key=key, min=lo, max=hi)
+            changes[key] = int(value) if whole else value
+        path = os.path.join(self.data_dir, LIMITS_REQUEST_FILE)
+        doc = {"requested_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+               "changes": changes}
+        tmp = f"{path}.{secrets.token_hex(4)}.tmp"
+        try:
+            with open(tmp, "w", encoding="utf-8", newline="\n") as f:
+                json.dump(doc, f, indent=2)
+                f.write("\n")
+            os.replace(tmp, path)  # atomic: the applier never reads half a file
+        except OSError as e:
+            with contextlib.suppress(OSError):
+                os.remove(tmp)
+            raise ApiError(f"could not write {path}: {e.strerror or e}; nothing was saved",
+                           "NUMBERS_WRITE_FAILED", 500)
+        return {"written": True, "path": path, "changes": changes}
 
     def message_json(self, row, me: dict) -> dict:
         s = self.s
@@ -1637,7 +1931,7 @@ class Chat:
                     raise ApiError(AGENTS_ROOM_READ_ONLY + " No bot is a member of it.",
                                    "AGENTS_ROOM_READ_ONLY")
                 for u in users:
-                    new = self.s.subscribe(u["id"], row["stream_id"], me["email"])
+                    new = self.s.subscribe(u["id"], row["stream_id"], me["id"])
                     if new:
                         self._subscription_events(row, u, "add")
                     into = done if new else already
@@ -1655,7 +1949,7 @@ class Chat:
                     raise _no_stream(name)
                 n = 0
                 for u in users:
-                    gone = self.s.unsubscribe(u["id"], row["stream_id"], me["email"])
+                    gone = int(self.s.unsubscribe(u["id"], row["stream_id"], me["id"]))
                     if gone:
                         self._subscription_events(row, u, "remove")
                     n += gone
@@ -1777,7 +2071,8 @@ class Chat:
         if st and st.group(2) and method == "GET":
             sid = self._stream_by_id(me, int(st.group(1)))["stream_id"]
             return {"subscribers": [r[0] for r in self.s.q(
-                "SELECT user_id FROM subscriptions WHERE stream_id=? ORDER BY user_id", (sid,))]}
+                "SELECT user_id FROM subscriptions WHERE stream_id=? ORDER BY user_id", (sid,))],
+                    "history": self.s.membership_history(sid)}
         if st and not st.group(2) and method == "PATCH":
             return self.update_stream(me, int(st.group(1)), p)
         if st and not st.group(2) and method == "DELETE":
@@ -1808,6 +2103,16 @@ class Chat:
                            "DASHBOARD_SYNC_FAILED", 502, last_error=self.dashboard.last_error)
         if path == "dashboard/approve" and method == "POST":
             return self.dashboard.approve(p.get("id"), p.get("answer"), p.get("note"))
+        if path == "dashboard/pool" and method == "GET":
+            return self.pool_view()
+        if path == "agents" and method == "GET":
+            return self.agents()
+        if path == "numbers" and method == "GET":
+            return {"groups": self.limits()}
+        if path == "log" and method == "GET":
+            return self.log_view(p)
+        if path == "numbers" and method == "POST":
+            return self.numbers_request(p)
         if path == "dashboard/pin" and method == "GET":
             return self.dashboard.pin()
         if path == "dashboard/pin" and method == "POST":
@@ -2003,7 +2308,17 @@ class Handler(BaseHTTPRequestHandler):
             length = self._body_length()
             if length:
                 body = self.rfile.read(length).decode("utf-8", "replace")
-                params.update(urllib.parse.parse_qsl(body, keep_blank_values=True))
+                if "json" in self.headers.get("Content-Type", ""):
+                    # agora#154: an agent's POST /numbers is {key: value}.
+                    try:
+                        obj = json.loads(body)
+                    except ValueError:
+                        obj = None
+                    if not isinstance(obj, dict):
+                        raise ApiError("The JSON body must be an object: {key: value}")
+                    params.update(obj)
+                else:
+                    params.update(urllib.parse.parse_qsl(body, keep_blank_values=True))
             self._check_origin()
             if url.path == "/" and method == "GET":
                 self._serve_page()  # static, no auth: it holds no data
@@ -2049,7 +2364,8 @@ def make_server(db: str, port: int = 8095, poll_seconds: float = POLL_SECONDS,
                 seed_ids: int | None = None, dashboard_cmd: str | None = None,
                 dashboard_every: float = DASHBOARD_EVERY,
                 approve_cmd: str | None = None,
-                allow_hosts: tuple[str, ...] | list[str] = ()) -> ThreadingHTTPServer:
+                allow_hosts: tuple[str, ...] | list[str] = (),
+                data_dir: str | None = None) -> ThreadingHTTPServer:
     """A server bound to 127.0.0.1 only; ``port=0`` picks a free one. With
     ``dashboard_cmd`` its sync thread starts too (first run at once). With
     ``approve_cmd`` (ops#176), POST /dashboard/approve is served; without it,
@@ -2062,7 +2378,8 @@ def make_server(db: str, port: int = 8095, poll_seconds: float = POLL_SECONDS,
     dashboard = Dashboard(store, dashboard_cmd, dashboard_every, approve_cmd=approve_cmd)
     hosts = tuple(allow_host(h) for h in allow_hosts)
     handler = type("ChatHandler", (Handler,), {
-        "chat": Chat(store, poll_seconds, dashboard, allow_hosts=hosts),
+        "chat": Chat(store, poll_seconds, dashboard, allow_hosts=hosts,
+                     data_dir=data_dir or os.environ.get("AGORA_DATA_DIR")),
         "allow_hosts": hosts})
     server = Server((HOST, port), handler)
     server.daemon_threads = True
@@ -2222,7 +2539,7 @@ def ensure_streams(store: Store) -> tuple[list[str], list[str]]:
                 # A person who removed this bot from this room decided; a restart
                 # must not undo it (issue #198).
                 if not store.removed_by_person(bots[full], sid):
-                    store.subscribe(bots[full], sid, "server")
+                    store.subscribe(bots[full], sid)
     return list(plan.STREAMS), missing
 
 
@@ -2558,6 +2875,301 @@ def cmd_autostart(args) -> int:
     return 0
 
 
+# -- human-load: how much one human has to steer the agents (agora#215) -------
+
+HUMAN_LOAD_SCHEMA = 1
+LOAD_CATEGORIES = ("status_ask", "ping", "stall_report", "push", "pasted_output", "correction")
+LOAD_REQUIRED = ("human_user_id", "excluded_streams", "timezone", "phrase_families",
+                 "agent_phrases", "room_labels", "work_queue_view", "max_age_hours")
+LOAD_EXAMPLE = "chat/human-load.example.json"
+
+
+class LoadConfigError(Exception):
+    """Exit 2: the message names the key and the fix."""
+
+
+def load_config(path: str | None) -> dict:
+    path = path or os.environ.get("AGORA_CONFIG")
+    if not path:
+        raise LoadConfigError("no config: pass --config FILE or set AGORA_CONFIG "
+                              f"(start from {LOAD_EXAMPLE})")
+    try:
+        with open(path, encoding="utf-8") as f:
+            cfg = json.load(f)
+    except (OSError, ValueError) as e:
+        raise LoadConfigError(f"cannot read config {path}: {e}; fix the path or the JSON "
+                              f"(start from {LOAD_EXAMPLE})")
+    if not isinstance(cfg, dict):
+        raise LoadConfigError(f"config {path} must be a JSON object (see {LOAD_EXAMPLE})")
+    for key in LOAD_REQUIRED:
+        if key not in cfg:
+            raise LoadConfigError(f"config {path} is missing key '{key}': add it "
+                                  f"(see {LOAD_EXAMPLE})")
+    if not isinstance(cfg["human_user_id"], int) or isinstance(cfg["human_user_id"], bool):
+        raise LoadConfigError("config key 'human_user_id' must be an integer user id")
+    fams = cfg["phrase_families"]
+    if not isinstance(fams, dict):
+        raise LoadConfigError("config key 'phrase_families' must map category -> [regex]")
+    for cat in LOAD_CATEGORIES:
+        if not isinstance(fams.get(cat), list):
+            raise LoadConfigError(f"config key 'phrase_families.{cat}' is missing: add a list "
+                                  f"of regexes (it may be empty); categories are "
+                                  f"{', '.join(LOAD_CATEGORIES)}")
+    for k in ("asks", "stop_lines"):
+        if not isinstance(cfg["agent_phrases"].get(k), list):
+            raise LoadConfigError(f"config key 'agent_phrases.{k}' is missing: add a list "
+                                  f"of regexes (it may be empty)")
+    try:
+        from zoneinfo import ZoneInfo
+        cfg["_tz"] = ZoneInfo(cfg["timezone"])
+    except Exception as e:
+        raise LoadConfigError(f"config key 'timezone' ({cfg['timezone']!r}) is not an IANA "
+                              f"zone name here ({e}); use e.g. 'Pacific/Auckland' "
+                              f"(on Windows: python -m pip install tzdata)")
+    try:
+        cfg["_fam"] = [(c, [re.compile(x, re.I) for x in fams[c]]) for c in LOAD_CATEGORIES]
+        cfg["_asks"] = [re.compile(x, re.I) for x in cfg["agent_phrases"]["asks"]]
+        cfg["_stops"] = [re.compile(x, re.I) for x in cfg["agent_phrases"]["stop_lines"]]
+    except re.error as e:
+        raise LoadConfigError(f"a phrase in the config is not a valid regex ({e}); fix it")
+    return cfg
+
+
+_QUOTE_BLOCK = re.compile(r"^(?:@_\*\*[^\n]*:\n)?```quote\n.*?\n```[ \t]*\n?", re.S | re.M)
+_REPLY_PREFIX = re.compile(r"^\s*(?:@_?\*\*[^*\n]*\*\*[ \t,:]*)+")
+
+
+def own_words(text: str) -> str:
+    """What the human typed: a quoted block (with its "@_**Name** said:" header)
+    and a leading mention are somebody else's words or addressing."""
+    return _REPLY_PREFIX.sub("", _QUOTE_BLOCK.sub("", text or "")).strip()
+
+
+def classify(text: str, fams) -> str | None:
+    words = own_words(text)
+    for cat, pats in fams:
+        if any(p.search(words) for p in pats):
+            return cat
+    return None
+
+
+def open_read_only(path: str) -> sqlite3.Connection:
+    """The live server owns every write: this connection cannot make one."""
+    uri = Path(os.path.abspath(path)).as_uri() + "?mode=ro"
+    return sqlite3.connect(uri, uri=True)
+
+
+def _bump(d: dict, key, n: int = 1) -> None:
+    d[key] = d.get(key, 0) + n
+
+
+def _rate(num: int, den: int):
+    return round(num / den, 4) if den else None
+
+
+def _bucket() -> dict:
+    return {"human_messages": 0, "supervision": 0, "by_category": {}, "by_room": {}}
+
+
+def agent_side_block(cfg: dict, counts: dict) -> dict:
+    """Asks, stop lines (counted in the messages) plus the pool-view/1 file.
+    Ages are measured against the view's own ``generated_at``, so the same file
+    always gives the same answer. ``queue_idle_hours`` is a snapshot reading: the
+    hours since the oldest queued item, when the queue has items and nothing is
+    working; the view holds no history to sum a whole window from."""
+    here = os.path.dirname(os.path.abspath(__file__))
+    spec = importlib.util.spec_from_file_location("pool_view", os.path.join(here, "pool_view.py"))
+    pv = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(pv)
+    res = pv.load(cfg["work_queue_view"], datetime.now(timezone.utc))
+    if res["view"] is None:
+        raise LoadConfigError(f"config key 'work_queue_view' ({cfg['work_queue_view']}): "
+                              f"{res['errors'][0]}")
+    view = res["view"]
+    ref = pv.parse_time(view["generated_at"])
+    limits = cfg["max_age_hours"]
+    past = []
+    stages = {s["key"]: s["items"] for s in view["stages"]}
+    for stage, items in stages.items():
+        limit = limits.get(stage)
+        if limit is None:
+            continue
+        for it in items:
+            since = pv.parse_time(it.get("since"))
+            if since is None:
+                continue
+            age = (ref - since).total_seconds() / 3600
+            if age > limit:
+                past.append({"id": it["id"], "stage": stage, "age_hours": round(age, 2),
+                             "max_hours": limit})
+    idle = 0.0
+    if stages["queue"] and not stages["working"]:
+        sinces = [pv.parse_time(i.get("since")) for i in stages["queue"]]
+        sinces = [t for t in sinces if t]
+        if sinces:
+            idle = round((ref - min(sinces)).total_seconds() / 3600, 2)
+    return {"asks_to_human": counts["asks"], "bot_stop_lines": counts["stops"],
+            "items_past_max_age": {"count": len(past), "items": past},
+            "queue_idle_hours": idle,
+            "work_queue": {"generated_at": view["generated_at"], "stale": res["stale"]}}
+
+
+def human_load(db_path: str, cfg: dict, since: str, until: str) -> dict:
+    tz = cfg["_tz"]
+    d0, d1 = date.fromisoformat(since), date.fromisoformat(until)
+    lo = int(datetime.combine(d0, dtime.min, tz).timestamp())
+    hi = int(datetime.combine(d1 + timedelta(days=1), dtime.min, tz).timestamp())
+    excluded = {x.lower() for x in cfg["excluded_streams"]}
+    labels = cfg["room_labels"]
+    con = open_read_only(db_path)
+    try:
+        streams = {r[0]: r[1] for r in con.execute("SELECT stream_id, name FROM streams")}
+        bots = {r[0] for r in con.execute("SELECT id FROM users WHERE is_bot=1")}
+        rows = con.execute("SELECT sender_id, stream_id, content, timestamp FROM messages "
+                           "WHERE timestamp >= ? AND timestamp < ? ORDER BY id", (lo, hi)).fetchall()
+    finally:
+        con.close()
+    days: dict[str, dict] = {}
+    weeks: dict[str, dict] = {}
+    counts = {"asks": 0, "stops": 0}
+    for sender, sid, content, ts in rows:
+        name = streams.get(sid) if sid is not None else None
+        if name is not None and name.lower() in excluded:
+            continue
+        if sender in bots:
+            if any(p.search(content or "") for p in cfg["_asks"]):
+                counts["asks"] += 1
+            if any(p.search(content or "") for p in cfg["_stops"]):
+                counts["stops"] += 1
+            continue
+        if sender != cfg["human_user_id"]:
+            continue
+        room = "direct" if name is None else labels.get(name, name)
+        local = datetime.fromtimestamp(ts, tz)
+        iso = local.isocalendar()
+        cat = classify(content, cfg["_fam"])
+        for table, key in ((days, local.date().isoformat()),
+                           (weeks, f"{iso[0]}-W{iso[1]:02d}")):
+            b = table.setdefault(key, _bucket())
+            b["human_messages"] += 1
+            if cat:
+                b["supervision"] += 1
+                _bump(b["by_category"], cat)
+                _bump(b["by_room"], room)
+    total = _bucket()
+    for b in days.values():
+        total["human_messages"] += b["human_messages"]
+        total["supervision"] += b["supervision"]
+        for k in ("by_category", "by_room"):
+            for kk, n in b[k].items():
+                _bump(total[k], kk, n)
+    active = len(days)
+    out_days = [{"date": k, **b, "share": _rate(b["supervision"], b["human_messages"])}
+                for k, b in sorted(days.items())]
+    out_weeks = []
+    for k, b in sorted(weeks.items()):
+        n_days = sum(1 for d in days if f"{date.fromisoformat(d).isocalendar()[0]}-W"
+                     f"{date.fromisoformat(d).isocalendar()[1]:02d}" == k)
+        out_weeks.append({"week": k, **b, "active_days": n_days,
+                          "supervision_per_active_day": _rate(b["supervision"], n_days),
+                          "share": _rate(b["supervision"], b["human_messages"])})
+    return {
+        "schema": HUMAN_LOAD_SCHEMA,
+        "generated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "window": {"since": since, "until": until, "timezone": cfg["timezone"]},
+        "human_user_id": cfg["human_user_id"],
+        "totals": {"human_messages": total["human_messages"],
+                   "supervision": total["supervision"], "active_days": active,
+                   "supervision_per_active_day": _rate(total["supervision"], active),
+                   "share": _rate(total["supervision"], total["human_messages"]),
+                   "by_category": total["by_category"], "by_room": total["by_room"]},
+        "days": out_days, "weeks": out_weeks,
+        "agent_side": agent_side_block(cfg, counts),
+    }
+
+
+def validate_human_load(doc) -> list[str]:
+    """One line per broken field of a human-load schema v1 document; [] when valid."""
+    errs: list[str] = []
+
+    def need(obj, path, key, types):
+        v = obj.get(key) if isinstance(obj, dict) else None
+        if isinstance(v, bool) or not isinstance(v, types):
+            errs.append(f"{path}.{key}: required {types}")
+            return None
+        return v
+
+    if not isinstance(doc, dict):
+        return ["top level: must be an object"]
+    if doc.get("schema") != HUMAN_LOAD_SCHEMA:
+        return [f"schema: found {doc.get('schema')!r}, expected {HUMAN_LOAD_SCHEMA}"]
+    need(doc, "", "generated_at", str)
+    w = need(doc, "", "window", dict)
+    for k in ("since", "until", "timezone"):
+        need(w, "window", k, str)
+    need(doc, "", "human_user_id", int)
+    t = need(doc, "", "totals", dict)
+    for k in ("human_messages", "supervision", "active_days"):
+        need(t, "totals", k, int)
+    for k in ("supervision_per_active_day", "share"):
+        need(t, "totals", k, (int, float, type(None)))
+    for k in ("by_category", "by_room"):
+        need(t, "totals", k, dict)
+    for name, rate in (("days", "share"), ("weeks", "share")):
+        seq = need(doc, "", name, list) or []
+        for i, row in enumerate(seq):
+            p = f"{name}[{i}]"
+            need(row, p, "date" if name == "days" else "week", str)
+            for k in ("human_messages", "supervision"):
+                need(row, p, k, int)
+            need(row, p, rate, (int, float, type(None)))
+            for k in ("by_category", "by_room"):
+                need(row, p, k, dict)
+    a = need(doc, "", "agent_side", dict)
+    for k in ("asks_to_human", "bot_stop_lines"):
+        need(a, "agent_side", k, int)
+    need(a, "agent_side", "queue_idle_hours", (int, float))
+    m = need(a, "agent_side", "items_past_max_age", dict)
+    need(m, "agent_side.items_past_max_age", "count", int)
+    need(m, "agent_side.items_past_max_age", "items", list)
+    return errs
+
+
+def cmd_human_load(args) -> int:
+    try:
+        cfg = load_config(args.config)
+        for flag, v in (("--since", args.since), ("--until", args.until)):
+            try:
+                date.fromisoformat(v)
+            except ValueError:
+                raise LoadConfigError(f"{flag} {v!r} is not YYYY-MM-DD: pass a date like 2026-10-01")
+        doc = human_load(args.db, cfg, args.since, args.until)
+    except LoadConfigError as e:
+        print(f"human-load: {e}", file=sys.stderr)
+        return 2
+    except sqlite3.Error as e:
+        print(f"human-load: cannot read the database {args.db} ({e}); pass --db with the "
+              f"server's database file", file=sys.stderr)
+        return 1
+    out = args.out or cfg.get("output_file")
+    if out:
+        try:
+            with open(out, "w", encoding="utf-8") as f:
+                json.dump(doc, f, indent=2)
+        except OSError as e:
+            print(f"human-load: cannot write {out} ({e}); pass --out with a writable path",
+                  file=sys.stderr)
+            return 1
+    if args.json:
+        print(json.dumps(doc))
+    else:
+        t = doc["totals"]
+        print(f"supervision {t['supervision']} of {t['human_messages']} human messages "
+              f"over {t['active_days']} active days"
+              + (f" -> {out}" if out else " (no --out: nothing written)"))
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="server.py", description=__doc__.split("\n")[0])
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -2574,6 +3186,13 @@ def main(argv: list[str] | None = None) -> int:
     human.add_argument("--name", required=True)
     human.add_argument("--write-env", action="store_true",
                        help="append ZULIP_FOUNDER_EMAIL/_API_KEY to --env; never overwrites")
+    load = sub.add_parser("human-load", help="read-only report: how much the human supervises")
+    load.add_argument("--config", metavar="FILE", help="config JSON (else AGORA_CONFIG)")
+    load.add_argument("--since", required=True, metavar="YYYY-MM-DD")
+    load.add_argument("--until", required=True, metavar="YYYY-MM-DD")
+    load.add_argument("--out", metavar="FILE", help="write the report here (else config output_file)")
+    load.add_argument("--db", default=DEFAULT_DB)
+    load.add_argument("--json", action="store_true", help="print JSON (the agent path)")
     up = sub.add_parser("up", help="set everything up and serve (idempotent)")
     up.add_argument("--no-serve", action="store_true", help="set up, then exit")
     up.add_argument("--no-update", action="store_true",
@@ -2605,6 +3224,8 @@ def main(argv: list[str] | None = None) -> int:
         p.add_argument("--db", default=DEFAULT_DB)
         p.add_argument("--port", type=int, default=8095)
     args = parser.parse_args(argv)
+    if args.cmd == "human-load":
+        return cmd_human_load(args)
     site = f"http://{HOST}:{args.port}"
 
     if args.cmd == "bootstrap":

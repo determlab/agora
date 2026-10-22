@@ -76,7 +76,7 @@ def _template_js() -> str:
             "$('msg-tpl').content = {firstElementChild: {cloneNode: () => buildMsg()}};\n")
 
 
-MSG_FUNCS = ("el", "isLong", "textDir", "parseQuote", "inlineParts", "inlineNodes", "fillBody",
+MSG_FUNCS = ("el", "isLong", "textDir", "parseQuote", "inlineParts", "inlineNodes", "hasHebrew", "bodyBlocks", "fillBody",
              "roleOf", "initial", "reactionGlyph", "renderReactions", "wireReactBtn", "tapMessage", "messageNode")
 
 

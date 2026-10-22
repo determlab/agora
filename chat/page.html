@@ -117,7 +117,7 @@ button.archived-name:hover { color: var(--text); }
 #main { display: flex; flex-direction: column; min-width: 0; min-height: 0; height: 100%; position: relative; }
 #top { display: flex; align-items: center; gap: .5rem; padding: .5rem 1rem;
   border-bottom: 1px solid var(--line); background: var(--panel); }
-#menu-btn { display: none; }
+#menu-btn, #side-close, #side-backdrop { display: none; }
 #room-title { font-weight: 600; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* Live status: a green dot when the event queue answers, amber and blinking
    while it reconnects, red when it is down. */
@@ -154,6 +154,8 @@ button.archived-name:hover { color: var(--text); }
 .msg.mine .bubble { background: var(--mine); border-color: transparent; }
 .msg.mention .bubble { background: var(--mention); border-color: var(--mention-line); }
 .body { white-space: pre-wrap; overflow-wrap: anywhere; }
+.body .bln.blank { min-height: 1em; }
+.body ul, .body ol { margin: .15rem 0; padding-inline-start: 1.4rem; }
 /* A long message folds to 6 lines, its code blocks to 3, until "הצג עוד". */
 .body.folded { max-height: calc(6 * 1.45em); overflow: hidden; }
 .body.folded pre { max-height: calc(3 * 1.45em + .8rem); overflow: hidden; }
@@ -257,6 +259,9 @@ dialog .buttons { display: flex; justify-content: flex-end; gap: .5rem; margin-t
   #side { position: absolute; top: env(safe-area-inset-top, 0px); bottom: 0; right: 0; width: 16rem; z-index: 5; transform: translateX(100%);
     transition: transform .15s; box-shadow: 0 0 12px rgba(0, 0, 0, .3); }
   #app.side-open #side { transform: none; }
+  /* agora#165: the dimmed area beside the open drawer, and the X inside it. */
+  #app.side-open #side-backdrop { display: block; position: absolute; inset: 0; z-index: 4; background: rgba(0, 0, 0, .4); }
+  #side-close { display: inline-block; float: inline-end; }
   #menu-btn { display: inline-block; }
   /* ops#325: one top bar row — menu, the room name, the live dot (its text
      is the dot's title); invite, members, bell and theme sit in the side menu
@@ -294,6 +299,14 @@ dialog .buttons { display: flex; justify-content: flex-end; gap: .5rem; margin-t
 button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-visible {
   outline: 2px solid var(--accent); outline-offset: 2px; }
 .dhead { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+#dash-board, #dash-numbers { display: flex; flex-direction: column; gap: .75rem; }
+#dash-numbers[hidden], #dash-board[hidden], #dash-log[hidden] { display: none; }
+.dtabs { display: flex; gap: 6px; }
+.dtabs .go.active { background: var(--text); color: var(--panel); }
+.nrow { display: grid; grid-template-columns: 1fr 7rem 5rem 8rem; gap: 8px; align-items: center; }
+.nrow input { width: 100%; font: inherit; }
+.nrow input[aria-invalid="true"] { border-color: var(--error); }
+.nerr { color: var(--error); font-size: 13px; grid-column: 1 / -1; }
 .dhead h2 { margin: 0; font-size: 18px; }
 .kpis-in { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(150px, 100%), 1fr)); gap: 10px; }
 .kpi { border: 1px solid var(--line); border-inline-start: 5px solid var(--muted); border-radius: 10px;
@@ -421,10 +434,6 @@ a.ref:hover { text-decoration: underline; }
 .qm td.n.warn { color: var(--wait); }
 .qm td.o { color: var(--muted); }
 .qm a { color: inherit; }
-.bf-tok { display: grid; grid-template-columns: auto 1fr auto; gap: 6px 10px; align-items: center; font-size: 14px; }
-.bf-tok .who { font-weight: 600; }
-.bf-tok .val { font-variant-numeric: tabular-nums; white-space: nowrap; color: var(--muted); font-size: 13px; }
-.bf-tok .pbar { min-width: 40px; }
 .bf-line { font-size: 14px; display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
 .bf-line .lbl { font-weight: 600; }
 .bf-sec > .lbl { font-size: 13px; font-weight: 700; color: var(--muted); }
@@ -645,7 +654,8 @@ a.ref:hover { text-decoration: underline; }
     <button type="button" id="view-dash" class="btn">לוח</button>
   </div>
   <nav id="side">
-    <div id="brand"><span id="logo" dir="ltr">agora</span></div>
+    <div id="brand"><span id="logo" dir="ltr">agora</span>
+      <button type="button" id="side-close" class="icon" aria-label="סגירה">&times;</button></div>
     <div id="me-row">
       <span id="me-avatar" class="avatar small role-human" aria-hidden="true"></span>
       <span id="who" dir="auto"></span>
@@ -662,6 +672,7 @@ a.ref:hover { text-decoration: underline; }
       <ul id="archived"></ul>
     </div>
   </nav>
+  <div id="side-backdrop"></div>
   <main id="main">
     <div id="top">
       <button type="button" id="menu-btn" class="icon" aria-label="חדרים">&#9776;</button>
@@ -706,6 +717,35 @@ a.ref:hover { text-decoration: underline; }
       <button type="button" id="dash-theme" class="icon" title="כהה / בהיר" aria-label="כהה / בהיר">&#9681;</button>
     </div>
     <div id="dash-updated" class="upd" role="status">טוען…</div>
+    <div class="dtabs" role="tablist">
+      <button type="button" id="dash-tab-board" class="go active" role="tab" aria-selected="true">לוח</button>
+      <button type="button" id="dash-tab-numbers" class="go" role="tab" aria-selected="false">מספרים</button>
+      <button type="button" id="dash-tab-log" class="go" role="tab" aria-selected="false">יומן</button>
+      <button type="button" id="dash-tab-pool" class="go" role="tab" aria-selected="false">פול</button>
+      <button type="button" id="dash-tab-agents" class="go" role="tab" aria-selected="false">סוכנים</button>
+    </div>
+    <div id="dash-agents" dir="rtl" hidden>
+      <div id="dash-agents-body" class="muted">…</div>
+    </div>
+    <div id="dash-pool" dir="rtl" hidden>
+      <div id="dash-pool-body" class="muted">…</div>
+    </div>
+    <div id="dash-log" hidden>
+      <div class="nrow">
+        <input id="dash-log-actor" placeholder="שחקן" aria-label="שחקן">
+        <input id="dash-log-target" placeholder="כרטיס / PR" aria-label="כרטיס / PR">
+        <label><input type="checkbox" id="dash-log-errors"> שגיאות בלבד</label>
+        <button type="button" id="dash-log-go" class="go">סנן</button>
+      </div>
+      <div id="dash-log-msg" class="muted" role="status"></div>
+      <div id="dash-log-body" class="muted">…</div>
+    </div>
+    <div id="dash-numbers" hidden>
+      <div id="dash-numbers-body" class="muted">…</div>
+      <button type="button" id="dash-numbers-save" class="go">שמור</button>
+      <span id="dash-numbers-msg" role="status"></span>
+    </div>
+    <div id="dash-board">
     <div class="cards">
       <section class="dash-card card wide" id="dash-approvals"><h3></h3><div class="dash-body"><div class="muted">טוען…</div></div></section>
     </div>
@@ -719,12 +759,12 @@ a.ref:hover { text-decoration: underline; }
       <section class="dash-card card wide" id="dash-timeline"><h3></h3><div class="dash-body"><div class="muted">טוען…</div></div></section>
       <section class="dash-card card wide" id="dash-gantt"><h3></h3><div class="dash-body"><div class="muted">טוען…</div></div></section>
       <section class="dash-card card" id="dash-roles"><h3></h3><div class="dash-body"><div class="muted">טוען…</div></div></section>
-      <section class="dash-card card" id="dash-tokens"><h3></h3><div class="dash-body"><div class="muted">טוען…</div></div></section>
       <section class="dash-card card" id="dash-queue"><h3></h3><div class="dash-body"><div class="muted">טוען…</div></div></section>
       <section class="dash-card card" id="dash-prs"><h3></h3><div class="dash-body"><div class="muted">טוען…</div></div></section>
       <section class="dash-card card" id="dash-week"><h3></h3><div class="dash-body"><div class="muted">טוען…</div></div></section>
       <section class="dash-card card" id="dash-products"><h3></h3><div class="dash-body"><div class="muted">טוען…</div></div></section>
       <section class="dash-card card" id="dash-progress"><h3></h3><div class="dash-body"><div class="muted">טוען…</div></div></section>
+    </div>
     </div>
   </aside>
   <aside id="members-panel" class="drawer" aria-labelledby="members-head">
@@ -1135,7 +1175,7 @@ function renderQr(container, text) {
 }
 
 const S = {
-  creds: null, gen: 0, queue: null, lastEvent: -1, me: null, sending: false, dashboard: null,
+  creds: null, gen: 0, queue: null, lastEvent: -1, me: null, sending: false, dictating: false, dashboard: null,
   // ops#322: a room is a stream on the server; its old topics are history,
   // shown as one conversation, and every new message goes to ROOM_TOPIC.
   streams: [],          // the rooms: [{stream_id, name}]
@@ -1378,6 +1418,8 @@ function createReport(name, r, s) {
 // typed, and a rename that could not be read back says so rather than
 // claiming the new name stuck.
 function renameReport(oldName, want, now) {
+  if (now && now.name === oldName && want !== oldName)
+    return "#" + oldName + ": השם לא שונה (השרת עדיין מחזיק #" + oldName + ")";
   if (now) return "#" + oldName + " שונה ל-#" + now.name;
   return "#" + oldName + ": השרת קיבל בקשה לשם #" + want
       + " (הדף לא יכול לקרוא את זה בחזרה: אינך חבר בו, או שהטעינה נכשלה)";
@@ -1494,6 +1536,7 @@ async function connect(gen) {
   await loadUnread();
   if (S.open) await openRoom(S.open.stream_id, S.open.stream);
   await loadDashboard();  // once on load, and again on every reconnect through here
+  loadDashTab(dashTabNow);  // a reload opens the dashboard tab you were on (its data needs the key)
   setLive("live", "מחובר");
 }
 
@@ -1580,7 +1623,7 @@ async function poll(gen) {
       else if (ev.type === "subscription") onSubscription(ev);
       // Not awaited: a dashboard refresh must never hold up the message poll
       // loop, and loadDashboard() only ever replaces S.dashboard wholesale.
-      else if (ev.type === "dashboard") loadDashboard();
+      else if (ev.type === "dashboard") { loadDashboard(); if (!$("dash-pool").hidden) loadPool(); if (!$("dash-agents").hidden) loadAgents(); }
     }
   }
 }
@@ -1638,6 +1681,7 @@ function joinDetail(...parts) { return parts.filter((p) => p !== null && p !== u
 // not lose their place.
 function rerenderDash(focusCls) {
   if (S.dashboard) renderDashboard(S.dashboard);
+  if (S.agents) mountAgents(S.agents);
   const b = focusCls ? $("dash").querySelector("." + focusCls) : null;
   if (b) b.focus();
 }
@@ -2447,7 +2491,6 @@ function setCount(id, n) {
 // Every number carries its word; the page adds no logic of its own beyond
 // wording, so a wrong row is fixed in dashboard.py, not here.
 const OWNER_CLS = {"חמי": "own-founder", "CTO": "own-cto", "PM": "own-pm"};
-const TOK_WHO_HE = {coders_pc: "קודרים במחשב"};
 
 function ageText(h) {
   if (h == null) return "";
@@ -2501,37 +2544,6 @@ function briefMoving(rows) {
   const items = rows.map((m) => briefRow(m.where ? "a" : "none", m.where || "", m.ref, m.url, m.what,
     m.age_h != null ? "לפני " + ageText(m.age_h) : (m.min != null ? m.min + " דק׳" : ""), m.title));
   sec.append(cutList(ul, items, "bf-moving", 5));
-  return sec;
-}
-
-function briefTokens(t, now) {
-  if (now === undefined) now = Date.now();
-  const sec = briefSection("טוקנים · 24 שעות אחרונות", t.total != null ? "סה״כ " + fmtTok(t.total) : null);
-  const plan = el("div", "bf-line");
-  for (const [k, label] of [["plan_5h", "תוכנית 5 שעות"], ["plan_7d", "תוכנית שבועית"]]) {
-    const w = t[k];
-    const s = el("span");
-    s.append(el("span", "lbl", label + ": "),
-             document.createTextNode(w && !w.expired ? w.percent + "% · " + resetText(k === "plan_5h" ? "5h" : "7d", w.resets_at, now)
-                                                     : "אין נתון"));
-    plan.append(s);
-  }
-  sec.append(plan);
-  if (t.total == null) { sec.append(noData("tokens.json missing: the watchdog writes it hourly")); return sec; }
-  const grid = el("div", "bf-tok");
-  for (const r of t.rows || []) {
-    const bar = el("div", "pbar");
-    const i = el("i");
-    i.style.width = Math.round((r.share || 0) * 100) + "%";
-    bar.append(i);
-    grid.append(el("span", "who", TOK_WHO_HE[r.who] || r.who), bar,
-                el("span", "val", r.weighted == null ? "לא נמדד" : fmtTok(r.weighted) + " · " + Math.round((r.share || 0) * 100) + "%"));
-  }
-  grid.append(el("span", "who", "קודרים בענן"), el("span"), el("span", "val", "לא נמדד"));
-  sec.append(grid);
-  const note = el("div", "muted", "משוקלל: קריאה מהמטמון ×0.1, פלט ×5. זה דירוג, לא חשבון."
-    + (t.age_h >= 2 ? " נמדד לפני " + ageText(t.age_h) + "." : ""));
-  sec.append(note);
   return sec;
 }
 
@@ -2865,12 +2877,6 @@ function renderBrief(b, now, doc, pin) {
   // ops#414 adds the owner to doc.stuck itself; until then the brief's rows carry it.
   const stuck = Array.isArray(doc.stuck) && doc.stuck.length && doc.stuck.every((r) => r && r.owner) ? doc.stuck : (b.stuck || []);
   wrap.append(boardGoalsSec(goals, pin && pin.goal), boardRunning(doc.live, b), briefStuck(stuck), boardQueues(doc.queues));
-  if (b.tokens) wrap.append(briefTokens(b.tokens, now));
-  else {
-    const sec = briefSection("טוקנים", null);
-    sec.append(noData("doc.brief.tokens missing"));
-    wrap.append(sec);
-  }
   return wrap;
 }
 
@@ -2892,7 +2898,6 @@ function renderDashboard(d) {
   // already says 0. It stays during an Undo window.
   $("dash-approvals").hidden = !(Array.isArray(doc.next_moves) && doc.next_moves.length) && !approvalsPending;
   setCount("dash-approvals", Array.isArray(doc.next_moves) ? doc.next_moves.length : null);
-  mountCard("dash-tokens", renderTokens(doc.tokens, doc.plan));
   mountCard("dash-waiting", renderWaiting(doc.stuck));
   setCount("dash-waiting", (doc.stuck || []).filter((r) => r.check === "NEEDSHUMAN").length);
   mountCard("dash-roles", renderRoles(doc.roles));
@@ -3166,7 +3171,7 @@ async function openRoom(streamId, stream) {
   // Read before markRoomRead clears it: where the "חדש" line goes (ops#325).
   const unreadN = S.unread instanceof Map ? S.unread.get(streamId) || 0 : 0;
   markRoomRead(streamId);
-  $("app").classList.remove("side-open");
+  closeSide();
   renderStreams();
   seedTyping(streamId);
   let got;
@@ -3313,6 +3318,52 @@ async function copyText(text, btn) {
   setTimeout(() => { btn.textContent = "העתק"; }, 2000);
 }
 
+// A line with any Hebrew letter reads right-to-left, wherever the letter is:
+// agents start a Hebrew line with an English word, a path or a link (#156).
+function hasHebrew(line) {
+  return /[\u0590-\u05FF\uFB1D-\uFB4F]/.test(String(line));
+}
+
+// One text segment (no code fence in it) as blocks: a run of "- " / "* "
+// lines is a ul, a run of "N. " lines an ol, every other line is a div. The
+// text of each is inlineNodes, so nothing a message says is parsed as markup.
+function bodyBlocks(text) {
+  const out = [];
+  const dirOf = (line) => (hasHebrew(line) ? "rtl" : "auto");
+  let list = null, kind = null, any = false;
+  for (const line of String(text).split("\n")) {
+    const b = /^ {0,3}[-*] +(.*\S.*)$/.exec(line);
+    const n = /^ {0,3}(\d+)\. +(.*\S.*)$/.exec(line);
+    const want = b ? "ul" : n ? "ol" : null;
+    if (want !== kind) {
+      if (list) list.dir = any ? "rtl" : "auto";
+      list = want ? document.createElement(want) : null;
+      if (list) {
+        if (n && n[1] !== "1") list.setAttribute("start", n[1]);
+        out.push(list);
+      }
+      kind = want;
+      any = false;
+    }
+    if (list) {
+      const item = (b || n)[b ? 1 : 2];
+      const li = document.createElement("li");
+      li.dir = dirOf(item);
+      any = any || hasHebrew(item);
+      li.append(...inlineNodes(item));
+      list.append(li);
+    } else {
+      const div = document.createElement("div");
+      div.className = line ? "bln" : "bln blank";
+      div.dir = dirOf(line);
+      div.append(...inlineNodes(line));
+      out.push(div);
+    }
+  }
+  if (list) list.dir = any ? "rtl" : "auto";
+  return out;
+}
+
 function fillBody(el, text) {
   // Code (``` fences) stays left-to-right inside a right-to-left message.
   el.dir = textDir(text);
@@ -3335,7 +3386,11 @@ function fillBody(el, text) {
       box.append(n, btn);
       el.append(box);
     } else {
-      el.append(...inlineNodes(i % 2 ? "```" + part : part));
+      // The line break next to a code box belongs to the box, not to a line.
+      let t = i % 2 ? "```" + part : part;
+      if (i > 0 && !(i % 2)) t = t.replace(/^\n/, "");
+      if (i < parts.length - 1 && !(i % 2)) t = t.replace(/\n$/, "");
+      if (t !== "" || parts.length === 1) el.append(...bodyBlocks(t));
     }
   });
 }
@@ -3610,6 +3665,8 @@ function insertText(text) {
 async function send() {
   // One send at a time: Enter pressed twice must not post twice.
   if (S.sending) return;
+  // agora#164: the mic is still writing into the box; send waits for it to stop.
+  if (S.dictating) return;
   const box = $("compose");
   const text = box.value;
   if (!text.trim()) return;
@@ -3638,7 +3695,7 @@ async function send() {
   } finally {
     S.sending = false;
     box.disabled = false;
-    $("send-btn").disabled = false;
+    $("send-btn").disabled = !!S.dictating;
     fitCompose();
     if (!isTouch()) box.focus();
   }
@@ -3777,7 +3834,34 @@ function setupDictation() {
   // Phones never show a title tooltip, so the privacy note is a visible line too.
   $("mic-note").hidden = false;
   let rec = null, base = "", finals = "", written = "";
-  const setOn = (on) => { btn.classList.toggle("on", on); btn.setAttribute("aria-pressed", String(on)); };
+  // agora#164: while the mic is on, Send is off (one message holds the whole
+  // dictation) and the screen stays awake. No Wake Lock API, or a refusal:
+  // recording goes on without it, silently.
+  let lock = null;
+  async function holdScreen() {
+    if (lock || !S.dictating || !navigator.wakeLock) return;
+    try {
+      const got = await navigator.wakeLock.request("screen");
+      if (S.dictating && !lock) lock = got; else got.release();
+    } catch (err) { /* battery saver or no permission: record without it */ }
+  }
+  function freeScreen() {
+    const l = lock; lock = null;
+    if (l) l.release().catch(() => {});
+  }
+  // The browser drops the lock when the page is hidden: take it back on return.
+  document.addEventListener("visibilitychange", () => {
+    if (!S.dictating || document.visibilityState !== "visible") return;
+    if (lock && lock.released !== true) return;
+    lock = null;
+    holdScreen();
+  });
+  const setOn = (on) => {
+    btn.classList.toggle("on", on); btn.setAttribute("aria-pressed", String(on));
+    S.dictating = on;
+    $("send-btn").disabled = on || S.sending;
+    if (on) holdScreen(); else freeScreen();
+  };
   function show(interim) {
     // The box changed under us (sent and cleared, or typed in): rebase on it.
     if (box.value !== written) { base = box.value; finals = ""; }
@@ -3956,10 +4040,12 @@ async function listMembers() {
   const path = "streams/" + s.stream_id + "/members";
   // The box shows the very requests this list is read from.
   $("members-api").textContent = "GET /api/v1/users\nGET /api/v1/" + path;
-  let ids;
+  let ids, history = [];
   try {
     await loadUsers();
-    ids = new Set((await api("GET", path)).subscribers);
+    const got = await api("GET", path);
+    ids = new Set(got.subscribers);
+    history = got.history || [];
   } catch (e) {
     report("members-status", "לא ניתן לטעון את החברים: " + e.message, true);
     return;
@@ -3983,6 +4069,16 @@ async function listMembers() {
       mail.dir = "ltr";
       mail.textContent = u.email;
       name.append(full, mail);
+      // Who added this member and when (issue #162), from the membership log.
+      const adds = history.filter((h) => h.op === "add" && h.member && h.member.user_id === u.user_id);
+      const added = adds[adds.length - 1];
+      const by = document.createElement("span");
+      by.className = "muted member-added";
+      by.dir = "auto";
+      by.textContent = added
+        ? "נוסף ע״י " + added.actor.full_name + " · " + new Date(added.ts * 1000).toLocaleString("he-IL")
+        : "אין רישום מי הוסיף";
+      name.append(by);
       const tag = document.createElement("span");
       tag.className = "tag";
       tag.textContent = u.is_bot ? "בוט" : "אדם";
@@ -4089,7 +4185,23 @@ document.addEventListener("keydown", (e) => {
 
 // -- chrome: sidebar on a narrow screen, the dashboard switch, theme, keys
 
-$("menu-btn").addEventListener("click", () => $("app").classList.toggle("side-open"));
+// agora#165: the rooms drawer on a phone opens with a history entry so Back
+// closes it; X and the backdrop close it by consuming that same entry. None of
+// the three touches the open room.
+function openSide() {
+  if ($("app").classList.contains("side-open")) return;
+  $("app").classList.add("side-open");
+  try { history.pushState({side: 1}, ""); } catch (e) { /* no history: X and backdrop still close it */ }
+}
+function closeSide() {
+  if (!$("app").classList.contains("side-open")) return;
+  $("app").classList.remove("side-open");
+  if (history.state && history.state.side) history.back();
+}
+addEventListener("popstate", () => $("app").classList.remove("side-open"));
+$("menu-btn").addEventListener("click", () => ($("app").classList.contains("side-open") ? closeSide() : openSide()));
+$("side-close").addEventListener("click", closeSide);
+$("side-backdrop").addEventListener("click", closeSide);
 
 // Titles set once, here, rather than written into the markup: every other
 // string on this page that is not static Hebrew chrome goes through
@@ -4101,7 +4213,7 @@ const DASH_TITLES = {
   "dash-live": "הרובוטים עכשיו", "dash-approvals": "מחכה לך", "dash-waiting": "ריצות שממתינות לך",
   "dash-roles": "מי עובד על מה", "dash-queue": "התור לפי עדיפות", "dash-prs": "בקשות מיזוג פתוחות",
   "dash-week": "השבוע", "dash-products": "מוצרים", "dash-stuck": "תקוע",
-  "dash-progress": "התמונה הגדולה", "dash-tokens": "טוקנים", "dash-timeline": "ציר הזמן של היום",
+  "dash-progress": "התמונה הגדולה", "dash-timeline": "ציר הזמן של היום",
   "dash-gantt": "התקדמות לפי יעדים",
 };
 for (const [id, title] of Object.entries(DASH_TITLES)) {
@@ -4163,6 +4275,265 @@ $("dash-sync").addEventListener("click", async () => {
   // Reload either way: a failed sync still changes last_error, and the pill
   // must show what the server now holds, not what was asked (D3's shape).
   finally { await loadDashboard(); b.disabled = false; b.textContent = "סנכרן עכשיו"; }
+});
+
+// -- the Numbers tab (agora#154): the limits file's numbers by stage, and a
+// Save that writes one request file. It says "saved" only from the server's
+// written:true, and shows a refusal (with the allowed range) as it came.
+
+function renderNumbers(groups) {
+  const body = $("dash-numbers-body");
+  body.className = "";
+  body.replaceChildren(...groups.map((g) => {
+    const sec = el("section", "dash-card card");
+    sec.append(el("h3", null, g.name));
+    for (const n of g.numbers) {
+      const row = el("label", "nrow");
+      const inp = el("input");
+      inp.type = "number";
+      inp.step = "any";
+      inp.min = n.min;
+      inp.max = n.max;
+      inp.value = n.value;
+      inp.dataset.key = n.key;
+      inp.dataset.orig = String(n.value);
+      row.append(el("span", null, n.name), inp, el("span", "muted", n.unit || ""),
+                 el("span", "muted", n.min + " – " + n.max));
+      sec.append(row);
+    }
+    return sec;
+  }));
+}
+
+async function loadNumbers() {
+  const msg = $("dash-numbers-msg");
+  msg.textContent = "";
+  try { renderNumbers((await api("GET", "numbers")).groups); }
+  catch (e) { $("dash-numbers-body").textContent = e.message; }
+}
+
+// -- the Log view (agora#155): the last lines of the pool's daily log, newest
+// first, read-only. An unset OPS_POOL_ROOT shows the server's hint, not an error.
+
+async function loadLog() {
+  const msg = $("dash-log-msg"), body = $("dash-log-body");
+  msg.textContent = "";
+  const q = {};
+  if ($("dash-log-actor").value.trim()) q.actor = $("dash-log-actor").value.trim();
+  if ($("dash-log-target").value.trim()) q.target = $("dash-log-target").value.trim();
+  if ($("dash-log-errors").checked) q.errors = "1";
+  try {
+    const r = await api("GET", "log", q);
+    body.className = "";
+    body.replaceChildren(...r.lines.map((l) => {
+      const row = el("div", "nrow");
+      row.append(el("span", "muted", l.time || ""), el("span", null, l.actor || ""),
+                 el("span", null, l.action || ""), el("span", null, l.target || ""),
+                 el("span", null, l.result || ""));
+      if (l.error) row.append(el("span", null, l.error));
+      return row;
+    }));
+    const parts = [];
+    if (r.hint) parts.push(r.hint);
+    else if (!r.lines.length) parts.push("אין שורות ביומן");
+    if (r.skipped) parts.push(r.skipped + " שורות פגומות דולגו");
+    msg.textContent = parts.join(" · ");
+  } catch (e) { body.textContent = e.message; }
+}
+$("dash-log-go").addEventListener("click", loadLog);
+
+// -- the פול tab (agora#196): renders the pool-view/1 file GET dashboard/pool
+// serves. View only; no timer of its own, it loads when the tab opens and on
+// every "dashboard" event. Times are UTC in the file, shown in NZ time.
+const NZ = new Intl.DateTimeFormat("he-IL", {timeZone: "Pacific/Auckland", day: "2-digit",
+  month: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false});
+const NZ_DAY = new Intl.DateTimeFormat("en-CA", {timeZone: "Pacific/Auckland"});
+const POOL_STAGES = {queue: "תור", working: "בעבודה", ci: "CI", review: "ביקורת",
+                     needs_human: "מחכה לאדם", merged: "מוזג"};
+const POOL_ZONES = {local: "המחשב", runner: "Runner", cloud: "ענן"};
+const POOL_OK = {true: "var(--ok, #2a9d4a)", false: "var(--bad, #d64545)"};
+
+function nzTime(s) { const d = s ? new Date(s) : null; return d && !isNaN(d) ? NZ.format(d) : "—"; }
+function ltr(text) { const s = el("span", null, text); s.dir = "ltr"; return s; }
+
+function poolChip(c, wide) {
+  const a = el("a", "nrow", null);
+  a.href = c.url; a.target = "_blank"; a.rel = "noopener";
+  if (wide) { a.style.borderInlineStart = "4px solid " + POOL_OK[false]; a.append(el("b", null, "סבב תיקון, ראשון בתור "));}
+  a.append(ltr(c.id), el("span", null, " " + (c.title || "")), el("span", "muted", " " + (c.note || "") + " " + nzTime(c.since)));
+  return a;
+}
+
+function renderPool(r) {
+  const root = el("div");
+  if (!r.view) { root.append(el("div", "error", (r.errors || []).join(" · ") || "אין נתונים")); return root; }
+  const v = r.view;
+  if (r.stale) {
+    const b = el("div", "error", "לא עודכן מאז "); b.setAttribute("role", "alert");
+    b.append(ltr(nzTime(v.generated_at))); b.style.fontWeight = "bold"; root.append(b);
+  }
+  if (v.alerts.length) {
+    const box = el("div", "error");
+    for (const a of v.alerts) box.append(el("div", null, a.text + (a.since ? " · " + nzTime(a.since) : "")));
+    root.append(box);
+  }
+  const stage = (k) => v.stages.find((s) => s.key === k).items;
+  const today = NZ_DAY.format(new Date());
+  const mergedToday = stage("merged").filter((c) => c.since && NZ_DAY.format(new Date(c.since)) === today).length;
+  const nums = el("div", "nrow");
+  nums.append(el("span", null, "מוזגו היום: " + mergedToday), el("span", null, "רצים עכשיו: " + v.summary.running),
+              el("span", "muted", "עדכון אחרון: "));
+  nums.lastChild.append(ltr(nzTime(v.generated_at)));
+  root.append(nums);
+  const runnerDown = v.zones.some((z) => z.key === "runner" && z.parts.some((p) => p.ok === false));
+  for (const s of v.stages) {
+    let items = s.items;
+    if (s.key === "queue") items = [...items.filter((c) => c.fix_round), ...items.filter((c) => !c.fix_round)];
+    const sec = el("section", "dash-card card wide");
+    const h = el("h3", null, POOL_STAGES[s.key] + " " + s.items.length);
+    const colour = !s.items.length ? "var(--muted, #888)" : s.key === "ci" && runnerDown ? POOL_OK[false] : "var(--accent, #1f6f78)";
+    h.style.borderInlineStart = "6px solid " + colour; h.style.paddingInlineStart = "6px";
+    sec.append(h);
+    const shown = s.key === "merged" ? items.slice(0, 6) : items;
+    for (const c of shown) sec.append(poolChip(c, s.key === "queue" && c.fix_round === true));
+    if (items.length > shown.length) sec.append(el("div", "muted", "+" + (items.length - shown.length) + " מוקדם יותר"));
+    root.append(sec);
+  }
+  for (const z of v.zones) {
+    const sec = el("section", "dash-card card");
+    sec.append(el("h3", null, POOL_ZONES[z.key]));
+    for (const p of z.parts) {
+      const row = el("div", "nrow");
+      const dot = el("span", null, "●"); dot.style.color = POOL_OK[p.ok] || "var(--muted, #888)";
+      row.append(dot, el("span", null, " " + p.name), el("span", "muted", " " + p.note));
+      sec.append(row);
+    }
+    root.append(sec);
+  }
+  return root;
+}
+
+async function loadPool() {
+  const body = $("dash-pool-body");
+  try {
+    body.className = "";
+    body.replaceChildren(renderPool(await api("GET", "dashboard/pool")));
+  } catch (e) { body.className = "error"; body.textContent = e.message; }
+}
+
+// -- the סוכנים tab (agora#204): GET agents, view only. Roles, the coders
+// running now, the wake daemon and the token block (moved here from the board).
+// Refreshes with the dashboard sync ("dashboard" event, every 300 s).
+const ROLE_STATE_HE = {working: "עובד", resting: "נח", closed: "סגור"};
+const TOK_STALE_HE = {"no-data": "אין נתוני טוקנים: tokens.json לא נקרא", "sync-old": "נתוני הטוקנים ישנים: הלוח לא סונכרן מעל שעתיים"};
+
+function modelChip(model) { return el("span", "chip", model || "?"); }
+
+function agentsTokens(t) {
+  const box = el("div");
+  if (t.stale) {
+    const w = el("div", "error", t.reason === "old" ? "נתוני הטוקנים ישנים: נמדדו לפני " + ageText(t.age_h) : (TOK_STALE_HE[t.reason] || "נתוני הטוקנים ישנים"));
+    w.setAttribute("role", "alert"); w.style.fontWeight = "bold";
+    box.append(w);
+  }
+  box.append(renderTokens(t.data, t.plan));
+  return box;
+}
+
+function renderAgents(a) {
+  const root = el("div");
+  for (const e of a.errors || []) root.append(el("div", "muted", e));
+  const roles = el("section", "dash-card card wide");
+  roles.append(el("h3", null, "תפקידים"));
+  for (const r of a.roles) {
+    const row = el("div", "nrow");
+    row.append(el("b", null, r.name), modelChip(r.model), el("span", "chip " + r.state, ROLE_STATE_HE[r.state] || r.state),
+               el("span", "muted", r.last_at ? "הודעה אחרונה: #" + (r.last_room || "הודעה ישירה") + " " + nzTime(r.last_at) : "אין הודעות"),
+               el("span", "muted", "היום: " + r.messages_today));
+    roles.append(row);
+  }
+  const coders = el("section", "dash-card card wide");
+  coders.append(el("h3", null, "קודרים עכשיו"));
+  coders.append(el("div", "nrow", "היום: מחשב " + a.coders.today.local + " · ענן " + a.coders.today.cloud));
+  if (!a.coders.running.length) coders.append(el("div", "muted", "אין קודר רץ עכשיו"));
+  for (const c of a.coders.running) {
+    const row = el("a", "nrow");
+    row.href = c.url; row.target = "_blank"; row.rel = "noopener";
+    row.append(ltr(c.id), modelChip(c.model), el("span", null, c.where === "cloud" ? "ענן" : c.where === "local" ? "מחשב" : "—"),
+               el("span", "muted", "מאז " + nzTime(c.since)));
+    coders.append(row);
+  }
+  const d = a.daemon;
+  const daemon = el("section", "dash-card card wide");
+  daemon.append(el("h3", null, "דמון ההשכמה"));
+  const st = el("div", "nrow");
+  const word = el("b", d.alive ? "ok" : "error", d.alive ? "חי" : "לא רץ");
+  if (!d.alive) word.style.fontWeight = "bold";
+  const upd = el("span", "muted", " עדכון אחרון: ");
+  upd.append(ltr(nzTime(d.lock_at || d.state_at)));
+  st.append(word, upd);
+  daemon.append(st, el("div", "nrow", "השכמות עצמיות היום: " + a.roles.map((r) => r.name + " " + r.self_wakes_today).join(" · ")));
+  const tokens = el("section", "dash-card card wide");
+  tokens.append(el("h3", null, "טוקנים"), agentsTokens(a.tokens));
+  root.append(roles, coders, daemon, tokens);
+  return root;
+}
+
+function mountAgents(a) {
+  const body = $("dash-agents-body");
+  body.className = "";
+  body.replaceChildren(renderAgents(a));
+}
+
+async function loadAgents() {
+  const body = $("dash-agents-body");
+  try { S.agents = await api("GET", "agents"); mountAgents(S.agents); }
+  catch (e) { body.className = "error"; body.textContent = e.message; }
+}
+
+// A reload keeps the dashboard tab you were on (agora#204), as it keeps the view.
+const DASHTAB = "agora-dash-tab";
+const DASH_TABS = ["board", "numbers", "log", "pool", "agents"];
+let dashTabNow = "board";
+
+function loadDashTab(name) {
+  if (name === "numbers") loadNumbers();
+  if (name === "log") loadLog();
+  if (name === "pool") loadPool();
+  if (name === "agents") loadAgents();
+}
+
+function showDashTab(name, load) {
+  dashTabNow = name;
+  $("dash-board").hidden = name !== "board";
+  for (const t of DASH_TABS) {
+    if (t === "board") continue;
+    $("dash-" + t).hidden = name !== t;
+  }
+  for (const t of DASH_TABS) {
+    $("dash-tab-" + t).classList.toggle("active", name === t);
+    $("dash-tab-" + t).setAttribute("aria-selected", String(name === t));
+  }
+  try { localStorage.setItem(DASHTAB, name); } catch (e) { /* private window: the tab still switches */ }
+  if (load !== false) loadDashTab(name);
+}
+$("dash-tab-agents").addEventListener("click", () => showDashTab("agents"));
+$("dash-tab-pool").addEventListener("click", () => showDashTab("pool"));
+$("dash-tab-board").addEventListener("click", () => showDashTab("board"));
+$("dash-tab-numbers").addEventListener("click", () => showDashTab("numbers"));
+$("dash-tab-log").addEventListener("click", () => showDashTab("log"));
+
+$("dash-numbers-save").addEventListener("click", async () => {
+  const msg = $("dash-numbers-msg");
+  const changes = {};
+  for (const inp of $("dash-numbers-body").querySelectorAll("input[data-key]")) {
+    if (inp.value !== inp.dataset.orig) changes[inp.dataset.key] = inp.value;
+  }
+  if (!Object.keys(changes).length) { msg.textContent = "שום דבר לא שונה"; return; }
+  try {
+    const r = await api("POST", "numbers", changes);
+    msg.textContent = r.written === true ? "נשמר ב-" + r.path : "לא נשמר";
+  } catch (e) { msg.textContent = "לא נשמר: " + e.message; }
 });
 
 // The pill's "N min ago" moves on its own between syncs.
@@ -4277,6 +4648,10 @@ try {
   if (v === "24h" || v === "7d") tokView = v;
 } catch (e) { /* no storage: the default view */ }
 setView((() => { try { return localStorage.getItem(VIEW); } catch (e) { return null; } })() === "dash" ? "dash" : "chat");
+try {
+  const t = localStorage.getItem(DASHTAB);
+  if (DASH_TABS.includes(t)) showDashTab(t, false);   // shown now, loaded once connect() has the key
+} catch (e) { /* no storage: the board */ }
 // ?pair=CODE (ops#236): the phone landed here from the QR. A real reload
 // would resubmit the one-time code, so the URL is cleaned with
 // history.replaceState, never location.reload/assign.

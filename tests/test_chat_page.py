@@ -270,6 +270,27 @@ def test_255_automatic_compose_focus_is_guarded_but_a_tap_driven_one_is_not():
     assert "box.focus();" in choose_pick and "isTouch" not in choose_pick
 
 
+def test_165_rooms_drawer_closes_by_x_backdrop_and_back_without_changing_room():
+    page = PAGE.read_text(encoding="utf-8")
+    script = _markup().script
+    assert 'id="side-close"' in page and 'id="side-backdrop"' in page
+    assert '#app.side-open #side-backdrop {' in page
+    # the global [hidden]{display:none !important} would hide them for good
+    assert 'id="side-close" class="icon" aria-label="סגירה">' in page
+    assert '<div id="side-backdrop"></div>' in page
+    # all three close routes are wired
+    assert '$("side-close").addEventListener("click", closeSide)' in script
+    assert '$("side-backdrop").addEventListener("click", closeSide)' in script
+    assert 'addEventListener("popstate"' in script
+    # opening pushes the entry Back pops; closing by X/backdrop consumes it
+    assert "history.pushState" in _function("openSide")
+    assert "history.back()" in _function("closeSide")
+    # none of them selects a room
+    for name in ("openSide", "closeSide"):
+        assert "openRoom" not in _function(name)
+    assert 'classList.remove("side-open")' in script.split('addEventListener("popstate"')[1].split("\n")[0]
+
+
 def test_the_csp_hash_survives_a_crlf_checkout(tmp_path):
     crlf = tmp_path / "page.html"
     crlf.write_bytes(PAGE.read_bytes().replace(b"\r\n", b"\n").replace(b"\n", b"\r\n"))
@@ -383,7 +404,8 @@ def test_the_page_never_renders_markup_from_a_string():
     # Message text, the quote inside it and its code all end in textContent.
     assert "fillBody(body, m.content)" in script and "fillBody(body, q.rest)" in script
     assert "n.textContent = part.replace(" in _function("fillBody")
-    assert "el.append(...inlineNodes(" in _function("fillBody")
+    assert "el.append(...bodyBlocks(" in _function("fillBody")
+    assert "append(...inlineNodes(" in _function("bodyBlocks")
     assert "n.textContent = p.text" in _function("inlineNodes")
     assert "qt.textContent = q.quote" in script
     assert '.textContent = q.sender' in script and '.textContent = m.sender_full_name' in script
@@ -697,8 +719,9 @@ def test_79_the_rename_read_back_never_claims_a_name_it_did_not_confirm():
       out.gone = renameReport("old", "new", undefined);
     """)
     assert got["read"] == "#old שונה ל-#new"
-    # What the server now holds wins over what was typed.
-    assert got["mismatch"] == "#old שונה ל-#old"
+    # What the server now holds wins over what was typed, and a rename the
+    # server did not apply is not reported as a success.
+    assert got["mismatch"] == "#old: השם לא שונה (השרת עדיין מחזיק #old)"
     assert got["gone"].startswith("#old: השרת קיבל בקשה לשם #new (הדף לא יכול לקרוא את זה בחזרה")
 
 
@@ -1083,26 +1106,88 @@ def test_77_inline_code_and_mentions_render_as_elements_never_as_markup():
         {"kind": "text", "text": " <img src=x onerror=alert(1)>"}]
     assert got["none"] == [[{"kind": "text", "text": "no marks `` @**"}],
                            [{"kind": "text", "text": "`a\nb`"}]]
-    dom = _js(("textDir", "inlineParts", "inlineNodes", "fillBody"), r"""
+    dom = _js(("textDir", "hasHebrew", "inlineParts", "inlineNodes", "bodyBlocks", "fillBody"), r"""
       const el = document.createElement("div");
       fillBody(el, "@**CTO** שלום `x<y>` <b>hi</b>\n```py\nprint(1)\n```\nend");
       out.body = dump(el);
     """, prelude=FAKE_DOM)
     body = dom["body"]
     assert body["dir"] == "rtl"
-    kinds = [(k.get("tag"), k.get("cls"), k.get("dir"), k["text"]) for k in body["kids"]]
+    # Each line is its own block (#156); the inline parts sit inside it.
+    assert [(k["tag"], k["cls"], k["dir"]) for k in body["kids"]] == [
+        ("div", "bln", "rtl"), ("div", "codebox", ""), ("div", "bln", "auto")]
+    inline = body["kids"][0]["kids"]
+    kinds = [(k.get("tag"), k.get("cls"), k.get("dir"), k["text"]) for k in inline]
     assert kinds == [
         ("strong", "mention-name", "ltr", "@CTO"), (None, None, None, " שלום "),
-        ("code", "chip copy", "ltr", "x<y>"), (None, None, None, " <b>hi</b>\n"),
-        ("div", "codebox", "", "print(1)\nהעתק"), (None, None, None, "\nend")]
+        ("code", "chip copy", "ltr", "x<y>"), (None, None, None, " <b>hi</b>")]
+    assert body["kids"][1]["text"] == "print(1)\nהעתק"
+    assert body["kids"][2]["text"] == "end"
     # Every element's content is one text node: nothing was parsed.
-    for k in body["kids"]:
-        if "tag" in k and k["tag"] != "div":
+    for k in inline:
+        if "tag" in k:
             assert k["kids"] == [{"text": k["text"]}]
     css = _css()
     ment = _rule(".mention-name", css)
     assert "color: var(--accent)" in ment and "font-weight: 700" in ment
     assert "background: var(--code)" in _rule(".chip", css)
+
+
+# -- issue #156: lists in a message, and each line right-to-left by its own letters
+
+BODY_FUNCS = ("textDir", "hasHebrew", "inlineParts", "inlineNodes", "bodyBlocks", "fillBody")
+
+
+def _blocks(text: str) -> list:
+    return _js(BODY_FUNCS, """
+      const el = document.createElement("div");
+      fillBody(el, %s);
+      out.kids = el.childNodes.map(dump);
+    """ % json.dumps(text), prelude=FAKE_DOM)["kids"]
+
+
+def test_156_dash_and_star_lines_become_one_ul_with_an_li_each():
+    for text in ("- a\n- b", "* a\n* b"):
+        kids = _blocks(text)
+        assert [k["tag"] for k in kids] == ["ul"]
+        assert [(li["tag"], li["text"]) for li in kids[0]["kids"]] == [("li", "a"), ("li", "b")]
+
+
+def test_156_numbered_lines_become_one_ol():
+    kids = _blocks("1. a\n2. b")
+    assert [k["tag"] for k in kids] == ["ol"]
+    assert [li["text"] for li in kids[0]["kids"]] == ["a", "b"]
+
+
+def test_156_markup_in_an_item_stays_text_and_inline_marks_still_work():
+    kids = _blocks("- <b>x</b> `c` ops#94")
+    li = kids[0]["kids"][0]
+    assert li["text"] == "<b>x</b> c ops#94"
+    assert [k.get("tag") for k in li["kids"]] == [None, "code", None, "a"]
+    assert li["kids"][0] == {"text": "<b>x</b> "}
+
+
+def test_156_a_list_ends_at_a_plain_line_and_a_dash_without_a_space_is_text():
+    kids = _blocks("intro\n- a\n- b\nafter\n-x")
+    assert [k["tag"] for k in kids] == ["div", "ul", "div", "div"]
+    assert kids[3]["text"] == "-x"
+
+
+def test_156_a_line_with_any_hebrew_is_rtl_and_the_rest_is_auto():
+    kids = _blocks("ops#412 עובד עכשיו\ngit log")
+    assert [(k["tag"], k["dir"], k["text"]) for k in kids] == [
+        ("div", "rtl", "ops#412 עובד עכשיו"), ("div", "auto", "git log")]
+
+
+def test_156_each_list_item_follows_the_same_rule():
+    kids = _blocks("- git log\n- זה עובד")
+    assert [li["dir"] for li in kids[0]["kids"]] == ["auto", "rtl"]
+    assert kids[0]["dir"] == "rtl"
+
+
+def test_156_a_code_fence_stays_a_codebox_between_blocks():
+    kids = _blocks("שלום\n```\nx\n```\n- a")
+    assert [(k["tag"], k["cls"]) for k in kids] == [("div", "bln"), ("div", "codebox"), ("ul", "")]
 
 
 def test_77_a_mentioned_bubble_is_filled_yellow_without_a_side_bar():
@@ -1803,19 +1888,21 @@ def test_85_links_render_as_real_anchor_elements_opening_in_a_new_tab():
 
 
 def test_85_a_hebrew_message_with_a_link_renders_as_dom_nodes_and_keeps_rtl_order():
-    dom = _js(("textDir", "inlineParts", "inlineNodes", "fillBody"), r"""
+    dom = _js(("textDir", "hasHebrew", "inlineParts", "inlineNodes", "bodyBlocks", "fillBody"), r"""
       const el = document.createElement("div");
       fillBody(el, "שלום https://example.com/x ops#94 עולם");
       out.body = dump(el);
     """, prelude=FAKE_DOM)
     body = dom["body"]
     assert body["dir"] == "rtl"
-    kinds = [(k.get("tag"), k.get("dir"), k["text"]) for k in body["kids"]]
+    assert [(k["tag"], k["dir"]) for k in body["kids"]] == [("div", "rtl")]
+    inline = body["kids"][0]["kids"]
+    kinds = [(k.get("tag"), k.get("dir"), k["text"]) for k in inline]
     assert kinds == [
         (None, None, "שלום "), ("a", "ltr", "https://example.com/x"), (None, None, " "),
         ("a", "ltr", "ops#94"), (None, None, " עולם")]
     # Every link's content is one text node: nothing was parsed as markup.
-    for k in body["kids"]:
+    for k in inline:
         if k.get("tag") == "a":
             assert k["kids"] == [{"text": k["text"]}]
     assert 'id="send-status"' not in PAGE.read_text(encoding="utf-8")
@@ -2479,8 +2566,8 @@ def test_326_approvals_come_first_full_width_above_the_brief():
 def test_326_approvals_by_default_and_one_remembered_toggle_shows_the_other_twelve():
     first, more = _board_ids()
     assert first == ["dash-approvals"]
-    assert len(more) == 12 and set(first) | set(more) == {"dash-" + c for c in (
-        "approvals", "waiting", "live", "stuck", "timeline", "gantt", "roles", "tokens", "queue", "prs",
+    assert len(more) == 11 and set(first) | set(more) == {"dash-" + c for c in (   # agora#204: tokens moved to סוכנים
+        "approvals", "waiting", "live", "stuck", "timeline", "gantt", "roles", "queue", "prs",
         "week", "products", "progress")}
     [(_, btn)] = [(t, a) for t, a in _markup().elements if a.get("id") == "dash-more-btn"]
     assert btn["aria-controls"] == "dash-more" and btn["aria-expanded"] == "false"
@@ -2763,7 +2850,7 @@ def test_322_opening_a_room_reads_all_its_messages_across_old_topics(world):
       const S = {open: null, shown: new Set(), msgs: [], members: new Map(), streams: []};
       const isTouch = () => true;
       function refreshCount() {} function markRoomRead(id) { calls.push(["read", id]); }
-      function renderStreams() {} function seedTyping() {}
+      function renderStreams() {} function seedTyping() {} function closeSide() {}
       function addMessages(list) { S.msgs.push(...(list || [])); }
       const ROOM_TOPIC = "chat"; const AGENTS_ROOM = "סוכנים";
     """
@@ -3037,6 +3124,12 @@ function mk(id, extra) { return els[id] = Object.assign({
   setAttribute(k, v) { this.attrs[k] = v; },
   addEventListener(t, f) { this.listeners[t] = f; }}, extra); }
 mk("mic-btn"); mk("compose", {hidden: false}); mk("send-error"); mk("mic-note");
+mk("send-btn", {hidden: false, disabled: false});
+const S = {sending: false, dictating: false};
+global.document = {visibilityState: "visible", addEventListener() {}};
+// node 22 has a getter-only global `navigator`: a plain assignment is dropped.
+function setNav(v) { Object.defineProperty(globalThis, "navigator", {value: v, configurable: true, writable: true}); }
+setNav({});
 for (const e of Object.values(els)) e.classList.owner = e;
 const $ = (id) => els[id];
 // Every road out of the page: the page's own send() and the network itself.
@@ -3163,6 +3256,88 @@ def test_the_privacy_note_is_a_visible_line_when_the_mic_is_offered():
     assert out == {"without": True, "with": False}
 
 
+# -- agora#164: no send while the mic is on; the screen stays awake
+
+# DICTATION_STUB minus its fake send(): these tests drive the page's own send().
+DICTATION_SEND_STUB = DICTATION_STUB.replace(
+    'function send() { sent.push(["send", els.compose.value]); }\n', "") + """
+S.open = {stream_id: 1};
+const ROOM_TOPIC = "t";
+async function api(m, p, body) { sent.push(["api", body.content]); return {id: 7}; }
+function toast() {} function sendTyping() {}
+let lastTypingSent = 0; const isTouch = () => true;
+els.compose.focus = () => {}; els.compose.setRangeText = () => {};
+mk("tag-note");
+const listeners = {};
+document.addEventListener = (t, f) => { listeners[t] = f; };
+let locks = [];
+function fakeLock() { const l = {released: false, release() { this.released = true; return Promise.resolve(); }};
+  locks.push(l); return Promise.resolve(l); }
+"""
+
+
+def test_send_is_disabled_and_ignored_while_the_mic_is_on_and_back_when_it_stops():
+    out = _js(("setupDictation", "send"), """
+      global.window = {SpeechRecognition: FakeSR};
+      setNav({});
+      $("compose").value = "שלום";
+      setupDictation();
+      $("mic-btn").listeners.click();
+      out.disabledOn = $("send-btn").disabled;
+      await send();                       // Send click or Enter: both land here
+      out.sentOn = sent.filter((x) => x[0] === "api").length;
+      made[0].onresult({resultIndex: 0, results: [res("עולם", true)]});
+      made[0].onend();                    // end of speech
+      out.disabledOff = $("send-btn").disabled;
+      await send();
+      out.sentOff = sent.filter((x) => x[0] === "api").map((x) => x[1]);
+    """, DICTATION_SEND_STUB)
+    assert out == {"disabledOn": True, "sentOn": 0, "disabledOff": False,
+                   "sentOff": ["שלום עולם"]}
+
+
+def test_the_screen_wake_lock_is_held_while_recording_and_released_after():
+    out = _js(("setupDictation",), """
+      global.window = {SpeechRecognition: FakeSR};
+      setNav({wakeLock: {request: (k) => { out.kind = k; return fakeLock(); }}});
+      setupDictation();
+      $("mic-btn").listeners.click();
+      await new Promise((r) => setImmediate(r));
+      out.held = locks.length === 1 && !locks[0].released;
+      // The phone hides the page; the browser drops the lock; the page comes back.
+      locks[0].released = true;
+      document.visibilityState = "visible";
+      listeners.visibilitychange();
+      await new Promise((r) => setImmediate(r));
+      out.reacquired = locks.length === 2 && !locks[1].released;
+      made[0].onend();
+      await new Promise((r) => setImmediate(r));
+      out.releasedAfter = locks[1].released;
+      listeners.visibilitychange();       // not recording: no new lock
+      await new Promise((r) => setImmediate(r));
+      out.total = locks.length;
+    """, DICTATION_SEND_STUB)
+    assert out == {"kind": "screen", "held": True, "reacquired": True,
+                   "releasedAfter": True, "total": 2}
+
+
+def test_recording_works_without_the_wake_lock_api_and_when_it_refuses():
+    out = _js(("setupDictation",), """
+      global.window = {SpeechRecognition: FakeSR};
+      setNav({});
+      setupDictation();
+      $("mic-btn").listeners.click();
+      out.noApi = [made[0].started, $("send-error").text];
+      made[0].onend();
+      setNav({wakeLock: {request: () => Promise.reject(new Error("NotAllowedError"))}});
+      $("mic-btn").listeners.click();
+      await new Promise((r) => setImmediate(r));
+      out.refused = [made[1].started, $("send-error").text];
+      made[1].onend();
+    """, DICTATION_SEND_STUB)
+    assert out == {"noApi": [True, ""], "refused": [True, ""]}
+
+
 
 # -- the brief (founder, 2026-10-17: moving, stuck with owner, tokens, progress)
 
@@ -3186,14 +3361,14 @@ BRIEF = {
                  "milestones": [{"repo": "shal", "title": "v0.4.0", "closed": 20, "total": 23, "percent": 87, "url": "m"}],
                  "stage1": {"due": "2026-12-08", "days_left": 52, "done": 1, "total": 3}},
 }
-BRIEF_FUNCS = ("ageText", "briefSection", "briefRow", "briefStuck", "briefMoving", "briefTokens",
+BRIEF_FUNCS = ("ageText", "briefSection", "briefRow", "briefStuck", "briefMoving",
                "briefProgress", "renderBrief", "boardGoals", "goalChip", "burnupSvg", "goalBody", "goalItem",
                "boardGoalsSec", "pinGoal", "wakeButton", "wakeOwner", "boardRunning", "queueCell", "boardQueues")
 
 
 def _brief(body: str, prelude: str = ""):
     return _js(DASH_FUNCS + BRIEF_FUNCS, body,
-               prelude=_dash_prelude() + _consts("OWNER_CLS", "TOK_WHO_HE", "SVG", "goalOpen", "WAKE_ROLES",
+               prelude=_dash_prelude() + _consts("OWNER_CLS", "SVG", "goalOpen", "WAKE_ROLES",
                                                  "wokenRows", "LIVE_STATE", "QUEUE_ROWS", "QUEUE_COLS") + prelude)
 
 
@@ -3342,16 +3517,83 @@ def test_174_queues_are_a_company_products_matrix_and_say_when_missing():
     assert got["note"] == "חברה: ops, agora" and "הנתון לא זמין עכשיו" in got["none"]
 
 
-def test_brief_tokens_label_every_number_and_say_the_cloud_is_not_measured():
+def test_204_the_board_has_no_token_block_and_the_agents_tab_has_it():
+    # agora#204: the tokens moved from לוח to סוכנים: neither the brief's
+    # block nor the "dash-tokens" card is on the board any more.
+    script = _markup().script
+    text = PAGE.read_text(encoding="utf-8")
+    assert "briefTokens" not in script and "dash-tokens" not in text and "dash-tokens" not in script
     got = _brief(f"""
       const b = {json.dumps(BRIEF, ensure_ascii=False)};
-      const sec = briefTokens(b.tokens, Date.parse("2026-10-17T04:00:00Z"));
-      out.text = sec.textContent;
+      out.text = renderBrief(b, 0, {{}}, null).textContent;
     """)
-    t = got["text"]
-    assert "תוכנית 5 שעות: 5% · מתאפס בעוד 4:40" in t and "תוכנית שבועית: 44%" in t
-    assert "30.0M · 90%" in t and "לא נמדד" in t and "קודרים בענן" in t and "קודרים במחשב" in t
-    assert "זה דירוג, לא חשבון" in t
+    assert "טוקנים" not in got["text"]
+    assert 'id="dash-tab-agents"' in text and ">סוכנים<" in text and 'id="dash-agents"' in text
+    assert "renderTokens(t.data, t.plan)" in script and 'api("GET", "agents")' in script
+
+
+AGENTS_DOC = {
+    "generated_at": "2026-10-21T08:00:00Z", "errors": [],
+    "roles": [
+        {"name": "COO", "model": "opus", "home": "coo", "state": "working", "last_room": "coo",
+         "last_at": "2026-10-21T07:50:00Z", "messages_today": 4, "self_wakes_today": 2},
+        {"name": "PM", "model": "sonnet", "home": "PM", "state": "closed", "last_room": None,
+         "last_at": None, "messages_today": 0, "self_wakes_today": 0}],
+    "coders": {"running": [{"id": "agora#204", "title": "t", "url": "https://x/204", "where": "cloud",
+                            "since": "2026-10-21T07:00:00Z", "model": None},
+                           {"id": "ops#9", "title": "t", "url": "https://x/9", "where": "local",
+                            "since": "2026-10-21T07:30:00Z", "model": "opus"}],
+               "today": {"local": 3, "cloud": 1}},
+    "daemon": {"alive": False, "lock_at": "2026-10-21T06:00:00Z", "state_at": "2026-10-21T06:00:00Z"},
+    "tokens": {"data": {"agents": {"COO": {"24h": {"weighted": 3e6}, "7d": {"weighted": 9e6}}}},
+               "plan": None, "age_h": 3.5, "stale": True, "reason": "old"},
+}
+
+
+def _agents(body: str):
+    return _js(DASH_FUNCS + ("ageText", "modelChip", "agentsTokens", "renderAgents"), body,
+               prelude=_dash_prelude() + _consts("ROLE_STATE_HE", "TOK_STALE_HE")
+               + 'function nzTime(s) { return s || "—"; }\n'
+                 'function ltr(t) { return el("span", null, t); }\n')
+
+
+def test_204_agents_tab_shows_roles_coders_daemon_and_the_token_block():
+    got = _agents(f"""
+      out.page = dump(renderAgents({json.dumps(AGENTS_DOC, ensure_ascii=False)}));
+    """)
+    page, text = got["page"], got["page"]["text"]
+    assert [c["text"] for c in _find(page, "chip")] == [
+        "opus", "עובד", "sonnet", "סגור",                 # roles: model chip, then state
+        "?", "opus"]                                      # coders: a run with no model shows ?
+    assert "מחשב 3 · ענן 1" in text and "לא רץ" in text and "COO 2 · PM 0" in text
+    assert "הודעה אחרונה: #coo" in text and "אין הודעות" in text
+    assert "ענן" in text and "מחשב" in text
+    assert _find(page, "tseg") and "טוקנים היום" in text      # the 24 h / 7 d toggle came with the block
+
+
+def test_204_stale_token_data_shows_a_warning_line_at_the_top_of_the_block():
+    got = _agents(f"""
+      const t = {json.dumps(AGENTS_DOC["tokens"])};
+      out.old = dump(agentsTokens(t));
+      out.fresh = dump(agentsTokens({{...t, stale: false, reason: null}}));
+      out.none = dump(agentsTokens({{data: null, plan: null, age_h: null, stale: true, reason: "no-data"}}));
+    """)
+    first = got["old"]["kids"][0]
+    assert "error" in first["cls"].split() and 'setAttribute("role", "alert")' in _function("agentsTokens")
+    assert first["text"] == "נתוני הטוקנים ישנים: נמדדו לפני 3.5 שע׳"
+    assert not any("error" in (k.get("cls") or "").split() for k in got["fresh"]["kids"])
+    assert "tok" in got["fresh"]["kids"][0]["cls"].split()
+    assert "tokens.json לא נקרא" in got["none"]["kids"][0]["text"]
+
+
+def test_204_a_reload_keeps_the_selected_dashboard_tab():
+    script = _markup().script
+    assert 'const DASHTAB = "agora-dash-tab";' in script
+    assert "localStorage.setItem(DASHTAB, name)" in _function("showDashTab")
+    assert "localStorage.getItem(DASHTAB)" in script and "showDashTab(t, false)" in script
+    assert "loadDashTab(dashTabNow)" in _function("connect")       # its data loads once the key is in
+    ev = script[script.index('ev.type === "dashboard"'):][:200]
+    assert "loadAgents()" in ev                                  # refreshed with every dashboard sync
 
 
 def test_brief_progress_shows_the_v1_rule_and_late_goals():
@@ -3377,7 +3619,7 @@ def test_brief_missing_says_so_and_empty_lists_say_so_in_words():
     assert "שום דבר לא תקוע" in got["empty"] and "שום דבר לא זז עכשיו" in got["empty"]
     assert "מחכה לך: שום דבר" in got["empty"]
     # agora#174, the approved order under "waiting for you": goals, running, stuck, queues, tokens
-    assert [t.split(" · ")[0] for t in got["order"]] == ["יעדים", "זז עכשיו", "תקוע", "תורים", "טוקנים"]
+    assert [t.split(" · ")[0] for t in got["order"]] == ["יעדים", "זז עכשיו", "תקוע", "תורים"]
 
 
 COPY_PRELUDE = FAKE_DOM + """
@@ -3386,7 +3628,7 @@ COPY_PRELUDE = FAKE_DOM + """
   const timers = [];
   const setTimeout = (f, ms) => { timers.push([f, ms]); return timers.length; };
 """
-COPY_FUNCS = ("textDir", "copyText", "inlineParts", "inlineNodes", "fillBody")
+COPY_FUNCS = ("textDir", "copyText", "hasHebrew", "inlineParts", "inlineNodes", "bodyBlocks", "fillBody")
 
 
 def test_173_a_fenced_block_is_an_ltr_box_with_a_copy_button_for_the_exact_text():

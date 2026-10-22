@@ -1,6 +1,6 @@
 """Issue #198: a restart (``up_setup`` -> ``ensure_streams``) must not re-add a
 role bot that a person removed from a room, and every add the server makes is
-recorded with the actor ``server``."""
+recorded with no actor (``actor_id`` NULL is the server)."""
 from __future__ import annotations
 
 import threading
@@ -58,12 +58,12 @@ def test_new_room_still_gets_its_default_bots(tmp_path):
         server.shutdown()
 
 
-def test_every_server_add_is_logged_with_actor_server(tmp_path):
+def test_every_server_add_is_logged_with_no_actor(tmp_path):
     server, store, base, bots, human = _setup(tmp_path)
     try:
         chat.ensure_streams(store)
         chat.bootstrap_pool(store)
-        rows = store.q("SELECT op, actor FROM membership_log")
-        assert rows and all(r["op"] == "add" and r["actor"] == "server" for r in rows)
+        rows = store.q("SELECT op, actor_id FROM membership_log")
+        assert rows and all(r["op"] == "add" and r["actor_id"] is None for r in rows)
     finally:
         server.shutdown()

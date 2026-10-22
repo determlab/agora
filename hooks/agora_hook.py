@@ -173,6 +173,16 @@ HOW_TO_SIT = (
 )
 
 
+# Issue #149: for a session in a multi-bot room; bot/wake.py has the same text.
+MEETING_RULES = (
+    "In a room with several role bots: one role leads the discussion: the one who asked "
+    "the open question, else the PM.\n"
+    "A general question from the founder is answered by the leader only.\n"
+    "Any other role writes only when it adds something new: no repeat of a question, "
+    "no \"agreed\", no \"waiting\"."
+)
+
+
 def _dotenv(path: Path) -> dict:
     """``KEY=value`` lines from the gitignored bot/.env. Missing file: empty."""
     out: dict = {}
@@ -462,9 +472,13 @@ def do_register() -> int:
     ok = _post("/api/register", {**ident, "provider": "claude-code"})
     if ok is None:
         return 0  # Agora is not running. Silence is correct.
+    context = HOW_TO_SIT.format(name=ident["name"])
+    creds = _zulip_creds(ident["name"])
+    if creds and ident["name"].upper() != "PA" and _multi_bot_rooms(creds):
+        context += "\n\n" + MEETING_RULES  # issue #149
     print(json.dumps({"hookSpecificOutput": {
         "hookEventName": "SessionStart",
-        "additionalContext": HOW_TO_SIT.format(name=ident["name"]),
+        "additionalContext": context,
     }}))
     return 0
 
