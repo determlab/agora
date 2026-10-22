@@ -457,6 +457,13 @@ class Store:
                 self.log_membership(stream_id, user_id, actor_id, "remove")
             return gone
 
+    def removed_by_person(self, user_id: int, stream_id: int) -> bool:
+        """The newest ``membership_log`` row for this member in this room is a
+        removal by someone other than the server (``actor_id`` NULL)."""
+        row = self.one("SELECT op, actor_id FROM membership_log WHERE user_id=? AND "
+                       "stream_id=? ORDER BY id DESC LIMIT 1", (user_id, stream_id))
+        return bool(row) and row["op"] == "remove" and row["actor_id"] is not None
+
     def membership_history(self, stream_id: int) -> list[dict]:
         out = []
         for r in self.q("SELECT * FROM membership_log WHERE stream_id=? ORDER BY id",
@@ -2528,7 +2535,11 @@ def ensure_streams(store: Store) -> tuple[list[str], list[str]]:
                 missing.append(full)
                 continue
             for name in names:
-                store.subscribe(bots[full], store.stream_by_ref(name)["stream_id"])
+                sid = store.stream_by_ref(name)["stream_id"]
+                # A person who removed this bot from this room decided; a restart
+                # must not undo it (issue #198).
+                if not store.removed_by_person(bots[full], sid):
+                    store.subscribe(bots[full], sid)
     return list(plan.STREAMS), missing
 
 
