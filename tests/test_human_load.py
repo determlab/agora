@@ -10,7 +10,7 @@ import sys
 import time
 from datetime import datetime
 from pathlib import Path
-from zoneinfo import ZoneInfo
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import pytest
 
@@ -18,7 +18,10 @@ ROOT = Path(__file__).resolve().parent.parent
 SERVER = ROOT / "chat" / "server.py"
 EXAMPLE = ROOT / "chat" / "human-load.example.json"
 VIEW = ROOT / "tests" / "fixtures" / "pool-view.json"
-NZ = ZoneInfo("Pacific/Auckland")
+try:
+    NZ = ZoneInfo("Pacific/Auckland")
+except ZoneInfoNotFoundError:  # Windows without the tzdata package
+    pytest.skip("IANA tz database not available (pip install tzdata)", allow_module_level=True)
 
 
 def _load():
@@ -61,7 +64,7 @@ def run(env, *extra, config=None):
     return subprocess.run(
         [sys.executable, str(SERVER), "human-load", "--config", config or env["cfg"],
          "--db", env["db"], "--since", "2026-10-01", "--until", "2026-10-31", "--json", *extra],
-        capture_output=True, text=True, cwd=ROOT)
+        capture_output=True, text=True, cwd=ROOT, timeout=60)
 
 
 def report(env):
@@ -170,7 +173,8 @@ def test_no_config_exits_2_and_says_how_to_pass_one(env):
                         "--since", "2026-10-01", "--until", "2026-10-02"],
                        capture_output=True, text=True, cwd=ROOT,
                        env={k: v for k, v in __import__("os").environ.items()
-                            if k != "AGORA_CONFIG"})
+                            if k != "AGORA_CONFIG"},
+                       timeout=60)
     assert r.returncode == 2 and "--config" in r.stderr and "AGORA_CONFIG" in r.stderr
 
 
@@ -197,6 +201,6 @@ def test_agent_path_from_a_clean_checkout_with_the_example_config(tmp_path):
     r = subprocess.run([sys.executable, "chat/server.py", "human-load", "--config",
                         "chat/human-load.example.json", "--db", str(db), "--since", "2026-10-01",
                         "--until", "2026-10-21", "--json"],
-                       capture_output=True, text=True, cwd=ROOT)
+                       capture_output=True, text=True, cwd=ROOT, timeout=60)
     assert r.returncode == 0, r.stderr
     assert chat.validate_human_load(json.loads(r.stdout)) == []
